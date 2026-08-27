@@ -104,6 +104,32 @@ components, services, guards, interceptors" requirements from section
 77). The backend is framework-agnostic on this choice - no backend code
 changes were needed.
 
+## Windows / Python 3.14 install fix (2026-08-27)
+
+Vishal's machine runs Python 3.14.7. Several pins in `requirements.txt`
+predated Python 3.14's release and had no prebuilt Windows wheel for it,
+so `pip install` tried to compile them from source and failed (missing
+`pg_config`, then missing the MSVC linker) rather than actually being a
+code problem. Fixed by bumping every affected package to a current
+release with real cp314 Windows wheels (verified on PyPI, not assumed):
+`psycopg2-binary` 2.9.9 -> 2.9.12, `pydantic` 2.9.2 -> 2.13.4,
+`pydantic-settings` 2.5.2 -> 2.15.0, `uvicorn` 0.30.6 -> 0.52.4,
+`SQLAlchemy` 2.0.35 -> 2.0.52, `reportlab` 4.2.2 -> 5.0.1 (now pure
+Python, sidesteps the question entirely).
+
+Separately, `passlib[bcrypt]` was removed as a dependency entirely -
+`app/core/security.py` now calls `bcrypt` directly. This isn't just a
+version-compatibility fix: passlib 1.7.4 (unmaintained since 2020) is
+fundamentally broken against any `bcrypt>=4.1`, which is what forced the
+`bcrypt==4.0.1` downgrade pin during increment 2's testing. That pin was
+itself fragile - an old release with no guarantee of future-Python wheel
+support - so it would have kept breaking on the next Python bump too.
+`bcrypt` ships an `abi3` (stable ABI) wheel, meaning one build covers
+Python 3.8 through 3.14+, so calling it directly is the actually durable
+fix, not a patch. Re-verified after the swap: full pytest suite (18/18)
+and a real-Postgres smoke test including a genuine TOTP code (not just
+`"BYPASS"`) both pass.
+
 ## Increment 2 (2026-08-27): admin auth, OTP/duplicate detection, subscription lifecycle
 
 Built per Vishal's "continue building what was asked in the initial
