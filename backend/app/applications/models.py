@@ -1,0 +1,93 @@
+"""
+Application configuration (spec section 13).
+
+V1 has exactly one row: code="EVERYTICKET". The model is deliberately
+generic so a second external application can be onboarded later without a
+schema change - just insert another row.
+
+Highly sensitive values (webhook secret, gateway credentials, SSO secret)
+are stored here so they're admin-configurable per spec section 81, but the
+admin API layer must never return them in plaintext in list/detail
+responses (mask them), and production deployments should prefer setting
+them via environment variables and treating these columns as
+overrides/fallback only.
+"""
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base, TimestampMixin
+
+
+class Application(Base, TimestampMixin):
+    __tablename__ = "applications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    # --- General ---
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)  # e.g. EVERYTICKET
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    application_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    logo_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    favicon_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    support_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    support_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    timezone: Mapped[str] = mapped_column(String(50), default="Asia/Kolkata", nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), default="INR", nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # --- Integration ---
+    api_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    api_credentials: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # masked in API responses
+    webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    webhook_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)  # masked in API responses
+    sso_secret: Mapped[str | None] = mapped_column(String(500), nullable=True)  # masked in API responses
+
+    # --- Payment ---
+    default_gateway: Mapped[str] = mapped_column(String(50), default="mock", nullable=False)
+    gateway_mode: Mapped[str] = mapped_column(String(20), default="test", nullable=False)  # test | live
+
+    # --- Email ---
+    email_provider: Mapped[str] = mapped_column(String(50), default="smtp", nullable=False)
+    email_sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_sender_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    email_reply_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # --- Subscription rules ---
+    allow_upgrade: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_downgrade: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_cancellation: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    cancellation_behavior: Mapped[str] = mapped_column(String(50), default="IMMEDIATE", nullable=False)
+    renewal_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    repurchase_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # --- Testing (spec section 55: also always gated on ENVIRONMENT != production at runtime) ---
+    test_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    otp_bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    mfa_bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    payment_simulation_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    plans: Mapped[list["Plan"]] = relationship(back_populates="application")
+    form_fields: Mapped[list["RegistrationFormField"]] = relationship(back_populates="application")
+
+
+class CustomerApplicationMapping(Base, TimestampMixin):
+    """
+    Permanent mapping: CUS-xxxx <-> external application identity
+    (spec section 8). One row per (customer, application); unique on
+    (application_id, external_customer_id) too so we never create a second
+    Everyticket instance for the same external identity.
+    """
+    __tablename__ = "customer_application_mappings"
+    __table_args__ = (
+        UniqueConstraint("customer_id", "application_id", name="uq_customer_application"),
+        UniqueConstraint("application_id", "external_customer_id", name="uq_application_external_customer"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
+    application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False, index=True)
+    external_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)  # e.g. MUSEUM-4587
+    external_instance_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. INSTANCE-1001
+
+    customer: Mapped["Customer"] = relationship(back_populates="application_mappings")
+    application: Mapped["Application"] = relationship()
