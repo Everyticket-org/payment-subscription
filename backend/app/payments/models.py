@@ -28,6 +28,12 @@ class PaymentTransaction(Base, TimestampMixin):
 
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
     subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), nullable=False, index=True)
+    # The plan this payment is FOR - equal to subscription.plan_id at
+    # creation time for NEW/RENEWAL, but the *target* plan (different from
+    # subscription.plan_id, which only changes on success) for
+    # UPGRADE/DOWNGRADE. PaymentService uses this + payment_type to decide
+    # what to do with the subscription once the payment succeeds.
+    target_plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"), nullable=False, index=True)
 
     gateway: Mapped[str] = mapped_column(String(50), nullable=False)  # mock | payu | ...
     gateway_transaction_id: Mapped[str | None] = mapped_column(String(150), nullable=True, index=True)

@@ -89,6 +89,16 @@ class OtpRateLimited(AppError):
     error_code = "OTP_RATE_LIMITED"
 
 
+class OtpVerificationRequired(AppError):
+    http_status = 403
+    error_code = "OTP_VERIFICATION_REQUIRED"
+
+
+class ConflictingCustomerIdentity(AppError):
+    http_status = 409
+    error_code = "CONFLICTING_CUSTOMER_IDENTITY"
+
+
 class NotPermittedInProduction(AppError):
     http_status = 403
     error_code = "NOT_PERMITTED_IN_PRODUCTION"

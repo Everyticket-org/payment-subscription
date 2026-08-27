@@ -67,19 +67,28 @@ implemented.
 
 **Testing**
 - `backend/tests/` - pytest suite (SQLite in-memory, spec section 73: no
-  external services required) covering: full new-subscription ->
-  mock-payment-SUCCESS -> ACTIVE -> invoice flow; duplicate/replayed
-  SUCCESS callback idempotency (spec section 28); FAILED payment leaves
-  subscription in PAYMENT_FAILED, not ACTIVE (section 20); the one-active-
-  subscription rule rejecting a second subscribe attempt (409,
-  `CUSTOMER_ALREADY_SUBSCRIBED`); health/ready endpoints. **All 5 tests
-  pass.**
-- Additionally smoke-tested by hand against a real local Postgres 16
-  instance with the app actually running under uvicorn (not just the
-  pytest suite): migrations applied, seed data loaded, full HTTP flow
-  exercised via curl including the duplicate-callback and duplicate-
-  subscribe-while-active cases, and the results verified directly in
-  `psql`. Everything above matches what the automated tests assert.
+  external services required). **All 18 tests pass** as of the
+  2026-08-27 increment 2 below (`tests/test_end_to_end.py`,
+  `tests/test_otp_and_duplicate_detection.py`,
+  `tests/test_subscription_lifecycle.py`). `tests/conftest.py` sets
+  TEST_MODE / ALLOW_OTP_BYPASS / ALLOW_ADMIN_MFA_BYPASS / JWT_SECRET
+  itself (via `os.environ.setdefault`, before any app module is
+  imported) so the suite is self-contained and doesn't depend on
+  whoever invokes `pytest` having exported them.
+- Additionally smoke-tested by hand, twice, against a real local
+  Postgres 16 instance with the app actually running under uvicorn (not
+  just the pytest suite): first pass covered the flows above (migrations
+  applied, seed data loaded, duplicate-callback and duplicate-subscribe-
+  while-active cases via curl, verified in `psql`); the increment 2 pass
+  (below) covered admin login -> MFA(BYPASS) -> `/admin/me`, and the full
+  customer flow with a **real** (non-BYPASS) OTP code end to end:
+  subscribe -> payment SUCCESS -> `/identify` (exact match, real OTP
+  surfaced because TEST_MODE) -> `/otp/verify` with that real code ->
+  customer token -> `/customer/me` -> upgrade (BASIC -> PROFESSIONAL,
+  payment SUCCESS, plan swapped) -> renew (expiry extended correctly from
+  the later of now/current expiry) -> cancel (subscription CANCELLED,
+  no longer the active one). Zero errors in the uvicorn log across
+  either pass.
 
 ## Framework correction (2026-08-27)
 
@@ -95,24 +104,132 @@ components, services, guards, interceptors" requirements from section
 77). The backend is framework-agnostic on this choice - no backend code
 changes were needed.
 
+## Increment 2 (2026-08-27): admin auth, OTP/duplicate detection, subscription lifecycle
+
+Built per Vishal's "continue building what was asked in the initial
+prompt" instruction. Everything below is implemented, migrated against
+real Postgres, unit-tested, and hand-verified via curl against the same
+real Postgres instance (see Testing section above for the exact flow).
+
+**Admin authentication (spec section 12)**
+- `app/auth/service.py` - two-step login: password -> short-lived
+  (5 min) `pre_mfa_token` (JWT, `type=pre_mfa`) -> MFA code ->
+  access/refresh token pair (`token_kind=admin`).
+- MFA is real TOTP (`pyotp`, `valid_window=1`) with a literal `"BYPASS"`
+  code path, gated by `ALLOW_ADMIN_MFA_BYPASS` AND non-production,
+  checked at the point of use (not just trusted from config) and
+  audit-logged every time it's used.
+- `POST /api/v1/admin/auth/login`, `POST /api/v1/admin/auth/mfa/verify`,
+  `GET /api/v1/admin/me` (protected via `get_current_admin`).
+- Dev admin seeded by `python -m app.core.seed`
+  (`admin@example.com` / `ChangeMe123!`, MFA enabled, TOTP secret + a
+  scannable provisioning URI printed to stdout) - documented in that
+  module as dev-only, never for production.
+
+**Duplicate customer detection + OTP (spec sections 9-11)**
+- `POST /api/v1/public/identify` - given email+mobile, returns
+  `match_status` of `none` (no account), `exact` (existing account,
+  issues an OTP session), or `conflict` (email matches one customer,
+  mobile matches a different one - refused, 409).
+- `POST /api/v1/public/otp/verify` - real 6-digit OTP (bcrypt-hashed at
+  rest, never stored plaintext), attempt-count rate limiting, expiry, and
+  the same `"BYPASS"` pattern as admin MFA (gated the same way,
+  audit-logged). Success issues a customer JWT (`token_kind=customer`).
+- The plaintext OTP is only ever returned in the API response (as
+  `debug_otp_code`) when `settings.TEST_MODE` is true, itself forced
+  off in production by `Settings.enforce_test_mode_restrictions()` - a
+  deliberate stand-in for a real SMS/email channel, which does not exist
+  yet (see "not implemented" below).
+- `POST /api/v1/public/plans/{code}/subscribe` was tightened to match
+  spec section 9: an unauthenticated caller whose email+mobile match an
+  existing account is now refused (403 `OTP_VERIFICATION_REQUIRED`)
+  rather than silently reusing that account, forcing them through
+  `/identify` + `/otp/verify` first. A caller presenting a valid
+  customer bearer token skips identify/OTP entirely (already proven who
+  they are). This is a deliberate, self-initiated correctness fix beyond
+  what was originally asked for in the first pass - the original
+  behavior technically violated section 9's "OTP-gate existing-account
+  access" rule.
+
+**Subscription lifecycle: upgrade / downgrade / renew / cancel (spec
+sections 16, 38-43)**
+- `app/subscriptions/service.py`: `assert_transition_allowed()` (checks
+  the `plan_transitions` allow-list), `apply_plan_change()` (immediate
+  plan swap + fresh billing period on payment SUCCESS, no proration - the
+  new plan was already paid for in full), `renew_subscription()`
+  (extends `expires_at` from the later of now/current expiry, so
+  renewing early never loses paid-for time), `expire_subscription()`
+  (ready, not yet scheduled by any Celery task - see gaps below),
+  `cancel_subscription()` (immediate, no refund).
+- `payment_transactions` gained a `target_plan_id` column (Alembic
+  migration `1f06a0f4b4a6`, hand-edited from the autogenerated version to
+  backfill existing rows before adding the NOT NULL constraint, since the
+  column has no natural default) - the plan a payment is *for*, which
+  differs from `subscription.plan_id` for UPGRADE/DOWNGRADE until the
+  payment succeeds. `PaymentService.process_gateway_result()` now
+  dispatches to the right subscription-service call based on
+  `payment_type` (NEW/RENEWAL/UPGRADE/DOWNGRADE).
+- `POST /api/v1/customer/subscriptions/{id}/upgrade`,
+  `.../downgrade`, `.../renew`, `.../cancel`, plus
+  `GET /api/v1/customer/me` (full portal: active subscription, all
+  subscriptions, payments, invoices). Ownership is enforced by filtering
+  on `subscription_id` AND the caller's `customer_id` - a subscription
+  that isn't the caller's returns 404, not 403, so as not to leak
+  whether it exists.
+
+**Two bugs found and fixed while verifying this increment**
+- `passlib==1.7.4` (last release, unmaintained) does an internal
+  self-test on first use that assumes `bcrypt` still silently truncates
+  secrets over 72 bytes; `bcrypt>=4.1` removed that silent truncation and
+  raises `ValueError` instead, which broke every password/OTP hash
+  operation. Fixed by pinning `bcrypt==4.0.1` in `requirements.txt`
+  (documented inline with links to the upstream issues).
+- `DateTime(timezone=True)` columns round-trip correctly on PostgreSQL
+  but SQLite (used only by the pytest suite) hands back a naive
+  datetime regardless of what was stored, so comparing it against
+  `datetime.now(timezone.utc)` raised `TypeError: can't compare
+  offset-naive and offset-aware datetimes` in OTP expiry checks and
+  subscription renewal. Fixed with a new `app/core/time.ensure_aware()`
+  helper (no-op on Postgres, normalizes on SQLite) used everywhere a
+  DB-sourced datetime is compared against "now".
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
 called out in the relevant module's docstring too:
 
 - **Duplicate customer detection / OTP verification** (sections 9-11):
-  only the safe "exact email+mobile match -> reuse" and "no match ->
-  create new" cases exist. Partial-match handling, OTP-gated identity
-  reveal, and SAME/HIGHER/LOWER/EXPIRED plan routing are not built.
-- **Upgrade / downgrade / cancellation / renewal / expiry** (sections
-  38-43): DB support exists (plan_transitions table, subscription status
-  enum, cancelled_at/by/reason columns) but no service/API layer yet.
-- **Admin portal & auth** (sections 12, 51-53): AdminUser/Role/Permission
-  tables exist; no login endpoint, JWT issuance, MFA, or any admin CRUD
-  API yet.
-- **Customer portal** (section 46), **SSO** (section 47), **direct OTP
-  customer access** (section 48): tables exist (sso_sessions,
-  otp_sessions); no service/API layer yet.
+  **done as of increment 2** (see above) for the core exact/conflict/none
+  match cases and OTP-gated identity reveal. Still missing: real
+  SMS/email OTP delivery (plaintext code is only ever returned in the API
+  response, and only in TEST_MODE - see increment 2 notes), OTP resend
+  with cooldown enforcement (the `OTP_RESEND_COOLDOWN_SECONDS` setting
+  exists but nothing reads it yet), and SAME/HIGHER/LOWER/EXPIRED plan
+  auto-routing on `/subscribe` for an existing active subscriber (today
+  that path still just refuses with `CUSTOMER_ALREADY_SUBSCRIBED` -
+  upgrade/downgrade/renew have to be called explicitly via the customer
+  portal endpoints instead).
+- **Upgrade / downgrade / cancellation / renewal** (sections 38-43):
+  **done as of increment 2** (see above) as customer-portal endpoints.
+  **Expiry** (subscriptions past `expires_at` auto-transitioning to
+  EXPIRED) still has no scheduler - `expire_subscription()` exists and is
+  ready to be called, nothing calls it yet (needs the Celery beat task
+  under "Background jobs" below).
+- **Admin portal & auth** (sections 12, 51-53): **login/MFA/`/me` done as
+  of increment 2** (see above). Still missing: any admin CRUD API
+  (plans, forms, customers, subscriptions, payments, invoices, webhook
+  logs, audit logs) beyond the login flow itself, and role/permission
+  enforcement beyond "is this token a valid admin token" (Role/Permission
+  tables exist and are seeded with a SUPERADMIN role, but no endpoint
+  checks a specific permission yet).
+- **Customer portal** (section 46): **`GET /customer/me` done as of
+  increment 2** (active subscription, all subscriptions, payments,
+  invoices). **SSO** (section 47) and **direct OTP customer access**
+  (section 48, i.e. logging in via OTP alone without first going through
+  `/subscribe`): tables exist (sso_sessions, otp_sessions); no
+  service/API layer yet - the OTP flow built in increment 2 is scoped to
+  the duplicate-detection use case inside `/subscribe`, not a standalone
+  customer login.
 - **PayU gateway adapter** (section 25): interface + mock adapter are
   ready to receive it; PayU-specific code not written.
 - **Everyticket integration adapter + outbound webhooks** (sections
@@ -173,17 +290,19 @@ boots the same way the bare-metal run above did.
 
 ## Suggested next-session order
 
-Follows spec section 91's implementation order, picking up where this
-pass left off:
+Follows spec section 91's implementation order. Items 1-3 (below,
+struck through) were completed in increment 2 (2026-08-27, see above);
+picking up from item 4:
 
-1. Admin auth (JWT + password + MFA with dev/staging bypass) - almost
-   everything else in the admin surface depends on it.
-2. Duplicate customer detection + OTP (sections 9-11) - this changes the
-   `/subscribe` flow's contract, so doing it before building more on top
-   of the current simplified version avoids rework.
-3. Upgrade/downgrade/cancel/renew/expire service layer + API.
+1. ~~Admin auth (JWT + password + MFA with dev/staging bypass)~~ - done.
+2. ~~Duplicate customer detection + OTP (sections 9-11)~~ - done.
+3. ~~Upgrade/downgrade/cancel/renew service layer + API~~ - done.
+   (`expire_subscription()` exists but isn't scheduled yet - folds into
+   item 4's Celery work below.)
 4. Everyticket integration adapter + outbound webhook dispatch/retry
-   (Celery task), wired into `PaymentService`'s existing "NOTE" comment.
+   (Celery task), wired into `PaymentService`'s existing "NOTE" comment;
+   same Celery worker should also schedule `expire_subscription()` for
+   subscriptions past `expires_at`.
 5. Email service + templates, wired the same way.
 6. PayU adapter (register alongside Mock in the gateway registry -
    no core changes needed).

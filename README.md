@@ -5,12 +5,14 @@ registration, payments, subscription lifecycle, invoicing, Everyticket
 integration, admin/customer portals). Everyticket itself - ticketing,
 booking, POS, etc. - is a separate application and is out of scope here.
 
-**Current status:** Phase 1 foundation + a working minimal end-to-end
-subscription flow (new customer -> plan -> mock payment -> active
-subscription -> invoice), backed by a real Postgres schema and an
-automated test suite. Most of the Phase 1 feature list (admin portal,
-React frontend, PayU, Everyticket webhooks, SSO, email, background jobs)
-is not yet built. See **[docs/implementation-status.md](docs/implementation-status.md)**
+**Current status:** Phase 1 foundation, a working new-subscription ->
+mock-payment -> active -> invoice flow, admin login + MFA, duplicate
+customer detection + OTP verification, and customer-portal
+upgrade/downgrade/renew/cancel - all backed by a real Postgres schema and
+an 18-test automated suite (`pytest tests/ -v`), plus hand-verified via
+curl against real Postgres. Still not built: admin CRUD API beyond login,
+React frontend, PayU, Everyticket webhooks, SSO, email, background jobs.
+See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.
 
@@ -20,8 +22,8 @@ Modular monolith: FastAPI + SQLAlchemy + Alembic + PostgreSQL backend,
 React frontend (not yet scaffolded - corrected from Angular on 2026-08-27), Celery/Redis for background jobs,
 Docker Compose for local development. See `backend/app/` for the module
 layout (customers, plans, subscriptions, payments, invoices,
-notifications, webhooks, integrations, sso, audit, admin/customer/public
-API routers).
+notifications, webhooks, integrations, sso, audit, auth [admin auth +
+customer OTP], admin/customer/public API routers).
 
 ## Local development
 
@@ -35,11 +37,21 @@ pip install -r requirements.txt
 cp ../.env.example ../.env   # then edit DATABASE_URL etc. if needed
 export DATABASE_URL="postgresql+psycopg2://subscription:subscription@localhost:5432/subscription"
 export ENVIRONMENT=development
+# Dev-only conveniences - never true in production (enforced backend-side
+# regardless of these values, see app/core/config.py):
+export ALLOW_OTP_BYPASS=true          # lets "BYPASS" satisfy customer OTP verification
+export ALLOW_ADMIN_MFA_BYPASS=true    # lets "BYPASS" satisfy admin MFA verification
+export TEST_MODE=true                 # surfaces the real OTP code in the /identify response body
 
 alembic upgrade head          # apply migrations
-python -m app.core.seed       # create EVERYTICKET application + Basic/Professional/Enterprise plans
+python -m app.core.seed       # create EVERYTICKET application, Basic/Professional/Enterprise plans, dev admin user
 uvicorn app.main:app --reload
 ```
+
+`python -m app.core.seed` prints the dev admin login
+(`admin@example.com` / `ChangeMe123!`) and its MFA secret/provisioning
+URI to stdout - use those, or submit `"BYPASS"` as the MFA code, against
+`POST /api/v1/admin/auth/login` then `POST /api/v1/admin/auth/mfa/verify`.
 
 API docs: http://localhost:8000/docs (Swagger) or /redoc.
 

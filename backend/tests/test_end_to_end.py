@@ -105,7 +105,11 @@ def test_failed_payment_marks_subscription_payment_failed_not_active(client, see
     assert callback.json()["invoice_id"] is None
 
 
-def test_second_subscription_attempt_while_active_is_rejected(client, seeded_db):
+def test_second_subscribe_without_otp_is_refused(client, seeded_db):
+    """A returning customer who skips /identify + OTP and calls /subscribe
+    directly with matching email/mobile is refused server-side (spec
+    section 9's OTP gate is enforced by the backend, not just frontend
+    convention)."""
     first = client.post(
         "/api/v1/public/plans/basic/subscribe",
         json={"email": "repeat@museum.example", "mobile": "9000000003", "registration_data": {}},
@@ -116,6 +120,37 @@ def test_second_subscription_attempt_while_active_is_rejected(client, seeded_db)
     second = client.post(
         "/api/v1/public/plans/professional/subscribe",
         json={"email": "repeat@museum.example", "mobile": "9000000003", "registration_data": {}},
+    )
+    assert second.status_code == 403
+    assert second.json()["error_code"] == "OTP_VERIFICATION_REQUIRED"
+
+
+def test_returning_customer_same_plan_rejected_after_otp(client, seeded_db):
+    """Full identify -> OTP(bypass) -> subscribe flow: an ACTIVE
+    subscription for the same application blocks a second /subscribe call
+    even once properly identified (spec section 22)."""
+    first = client.post(
+        "/api/v1/public/plans/basic/subscribe",
+        json={"email": "returning@museum.example", "mobile": "9000000004", "registration_data": {}},
+    )
+    transaction_id = first.json()["payment"]["transaction_id"]
+    client.post("/api/v1/payment/mock/callback", json={"transaction_id": transaction_id, "scenario": "SUCCESS"})
+
+    identify = client.post(
+        "/api/v1/public/identify", json={"email": "returning@museum.example", "mobile": "9000000004"}
+    )
+    assert identify.status_code == 200
+    assert identify.json()["match_status"] == "exact"
+    otp_session_id = identify.json()["otp_session_id"]
+
+    verify = client.post("/api/v1/public/otp/verify", json={"otp_session_id": otp_session_id, "code": "BYPASS"})
+    assert verify.status_code == 200
+    token = verify.json()["access_token"]
+
+    second = client.post(
+        "/api/v1/public/plans/professional/subscribe",
+        json={"registration_data": {}},
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert second.status_code == 409
     assert second.json()["error_code"] == "CUSTOMER_ALREADY_SUBSCRIBED"

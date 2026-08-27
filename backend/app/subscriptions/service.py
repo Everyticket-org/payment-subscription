@@ -14,10 +14,12 @@ from sqlalchemy.orm import Session
 
 from app.applications.models import Application
 from app.core.enums import ProvisioningStatus, SubscriptionEventType, SubscriptionStatus
-from app.core.exceptions import CustomerAlreadySubscribed, PlanNotFound
+from app.core.exceptions import CustomerAlreadySubscribed, InvalidPlanTransition, PlanNotFound
 from app.core.ids import new_subscription_id
+from app.core.time import ensure_aware
 from app.customers.models import Customer
 from app.plans.models import Plan
+from app.plans.models import PlanTransition
 from app.subscriptions.models import Subscription, SubscriptionHistory
 
 
@@ -43,12 +45,11 @@ def create_pending_subscription(
     PENDING_PAYMENT + payment transaction creation (payment transaction is
     created by PaymentService, not here).
 
-    LIMITATION: full SAME/HIGHER/LOWER/EXPIRED routing (spec section 9) is
-    not implemented yet - if the customer already has an ACTIVE
-    subscription for this application, this simply refuses (
-    CustomerAlreadySubscribed) rather than routing to upgrade/downgrade.
-    Upgrade/downgrade as first-class operations are a follow-up (see
-    docs/implementation-status.md).
+    Refuses (CustomerAlreadySubscribed) if the customer already has an
+    ACTIVE subscription for this application - upgrade/downgrade go
+    through apply_plan_change() via the dedicated
+    /customer/subscriptions/{id}/upgrade|downgrade endpoints instead, not
+    through here.
     """
     if plan.application_id != application.id:
         raise PlanNotFound(f"Plan {plan.plan_code} does not belong to application {application.code}")
@@ -124,6 +125,110 @@ def mark_payment_failed(db: Session, *, subscription: Subscription) -> Subscript
             subscription_id=subscription.id,
             event_type=SubscriptionEventType.PAYMENT_FAILED.value,
             occurred_at=datetime.now(timezone.utc),
+        )
+    )
+    db.flush()
+    return subscription
+
+
+def assert_transition_allowed(db: Session, *, from_plan: Plan, to_plan: Plan) -> str:
+    """Spec section 16: transitions are an explicit allow-list. Returns the
+    transition_type ('UPGRADE'/'DOWNGRADE') on success, raises
+    InvalidPlanTransition otherwise."""
+    if from_plan.id == to_plan.id:
+        raise InvalidPlanTransition(f"{to_plan.plan_code} is already the current plan")
+
+    transition = (
+        db.query(PlanTransition)
+        .filter(PlanTransition.from_plan_id == from_plan.id, PlanTransition.to_plan_id == to_plan.id)
+        .first()
+    )
+    if transition is None:
+        raise InvalidPlanTransition(
+            f"Transition from {from_plan.plan_code} to {to_plan.plan_code} is not configured/allowed"
+        )
+    return transition.transition_type
+
+
+def apply_plan_change(
+    db: Session, *, subscription: Subscription, new_plan: Plan, event_type: str
+) -> Subscription:
+    """
+    Payment SUCCESS on an UPGRADE/DOWNGRADE transaction (spec section 42):
+    immediate plan swap, no proration, no refund. The new payment was
+    already taken at the target plan's full price, so this also resets
+    the billing period to a fresh cycle starting now - the same as a new
+    purchase would.
+
+    Idempotent the same way activate_subscription() is: if the
+    subscription is already on new_plan, this is a no-op (duplicate
+    callback safety, spec section 28).
+    """
+    if subscription.plan_id == new_plan.id:
+        return subscription
+
+    old_plan_id = subscription.plan_id
+    now = datetime.now(timezone.utc)
+    subscription.plan_id = new_plan.id
+    subscription.status = SubscriptionStatus.ACTIVE.value
+    subscription.starts_at = now
+    subscription.expires_at = _billing_period_end(now, new_plan)
+    db.add(subscription)
+
+    db.add(
+        SubscriptionHistory(
+            subscription_id=subscription.id,
+            event_type=event_type,
+            from_plan_id=old_plan_id,
+            to_plan_id=new_plan.id,
+            occurred_at=now,
+        )
+    )
+    db.flush()
+    return subscription
+
+
+def renew_subscription(db: Session, *, subscription: Subscription) -> Subscription:
+    """Payment SUCCESS on a RENEWAL transaction (spec section 38): extends
+    expires_at by one more billing period on the *current* plan. Extends
+    from the later of (now, current expires_at) so renewing early doesn't
+    lose the remaining paid-for time."""
+    now = datetime.now(timezone.utc)
+    current_expiry = ensure_aware(subscription.expires_at) if subscription.expires_at else None
+    base = current_expiry if current_expiry and current_expiry > now else now
+    subscription.status = SubscriptionStatus.ACTIVE.value
+    subscription.expires_at = _billing_period_end(base, subscription.plan)
+    db.add(subscription)
+
+    db.add(
+        SubscriptionHistory(
+            subscription_id=subscription.id,
+            event_type=SubscriptionEventType.RENEWED.value,
+            to_plan_id=subscription.plan_id,
+            occurred_at=now,
+        )
+    )
+    db.flush()
+    return subscription
+
+
+def expire_subscription(db: Session, *, subscription: Subscription) -> Subscription:
+    """ACTIVE -> EXPIRED (spec section 40). Intended to be driven by a
+    Celery beat task once background jobs are wired up (see
+    docs/implementation-status.md) - the function is ready for that, it
+    just isn't scheduled anywhere yet."""
+    if subscription.status != SubscriptionStatus.ACTIVE.value:
+        return subscription
+
+    now = datetime.now(timezone.utc)
+    subscription.status = SubscriptionStatus.EXPIRED.value
+    db.add(subscription)
+
+    db.add(
+        SubscriptionHistory(
+            subscription_id=subscription.id,
+            event_type=SubscriptionEventType.EXPIRED.value,
+            occurred_at=now,
         )
     )
     db.flush()

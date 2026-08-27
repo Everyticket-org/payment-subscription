@@ -13,10 +13,15 @@ Usage:
 from sqlalchemy.orm import Session
 
 from app.applications.models import Application
+from app.auth import service as auth_service
+from app.auth.models import AdminUser, Role
 from app.core.database import SessionLocal
 from app.core import models_registry  # noqa: F401
 from app.forms.models import RegistrationFormField
 from app.plans.models import Plan, PlanTransition
+
+DEV_ADMIN_EMAIL = "admin@example.com"
+DEV_ADMIN_PASSWORD = "ChangeMe123!"  # dev/local only - never a production credential
 
 
 def _get_or_create_application(db: Session) -> Application:
@@ -86,7 +91,31 @@ def _get_or_create_field(db: Session, application: Application, **kwargs) -> Non
     db.add(RegistrationFormField(application_id=application.id, **kwargs))
 
 
-def seed(db: Session) -> None:
+def _get_or_create_admin(db: Session) -> AdminUser:
+    """Dev-only seed admin (spec section 70). Credentials are printed by
+    main() and documented in README.md - they are NOT meant for
+    production use; production admin accounts should be created through a
+    proper (not-yet-built) admin-user-management flow."""
+    existing = db.query(AdminUser).filter(AdminUser.email == DEV_ADMIN_EMAIL).first()
+    if existing is not None:
+        return existing
+
+    role = db.query(Role).filter(Role.code == "SUPERADMIN").first()
+    if role is None:
+        role = Role(code="SUPERADMIN", name="Super Admin")
+        db.add(role)
+        db.flush()
+
+    user = auth_service.create_admin_user(
+        db, email=DEV_ADMIN_EMAIL, full_name="Dev Admin", password=DEV_ADMIN_PASSWORD, mfa_enabled=True
+    )
+    user.roles.append(role)
+    db.add(user)
+    db.flush()
+    return user
+
+
+def seed(db: Session) -> AdminUser:
     application = _get_or_create_application(db)
 
     basic = _get_or_create_plan(
@@ -114,14 +143,27 @@ def seed(db: Session) -> None:
     _get_or_create_field(db, application, field_key="gstin", label="GSTIN", field_type="text", required=False, display_order=3)
     _get_or_create_field(db, application, field_key="address", label="Address", field_type="textarea", required=False, display_order=4)
 
+    admin_user = _get_or_create_admin(db)
+
     db.commit()
+    return admin_user
 
 
 def main() -> None:
     db = SessionLocal()
     try:
-        seed(db)
+        admin_user = seed(db)
         print("Seed data applied.")
+        print(f"Dev admin login: {DEV_ADMIN_EMAIL} / {DEV_ADMIN_PASSWORD}")
+        if admin_user.mfa_secret:
+            import pyotp
+
+            uri = pyotp.TOTP(admin_user.mfa_secret).provisioning_uri(
+                name=DEV_ADMIN_EMAIL, issuer_name="Everyticket Subscriptions (dev)"
+            )
+            print(f"Dev admin MFA secret: {admin_user.mfa_secret}")
+            print(f"Dev admin MFA provisioning URI (scan in an authenticator app): {uri}")
+            print('Or skip MFA entirely in dev/staging by submitting code "BYPASS" to /admin/auth/mfa/verify.')
     finally:
         db.close()
 

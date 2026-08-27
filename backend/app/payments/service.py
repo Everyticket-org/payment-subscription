@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app.audit import service as audit_service
-from app.core.enums import PaymentStatus
+from app.core.enums import PaymentStatus, PaymentType, SubscriptionEventType
 from app.core.exceptions import PaymentTransactionNotFound
 from app.core.ids import new_transaction_id
 from app.customers.models import Customer
@@ -49,6 +49,7 @@ def create_payment_transaction(
         idempotency_key=str(uuid.uuid4()),
         customer_id=customer.id,
         subscription_id=subscription.id,
+        target_plan_id=plan.id,
         gateway=gateway_code,
         amount=plan.price,
         currency=plan.currency,
@@ -100,7 +101,20 @@ def process_gateway_result(
     invoice: Invoice | None = None
 
     if result.status == PaymentStatus.SUCCESS.value:
-        subscription_service.activate_subscription(db, subscription=subscription)
+        if transaction.payment_type == PaymentType.UPGRADE.value:
+            target_plan = db.query(Plan).filter(Plan.id == transaction.target_plan_id).one()
+            subscription_service.apply_plan_change(
+                db, subscription=subscription, new_plan=target_plan, event_type=SubscriptionEventType.UPGRADED.value
+            )
+        elif transaction.payment_type == PaymentType.DOWNGRADE.value:
+            target_plan = db.query(Plan).filter(Plan.id == transaction.target_plan_id).one()
+            subscription_service.apply_plan_change(
+                db, subscription=subscription, new_plan=target_plan, event_type=SubscriptionEventType.DOWNGRADED.value
+            )
+        elif transaction.payment_type == PaymentType.RENEWAL.value:
+            subscription_service.renew_subscription(db, subscription=subscription)
+        else:  # PaymentType.NEW
+            subscription_service.activate_subscription(db, subscription=subscription)
         invoice = generate_invoice(db, subscription=subscription, payment=transaction)
         audit_service.record(
             db,
@@ -110,10 +124,11 @@ def process_gateway_result(
             entity_id=transaction.transaction_id,
             new_value={"status": transaction.status, "subscription_id": subscription.subscription_id},
         )
-        # NOTE: this is where subscription.activated should be queued as an
-        # outbound Everyticket webhook + confirmation email (spec sections
-        # 19, 31, 49). Both are follow-up work - see
-        # docs/implementation-status.md - so nothing is dispatched yet.
+        # NOTE: this is where subscription.activated/upgraded/downgraded/
+        # renewed should be queued as an outbound Everyticket webhook +
+        # confirmation email (spec sections 19, 31, 33, 49). Both are
+        # follow-up work - see docs/implementation-status.md - so nothing
+        # is dispatched yet.
     elif result.status == PaymentStatus.FAILED.value:
         subscription_service.mark_payment_failed(db, subscription=subscription)
         audit_service.record(

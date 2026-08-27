@@ -13,6 +13,26 @@ verify application-level enforcement of the same rule
 (subscriptions.service.create_pending_subscription raising
 CustomerAlreadySubscribed), which runs regardless of database backend.
 """
+import os
+
+# Must be set before any app module is imported: app.core.config.get_settings()
+# is @lru_cache'd and several modules (e.g. app.auth.otp_service,
+# app.auth.service) call it at import time and hold the result in a
+# module-level `settings` variable. Setting these here - rather than relying
+# on whoever invokes pytest to have exported them - is what makes this test
+# suite "testable without any real external dependencies" (see module
+# docstring below): the bypass flags must be on for the BYPASS-code tests
+# and helpers (e.g. tests/test_subscription_lifecycle.py's _customer_token),
+# and TEST_MODE must be on so /identify surfaces debug_otp_code (spec
+# section 11 - no real SMS/email channel exists yet, see
+# app.auth.otp_service's module docstring). setdefault() so a real CI
+# environment can still override these explicitly if it ever needs to.
+os.environ.setdefault("TEST_MODE", "true")
+os.environ.setdefault("ALLOW_OTP_BYPASS", "true")
+os.environ.setdefault("ALLOW_ADMIN_MFA_BYPASS", "true")
+os.environ.setdefault("ENVIRONMENT", "development")
+os.environ.setdefault("JWT_SECRET", "pytest-only-secret-never-used-outside-tests")
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
