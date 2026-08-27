@@ -85,13 +85,25 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      - API_URL=http://localhost:8000
+      # VITE_API_BASE_URL is baked into the bundle the Vite dev server
+      # serves; the BROWSER (running on the host, not in this container)
+      # is what actually calls it, so "localhost" here means the host's
+      # localhost, not this container's - matches backend's "8000:8000"
+      # port publish below. Not "API_URL" - that was a stale placeholder
+      # name from before the real app existed; the actual code reads
+      # import.meta.env.VITE_API_BASE_URL (see src/api/client.ts).
+      - VITE_API_BASE_URL=http://localhost:8000
     ports:
       - "3000:3000"
     volumes:
       - ./frontend:/app
       - /app/node_modules
-    command: npm start -- --host 0.0.0.0
+    depends_on:
+      - backend
+    # "npm start" doesn't exist in package.json (scripts are dev/build/
+    # lint/preview) - that was also a stale placeholder. --port 3000
+    # matches this service's port mapping above (Vite defaults to 5173).
+    command: npm run dev -- --host 0.0.0.0 --port 3000
 
 volumes:
   postgres_data:

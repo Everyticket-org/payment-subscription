@@ -10,8 +10,12 @@ mock-payment -> active -> invoice flow, admin login + MFA, duplicate
 customer detection + OTP verification, and customer-portal
 upgrade/downgrade/renew/cancel - all backed by a real Postgres schema and
 an 18-test automated suite (`pytest tests/ -v`), plus hand-verified via
-curl against real Postgres. Still not built: admin CRUD API beyond login,
-React frontend, PayU, Everyticket webhooks, SSO, email, background jobs.
+curl against real Postgres. A React frontend now covers the public
+subscribe flow, customer OTP login + portal, and admin login + a minimal
+dashboard - see `frontend/README.md` - verified end-to-end against the
+real backend with Playwright. Still not built: admin CRUD API/UI, PayU,
+Everyticket webhooks, SSO, email, background jobs, the dynamic
+registration-form renderer.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.
@@ -19,11 +23,12 @@ before assuming any given feature works.
 ## Architecture
 
 Modular monolith: FastAPI + SQLAlchemy + Alembic + PostgreSQL backend,
-React frontend (not yet scaffolded - corrected from Angular on 2026-08-27), Celery/Redis for background jobs,
-Docker Compose for local development. See `backend/app/` for the module
-layout (customers, plans, subscriptions, payments, invoices,
-notifications, webhooks, integrations, sso, audit, auth [admin auth +
-customer OTP], admin/customer/public API routers).
+React + TypeScript + Vite frontend (`frontend/` - corrected from Angular
+on 2026-08-27, scaffolded and built in increment 3), Celery/Redis for
+background jobs, Docker Compose for local development. See
+`backend/app/` for the module layout (customers, plans, subscriptions,
+payments, invoices, notifications, webhooks, integrations, sso, audit,
+auth [admin auth + customer OTP], admin/customer/public API routers).
 
 ## Local development
 
@@ -62,11 +67,24 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Brings up postgres, redis, backend, worker, scheduler, and the frontend
-placeholder. **Not yet verified in this pass** - see
-docs/implementation-status.md for why (no Docker daemon available in the
-environment this was built in). Run it once and sanity-check before
-relying on it.
+Brings up postgres, redis, backend, worker, scheduler, and the real
+frontend (built in increment 3 - see below). **Not yet verified in this
+pass** - see docs/implementation-status.md for why (no Docker daemon
+available in the environment this was built in). Run it once and
+sanity-check before relying on it.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+cp .env.example .env   # adjust VITE_API_BASE_URL if the backend isn't on :8000
+npm run dev
+```
+
+Needs the backend running first, and the backend's `CORS_ORIGINS` to
+include whatever origin the frontend actually opens at (default covers
+`http://localhost:5173`). See `frontend/README.md` for what's covered.
 
 ### Running tests
 

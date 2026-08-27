@@ -219,6 +219,85 @@ sections 16, 38-43)**
   helper (no-op on Postgres, normalizes on SQLite) used everywhere a
   DB-sourced datetime is compared against "now".
 
+## Increment 3 (2026-08-27): React frontend + Windows local-run fixes
+
+Built per Vishal's "how about frontend" follow-up, after he got the
+backend running natively on his own Windows machine (Python 3.14.7) and
+confirmed Swagger docs were reachable. Two distinct pieces of work below:
+getting the *existing* backend actually running on real Windows hardware
+(nothing to do with the frontend, but it's what came first this session),
+then building the frontend itself.
+
+**Windows local-run fixes (found only by Vishal actually running the
+commands on his machine - none of this reproduces in the Linux build
+environment used for increments 1-2)**
+- `backend/.env` (Vishal's own file, not `.env.example`) had
+  `DATABASE_URL`/`REDIS_URL` pointed at hostnames `postgres`/`redis` -
+  those only resolve inside the `docker-compose` network, not for a
+  bare-metal `uvicorn` run. Fixed to `localhost`; `.env.example` gained
+  an inline comment explaining the distinction so the next person
+  doesn't hit the same `could not translate host name` error.
+- Postgres `password authentication failed for user "subscription"`
+  turned out not to be a credentials problem at all: an unrelated,
+  pre-existing container (`edps-postgres`, from a different project) was
+  already bound to host port 5432, while the intended `subscription-db`
+  container had no host port published. Root-caused via `docker ps -a`
+  plus a direct `docker exec ... psql` test (which succeeded, proving
+  the credentials were fine all along). Fixed by remapping
+  `subscription-db` to host port 5433 (`backend/.env`'s `DATABASE_URL`
+  updated to match) and adding a named volume
+  (`subscription_pgdata:/var/lib/postgresql/data`) so a future
+  `docker rm`/recreate doesn't lose data.
+- Result, confirmed by Vishal: backend runs end-to-end natively on
+  Windows - venv, real Postgres via Docker, Alembic migrations, seed
+  data, `uvicorn --reload`, Swagger UI all working.
+
+**CORS (spec section 77's frontend needs this; nothing to do with
+Windows specifically - found while setting up the frontend dev server,
+before Vishal even hit it)**
+- The backend had no CORS configuration at all. Any browser-based
+  frontend running on a different origin (Vite dev server on :5173 vs.
+  the API on :8000) would have every request rejected before it reached
+  app code. Added `CORSMiddleware` in `app/main.py` plus a new
+  `CORS_ORIGINS` setting (comma-separated origin allow-list,
+  `allow_credentials=False` since auth is a Bearer token, never a
+  cookie). Root `.env.example` documents both the `npm run dev` origin
+  (`http://localhost:5173`) and the `docker compose` frontend origin
+  (`http://localhost:3000`), including both `localhost` and `127.0.0.1`
+  spellings since browsers treat them as different origins.
+
+**React frontend (spec section 77, corrected from Angular to React - see
+"Framework correction" above)**
+- Real React 19 + TypeScript + Vite app in `frontend/`, replacing the
+  placeholder Dockerfile/`index.html`/`package.json` from the framework
+  correction. See `frontend/README.md` for what it covers and how to run
+  it; summary: public plan list -> subscribe (with OTP-gated
+  duplicate-detection built into the same flow) -> mock payment ->
+  customer OTP login -> customer portal (upgrade/downgrade/renew/cancel,
+  each gated behind a mock-payment simulate step) -> admin login
+  (password + TOTP/BYPASS MFA) -> a minimal admin dashboard.
+- Deliberately NOT built yet: any admin CRUD UI (there's no admin CRUD
+  API to call - see "Explicitly NOT implemented" below), and the dynamic
+  registration-form renderer from spec section 8 (`registration_data` is
+  sent as `{}` on subscribe for now).
+- Verification: `npm run build` compiles clean (strict TS config from
+  the Vite template - `verbatimModuleSyntax`, `noUnusedLocals`, etc.),
+  and a real end-to-end Playwright browser test was run against the
+  actual backend (real Postgres, not mocked) covering every flow listed
+  above - plans -> subscribe -> payment -> OTP login -> portal ->
+  upgrade -> renew -> cancel -> admin login+MFA -> admin dashboard - with
+  zero browser console errors.
+- `docker-compose.yml`'s `frontend:` service and `frontend/Dockerfile`
+  were still the Phase-1 placeholders (`npm start`, which doesn't exist
+  in `package.json`'s scripts; wrong env var name `API_URL` instead of
+  `VITE_API_BASE_URL`) - fixed to actually build and run the real app.
+  **This path (`docker compose up`) has not been verified** - no Docker
+  daemon is available in the environment this was built in, only
+  Vishal's own Windows Docker Desktop. The bare-metal `npm run dev` path
+  above is the one that's actually been exercised end-to-end; before
+  relying on `docker compose up` for the frontend, run it once and
+  confirm the container serves the app the same way.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -275,7 +354,7 @@ called out in the relevant module's docstring too:
   auth or exposed as the dedicated admin Testing module the spec
   describes, and the webhook/email/SSO/test-data-generator simulators
   don't exist yet.
-- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): not scaffolded. `frontend/` has a placeholder Dockerfile/`index.html`/`package.json` only, so `docker compose build` doesn't fail on a missing context.
+- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3** (see above) - public plan/subscribe flow, customer OTP login + portal, admin login/MFA + minimal dashboard, all verified against the real backend with Playwright. Still missing: any admin CRUD UI (no admin CRUD API exists yet to call), and the dynamic registration-form renderer (section 8).
 - **Audit logging**: the `record()` helper and table exist and are used
   for payment success/failure; not yet wired into every action the spec
   lists (plan changes, config changes, bypass usage, etc.).
@@ -314,11 +393,30 @@ available - only a locally-installed Postgres. Before relying on it,
 run `docker compose up --build` once and confirm the backend container
 boots the same way the bare-metal run above did.
 
+Frontend (needs the backend above running first, and its `CORS_ORIGINS`
+to include whatever origin you open the frontend at - see `.env.example`):
+
+```bash
+cd frontend
+npm install
+cp .env.example .env   # adjust VITE_API_BASE_URL if the backend isn't on :8000
+npm run dev
+# open the URL Vite prints (http://localhost:5173 by default)
+```
+
+See `frontend/README.md` for what's covered and the CORS note in more
+detail. `docker compose up`'s frontend service is written and fixed to
+actually run the app, but - like the backend's Compose path above - has
+not been exercised against a real Docker daemon in this build pass;
+confirm it with `docker compose up --build` before relying on it.
+
 ## Suggested next-session order
 
 Follows spec section 91's implementation order. Items 1-3 (below,
-struck through) were completed in increment 2 (2026-08-27, see above);
-picking up from item 4:
+struck through) were completed in increment 2 (2026-08-27, see above).
+Item 8 (React frontend) was pulled forward and completed in increment 3
+(2026-08-27, see above) at Vishal's explicit request, ahead of items 4-7 -
+those are still open and are the actual next step:
 
 1. ~~Admin auth (JWT + password + MFA with dev/staging bypass)~~ - done.
 2. ~~Duplicate customer detection + OTP (sections 9-11)~~ - done.
@@ -333,5 +431,7 @@ picking up from item 4:
 6. PayU adapter (register alongside Mock in the gateway registry -
    no core changes needed).
 7. Admin portal API surface + Testing/simulation module.
-8. React frontend, starting with the public subscribe flow (thinnest
-   slice that exercises the most backend surface).
+8. ~~React frontend, starting with the public subscribe flow~~ - done
+   (increment 3). Still not built: admin CRUD UI (blocked on item 7's
+   admin CRUD API not existing yet) and the dynamic registration-form
+   renderer (spec section 8).

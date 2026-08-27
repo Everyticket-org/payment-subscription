@@ -1,16 +1,17 @@
-# Placeholder frontend container.
-# The React application (public subscription pages, customer portal, admin
-# portal) has not been scaffolded yet in this pass - see docs/implementation-status.md.
-# This placeholder keeps `docker compose build` working end-to-end for the
-# backend-focused Phase 1 slice delivered so far.
+# Dev-mode container: runs the real Vite dev server (with HMR) against a
+# bind-mounted ./frontend, matching docker-compose.yml's volume setup
+# (source is mounted live; node_modules gets its own anonymous volume so
+# the host's node_modules - or lack thereof - never shadows what's
+# installed here). This replaces the earlier placeholder that predated
+# the actual React app (see docs/implementation-status.md).
 #
-# NOTE: the frontend framework was changed from Angular (as originally
-# specced in the master prompt) to React per Vishal's 2026-08-27 correction.
-# See docs/implementation-status.md for details.
+# NOT set up for a production build/serve yet - that would be a separate
+# multi-stage Dockerfile (npm run build -> serve dist/ with a static
+# server), left for when this is actually deployed somewhere.
 FROM node:20-alpine
 WORKDIR /app
-COPY package.json ./
-RUN npm install --omit=dev || true
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 EXPOSE 3000
-CMD ["npx", "http-server", "src", "-p", "3000"]
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
