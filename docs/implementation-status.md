@@ -81,6 +81,20 @@ implemented.
   subscribe-while-active cases, and the results verified directly in
   `psql`. Everything above matches what the automated tests assert.
 
+## Framework correction (2026-08-27)
+
+The original master prompt (section 4) specified Angular for the
+frontend. Vishal corrected this to **React** after the first build
+session. Nothing frontend-specific had been built yet at that point, so
+this is a documentation/placeholder change only (`frontend/Dockerfile`,
+`frontend/package.json`, `frontend/src/index.html`, this file, and
+`README.md`) - no Angular code exists anywhere in the repo to remove. All
+future frontend work should target React (Vite or Create React App,
+TypeScript recommended, matching the spec's "typed models, reusable
+components, services, guards, interceptors" requirements from section
+77). The backend is framework-agnostic on this choice - no backend code
+changes were needed.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -118,9 +132,7 @@ called out in the relevant module's docstring too:
   auth or exposed as the dedicated admin Testing module the spec
   describes, and the webhook/email/SSO/test-data-generator simulators
   don't exist yet.
-- **Angular frontend** (section 77): not scaffolded. `frontend/` has a
-  placeholder Dockerfile/`index.html` only, so `docker compose build`
-  doesn't fail on a missing context.
+- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): not scaffolded. `frontend/` has a placeholder Dockerfile/`index.html`/`package.json` only, so `docker compose build` doesn't fail on a missing context.
 - **Audit logging**: the `record()` helper and table exist and are used
   for payment success/failure; not yet wired into every action the spec
   lists (plan changes, config changes, bypass usage, etc.).
@@ -176,5 +188,5 @@ pass left off:
 6. PayU adapter (register alongside Mock in the gateway registry -
    no core changes needed).
 7. Admin portal API surface + Testing/simulation module.
-8. Angular frontend, starting with the public subscribe flow (thinnest
+8. React frontend, starting with the public subscribe flow (thinnest
    slice that exercises the most backend surface).

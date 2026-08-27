@@ -9,7 +9,7 @@ booking, POS, etc. - is a separate application and is out of scope here.
 subscription flow (new customer -> plan -> mock payment -> active
 subscription -> invoice), backed by a real Postgres schema and an
 automated test suite. Most of the Phase 1 feature list (admin portal,
-Angular frontend, PayU, Everyticket webhooks, SSO, email, background jobs)
+React frontend, PayU, Everyticket webhooks, SSO, email, background jobs)
 is not yet built. See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.
@@ -17,7 +17,7 @@ before assuming any given feature works.
 ## Architecture
 
 Modular monolith: FastAPI + SQLAlchemy + Alembic + PostgreSQL backend,
-Angular frontend (not yet scaffolded), Celery/Redis for background jobs,
+React frontend (not yet scaffolded - corrected from Angular on 2026-08-27), Celery/Redis for background jobs,
 Docker Compose for local development. See `backend/app/` for the module
 layout (customers, plans, subscriptions, payments, invoices,
 notifications, webhooks, integrations, sso, audit, admin/customer/public

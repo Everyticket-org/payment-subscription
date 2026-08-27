@@ -2,9 +2,9 @@
   "name": "subscription-frontend",
   "version": "0.0.0",
   "private": true,
-  "description": "Placeholder - Angular app not yet scaffolded. See docs/implementation-status.md.",
+  "description": "Placeholder - React app not yet scaffolded (framework corrected from Angular to React on 2026-08-27). See docs/implementation-status.md.",
   "scripts": {
-    "start": "http-server src -p 4200"
+    "start": "http-server src -p 3000"
   },
   "dependencies": {
     "http-server": "^14.1.1"

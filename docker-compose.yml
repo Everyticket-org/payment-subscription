@@ -87,7 +87,7 @@ services:
     environment:
       - API_URL=http://localhost:8000
     ports:
-      - "4200:4200"
+      - "3000:3000"
     volumes:
       - ./frontend:/app
       - /app/node_modules
