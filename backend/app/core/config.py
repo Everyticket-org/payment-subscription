@@ -83,7 +83,22 @@ class Settings(BaseSettings):
     WEBHOOK_RETRY_SCHEDULE_MINUTES: str = "5,15,60,360,1440"
 
     # --- Frontend ---
-    FRONTEND_URL: str = "http://localhost:4200"
+    FRONTEND_URL: str = "http://localhost:5173"  # Vite dev server default
+    # Comma-separated list of origins allowed to call the API from a
+    # browser (spec section 77's React frontend, run separately via
+    # `npm run dev`, is a different origin from the backend - without
+    # this, every browser request gets blocked by CORS before it even
+    # reaches app code). Bearer-token auth means no cookies cross origins,
+    # so allow_credentials stays off - see main.py's CORSMiddleware setup.
+    # Both "localhost" and "127.0.0.1" are listed because browsers treat
+    # them as different origins even though they resolve to the same
+    # machine - whichever one you happen to open the frontend at needs to
+    # be in this list.
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000,http://127.0.0.1:3000"
+
+    @property
+    def cors_origins_list(self) -> List[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     @property
     def is_production(self) -> bool:

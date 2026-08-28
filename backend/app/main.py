@@ -9,6 +9,7 @@ logged and returned as a generic 500 for the same reason.
 import logging
 
 from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
@@ -30,6 +31,19 @@ app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
     description="Everyticket Subscription Management Platform API (Phase 1, in progress)",
+)
+
+# The React frontend (spec section 77) runs on a different origin in dev
+# (`npm run dev` on :5173 vs. the backend on :8000), so every browser
+# request needs this or it never reaches app code at all. allow_credentials
+# stays False - auth is a Bearer token in the Authorization header, not a
+# cookie, so no cross-origin credential is ever sent.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 app.include_router(api_v1_router)
