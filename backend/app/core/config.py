@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     # --- Renewal reminders (spec section 49) ---
     RENEWAL_REMINDER_DAYS_BEFORE: int = 3
 
+    # --- Invoices (spec section 45) ---
+    # GST/tax rate itself lives in the system_settings table (admin-
+    # editable at runtime via /api/v1/admin/invoices/tax-config - see
+    # app/invoices/tax.py) - this is just where generated PDFs are
+    # cached on disk.
+    INVOICE_PDF_STORAGE_DIR: str = "var/invoices"
+
     # --- Frontend ---
     FRONTEND_URL: str = "http://localhost:5173"  # Vite dev server default
     # Comma-separated list of origins allowed to call the API from a

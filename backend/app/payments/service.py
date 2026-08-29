@@ -11,6 +11,7 @@ external HTTP calls held open inside the transaction - webhook/email
 dispatch are queued for background delivery, not called synchronously;
 that queuing is not wired up yet, see docs/implementation-status.md).
 """
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -23,7 +24,7 @@ from app.core.exceptions import PaymentTransactionNotFound
 from app.core.ids import new_transaction_id
 from app.customers.models import Customer
 from app.invoices.models import Invoice
-from app.invoices.service import generate_invoice
+from app.invoices.service import generate_invoice, get_or_render_pdf
 from app.notifications.email import service as email_service
 from app.payments.gateways.registry import get_gateway
 from app.payments.interfaces.gateway import GatewayPaymentResult
@@ -33,6 +34,8 @@ from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
 from app.webhooks import service as webhook_service
+
+logger = logging.getLogger("subscription")
 
 _TERMINAL_STATUSES = {PaymentStatus.SUCCESS.value, PaymentStatus.FAILED.value, PaymentStatus.CANCELLED.value}
 
@@ -222,6 +225,33 @@ def process_gateway_result(
             related_entity_type="payment_transaction",
             related_entity_id=transaction.transaction_id,
         )
+
+        # Invoice PDF email (spec section 45) - best-effort, same as every
+        # other email in this module: a PDF render/attach failure must
+        # never surface as an error on an already-successful payment.
+        if invoice is not None:
+            try:
+                pdf_bytes = get_or_render_pdf(db, invoice)
+            except Exception:
+                logger.exception("invoice PDF render failed for %s - skipping invoice email", invoice.invoice_id)
+                pdf_bytes = None
+            if pdf_bytes:
+                email_service.send_templated_email(
+                    db,
+                    template_code="invoice_generated",
+                    to=subscription.customer.email,
+                    context={
+                        "invoice_id": invoice.invoice_id,
+                        "plan_name": subscription.plan.name,
+                        "currency": invoice.currency,
+                        "amount": f"{float(invoice.amount):.2f}",
+                        "tax_amount": f"{float(invoice.tax_amount):.2f}",
+                        "total_amount": f"{float(invoice.total_amount):.2f}",
+                    },
+                    related_entity_type="invoice",
+                    related_entity_id=invoice.invoice_id,
+                    attachments=[(f"{invoice.invoice_id}.pdf", pdf_bytes, "pdf")],
+                )
     elif result.status == PaymentStatus.FAILED.value:
         email_service.send_templated_email(
             db,

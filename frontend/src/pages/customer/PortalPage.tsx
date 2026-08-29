@@ -7,7 +7,7 @@
  * Cancel is the one immediate, no-payment mutation (spec section 43).
  */
 import { useCallback, useEffect, useState } from "react";
-import { listPlans, cancelSubscription, downgradeSubscription, getCustomerPortal, renewSubscription, simulateMockCallback, upgradeSubscription } from "../../api/endpoints";
+import { customerDownloadInvoicePdf, listPlans, cancelSubscription, downgradeSubscription, getCustomerPortal, renewSubscription, simulateMockCallback, upgradeSubscription } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
@@ -298,6 +298,7 @@ export function PortalPage() {
               <th>Invoice</th>
               <th>Date</th>
               <th>Total</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -307,6 +308,16 @@ export function PortalPage() {
                 <td>{inv.invoice_date}</td>
                 <td>
                   {inv.currency} {inv.total_amount.toFixed(2)}
+                </td>
+                <td>
+                  <button
+                    className="button button-secondary"
+                    onClick={() => {
+                      if (customerToken) void customerDownloadInvoicePdf(inv.invoice_id, customerToken);
+                    }}
+                  >
+                    Download PDF
+                  </button>
                 </td>
               </tr>
             ))}

@@ -234,6 +234,12 @@ def seed(db: Session) -> AdminUser:
         body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.</p>",
         body_text="Your {{ plan_name }} subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.",
     )
+    _get_or_create_template(
+        db, template_code="invoice_generated",
+        subject="Your invoice {{ invoice_id }}",
+        body_html="<p>Hi,</p><p>Your invoice for the <strong>{{ plan_name }}</strong> plan is attached to this email as a PDF.</p><p>Invoice: {{ invoice_id }}<br/>Amount: {{ currency }} {{ amount }}<br/>Tax: {{ currency }} {{ tax_amount }}<br/>Total: {{ currency }} {{ total_amount }}</p>",
+        body_text="Your invoice for the {{ plan_name }} plan is attached as a PDF. Invoice: {{ invoice_id }}. Amount: {{ currency }} {{ amount }}. Tax: {{ currency }} {{ tax_amount }}. Total: {{ currency }} {{ total_amount }}.",
+    )
 
     db.commit()
     return admin_user

@@ -1,14 +1,95 @@
-/** Admin Invoices list (spec sections 45, 51) - read-only; PDF generation/
- * email delivery are a separate not-yet-built increment. */
+/** Admin Invoices list (spec sections 45, 51) - includes the GST/tax-rate
+ * configuration used when new invoices are generated. Per-invoice PDF
+ * download and email resend live on the detail page. */
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { adminListInvoices } from "../../api/endpoints";
+import { adminGetInvoiceTaxConfig, adminListInvoices, adminUpdateInvoiceTaxConfig } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { useAuth } from "../../context/AuthContext";
-import type { InvoiceAdminOut, PageOut } from "../../api/types";
+import type { InvoiceAdminOut, PageOut, TaxConfigOut } from "../../api/types";
 
 const LIMIT = 20;
+
+function TaxConfigPanel() {
+  const { adminToken } = useAuth();
+  const [config, setConfig] = useState<TaxConfigOut | null>(null);
+  const [rate, setRate] = useState("0");
+  const [gstin, setGstin] = useState("");
+  const [label, setLabel] = useState("GST");
+  const [saving, setSaving] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [error, setError] = useState<unknown>(null);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    adminGetInvoiceTaxConfig(adminToken)
+      .then((cfg) => {
+        setConfig(cfg);
+        setRate(String(cfg.gst_rate_percent));
+        setGstin(cfg.seller_gstin ?? "");
+        setLabel(cfg.tax_label);
+      })
+      .catch(setError);
+  }, [adminToken]);
+
+  const save = async () => {
+    if (!adminToken) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const updated = await adminUpdateInvoiceTaxConfig(
+        { gst_rate_percent: Number(rate), seller_gstin: gstin || null, tax_label: label },
+        adminToken,
+      );
+      setConfig(updated);
+      setSavedAt(Date.now());
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="admin-panel">
+      <h2>Tax / GST configuration</h2>
+      <p className="hint">
+        Applied to every invoice generated after saving - already-issued invoices keep the amounts they were
+        generated with.
+      </p>
+      <ErrorBanner error={error} />
+      {config === null && !error && <p>Loading...</p>}
+      {config && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            void save();
+          }}
+        >
+          <div className="inline-form">
+            <label>
+              GST rate (%)
+              <input type="number" min="0" max="100" step="0.01" value={rate} onChange={(e) => setRate(e.target.value)} />
+            </label>
+            <label>
+              Seller GSTIN
+              <input value={gstin} onChange={(e) => setGstin(e.target.value)} placeholder="e.g. 27AAAAA0000A1Z5" />
+            </label>
+            <label>
+              Tax label
+              <input value={label} onChange={(e) => setLabel(e.target.value)} />
+            </label>
+            <button className="button button-primary" type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Save"}
+            </button>
+          </div>
+          {savedAt && <p className="hint">Saved.</p>}
+        </form>
+      )}
+    </div>
+  );
+}
 
 export function AdminInvoicesPage() {
   const { adminToken } = useAuth();
@@ -29,6 +110,8 @@ export function AdminInvoicesPage() {
   return (
     <section>
       <h1>Invoices</h1>
+
+      <TaxConfigPanel />
 
       <ErrorBanner error={error} />
 

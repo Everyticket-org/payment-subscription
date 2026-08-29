@@ -36,11 +36,16 @@ def send_templated_email(
     context: dict,
     related_entity_type: str | None = None,
     related_entity_id: str | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> bool:
     """Looks up an active NotificationTemplate by code, renders it with
     Jinja2 against `context`, sends it via the configured provider, and
     always writes+commits a NotificationLog row (SENT or FAILED). Returns
-    True iff it actually sent. Never raises."""
+    True iff it actually sent. Never raises.
+
+    `attachments`, if given, is a list of (filename, content_bytes,
+    mime_subtype) tuples - e.g. the invoice PDF (spec section 45). Only
+    the smtp provider path uses it today."""
     settings = get_settings()
 
     if not to:
@@ -86,7 +91,9 @@ def send_templated_email(
         return False
 
     try:
-        smtp_provider.send(settings, to=to, subject=subject, html_body=html_body, text_body=text_body)
+        smtp_provider.send(
+            settings, to=to, subject=subject, html_body=html_body, text_body=text_body, attachments=attachments
+        )
     except SMTPSendError as exc:
         logger.warning("send_templated_email(%s) to %s failed: %s", template_code, to, exc)
         _log(

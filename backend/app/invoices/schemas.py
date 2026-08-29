@@ -1,7 +1,7 @@
 """Pydantic schemas for invoices (spec section 45)."""
 from datetime import date
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class InvoiceOut(BaseModel):
@@ -41,3 +41,26 @@ class InvoiceAdminOut(BaseModel):
     total_amount: float
     currency: str
     items: list[InvoiceItemOut] = []
+
+
+class TaxConfigOut(BaseModel):
+    """Current GST/tax configuration used when generating new invoices
+    (spec sections 45, 51, 81). `seller_gstin` is this business's own
+    GSTIN, printed on every invoice PDF - distinct from a customer's own
+    GSTIN, which is captured per-customer via the dynamic registration
+    form's "gstin" field (spec section 18) and shown as that invoice's
+    `gst_number`."""
+    gst_rate_percent: float = 0
+    seller_gstin: str | None = None
+    tax_label: str = "GST"
+
+
+class TaxConfigUpdate(BaseModel):
+    gst_rate_percent: float = Field(ge=0, le=100)
+    seller_gstin: str | None = None
+    tax_label: str = "GST"
+
+
+class InvoiceEmailResult(BaseModel):
+    sent: bool
+    to: str | None = None

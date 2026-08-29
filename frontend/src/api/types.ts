@@ -351,6 +351,23 @@ export interface InvoiceAdminOut {
   items: InvoiceItemOut[];
 }
 
+export interface TaxConfigOut {
+  gst_rate_percent: number;
+  seller_gstin: string | null;
+  tax_label: string;
+}
+
+export interface TaxConfigUpdateInput {
+  gst_rate_percent: number;
+  seller_gstin?: string | null;
+  tax_label?: string;
+}
+
+export interface InvoiceEmailResult {
+  sent: boolean;
+  to: string | null;
+}
+
 export interface CustomerAdminDetailOut {
   customer: Customer;
   registration_data: RegistrationDataOut[];

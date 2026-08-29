@@ -8,8 +8,7 @@ app.api.v1.admin_*.py router included below, each gated by
 app.auth.deps.require_permission (spec section 12's role/permission
 model, seeded onto SUPERADMIN in app.core.seed) - including
 admin_testing.py, the Testing/Developer Tools module (spec section 54),
-additionally gated by app.auth.deps.require_test_mode. Invoice PDF
-generation is not yet built - see docs/implementation-status.md.
+additionally gated by app.auth.deps.require_test_mode.
 """
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session

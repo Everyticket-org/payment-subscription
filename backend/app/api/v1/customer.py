@@ -7,19 +7,20 @@ Direct OTP-based access (spec section 48) is that same token; SSO-based
 access (spec section 47) is not implemented yet - see
 docs/implementation-status.md.
 """
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_application, get_db
 from app.applications.models import Application
 from app.auth.deps import get_current_customer_id
 from app.core.enums import PaymentType, SubscriptionStatus
-from app.core.exceptions import CustomerNotFound, PlanNotFound, SubscriptionNotFound
+from app.core.exceptions import AppError, CustomerNotFound, PlanNotFound, SubscriptionNotFound
 from app.customers.models import Customer
 from app.customers.portal_schemas import CustomerPortalOut
 from app.customers.schemas import CustomerOut
 from app.invoices.models import Invoice
 from app.invoices.schemas import InvoiceOut
+from app.invoices.service import get_or_render_pdf
 from app.notifications.email import service as email_service
 from app.payments import service as payment_service
 from app.payments.models import PaymentTransaction
@@ -30,6 +31,11 @@ from app.subscriptions.models import Subscription
 from app.subscriptions.schemas import CancelRequest, PortalSubscriptionOut, SubscribeResponse, UpgradeDowngradeRequest
 
 router = APIRouter(prefix="/customer", tags=["customer"])
+
+
+class InvoiceNotFoundError(AppError):
+    http_status = 404
+    error_code = "INVOICE_NOT_FOUND"
 
 
 def _to_portal_subscription(sub: Subscription) -> PortalSubscriptionOut:
@@ -95,6 +101,31 @@ def get_portal(
         subscriptions=[_to_portal_subscription(s) for s in subscriptions],
         payments=[PaymentTransactionOut.model_validate(p) for p in payments],
         invoices=[InvoiceOut.model_validate(i) for i in invoices],
+    )
+
+
+@router.get("/invoices/{invoice_id}/pdf")
+def download_invoice_pdf(
+    invoice_id: str,
+    db: Session = Depends(get_db),
+    customer_id: str = Depends(get_current_customer_id),
+):
+    """Spec section 45/46: a customer may only download their own
+    invoices - ownership is checked directly on the query, not just on
+    the invoice_id being well-formed."""
+    customer = _get_customer(db, customer_id)
+    invoice = (
+        db.query(Invoice)
+        .filter(Invoice.invoice_id == invoice_id, Invoice.customer_id == customer.id)
+        .first()
+    )
+    if invoice is None:
+        raise InvoiceNotFoundError(f"Unknown invoice {invoice_id}")
+    pdf_bytes = get_or_render_pdf(db, invoice)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{invoice.invoice_id}.pdf"'},
     )
 
 

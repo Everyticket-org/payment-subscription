@@ -15,7 +15,7 @@
  */
 import type { ApiErrorBody } from "./types";
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
+export const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8000";
 
 export class ApiError extends Error {
   errorCode: string;
@@ -91,6 +91,36 @@ export function withQuery(path: string, params: Record<string, string | number |
   }
   const qs = search.toString();
   return qs ? `${path}?${qs}` : path;
+}
+
+/**
+ * Fetches a binary file (PDF today) from an authenticated endpoint and
+ * triggers a browser download - a plain <a href> can't carry the Bearer
+ * token this API requires (see this module's own docstring), so this
+ * does the fetch itself and hands the browser a short-lived object URL
+ * instead.
+ */
+export async function downloadFile(path: string, token: string, filename: string): Promise<void> {
+  const response = await fetch(`${BASE_URL}${path}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => null);
+    const body: ApiErrorBody =
+      data && typeof data === "object" && "error_code" in data
+        ? (data as ApiErrorBody)
+        : { error_code: "UNKNOWN_ERROR", message: `Request failed (${response.status})` };
+    throw new ApiError(response.status, body);
+  }
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
 }
 
 export const api = {

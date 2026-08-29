@@ -18,6 +18,7 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("SUBSCRIPTIONS_VIEW", "View subscriptions and subscription history"),
     ("PAYMENTS_VIEW", "View payment transactions"),
     ("INVOICES_VIEW", "View invoices"),
+    ("INVOICES_MANAGE", "Configure invoice GST/tax settings and resend invoice emails with the PDF attached"),
     ("WEBHOOKS_VIEW", "View webhook events and deliveries"),
     ("WEBHOOKS_MANAGE", "Manually retry webhook deliveries"),
     ("NOTIFICATIONS_VIEW", "View notification templates and send logs"),

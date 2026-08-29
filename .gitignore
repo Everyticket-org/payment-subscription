@@ -34,3 +34,7 @@ Thumbs.db
 
 # Test artifacts marked TEST data dumps
 /backend/*.db
+
+# Generated invoice PDFs (cached on disk, regenerable - see
+# app/invoices/service.py:get_or_render_pdf)
+/backend/var/

@@ -3,7 +3,7 @@
  * separate from client.ts's generic request logic means a page component
  * never constructs a URL path or knows an HTTP verb by hand.
  */
-import { api, withQuery } from "./client";
+import { api, downloadFile, withQuery } from "./client";
 import type {
   AdminLoginResponse,
   AdminUserOut,
@@ -14,6 +14,7 @@ import type {
   DashboardStatsOut,
   IdentifyResponse,
   InvoiceAdminOut,
+  InvoiceEmailResult,
   MockCallbackResult,
   NotificationLogOut,
   NotificationTemplateOut,
@@ -32,6 +33,8 @@ import type {
   RegistrationFormFieldOut,
   RegistrationFormFieldUpdateInput,
   SsoLinkOut,
+  TaxConfigOut,
+  TaxConfigUpdateInput,
   TestDataCleanupOut,
   TestDataGeneratedOut,
   TestEmailResult,
@@ -208,6 +211,21 @@ export const adminListInvoices = (params: { customer_id?: string; limit?: number
 
 export const adminGetInvoice = (invoiceId: string, token: string) =>
   api.get<InvoiceAdminOut>(`/api/v1/admin/invoices/${invoiceId}`, token);
+
+export const adminGetInvoiceTaxConfig = (token: string) =>
+  api.get<TaxConfigOut>("/api/v1/admin/invoices/tax-config", token);
+
+export const adminUpdateInvoiceTaxConfig = (body: TaxConfigUpdateInput, token: string) =>
+  api.put<TaxConfigOut>("/api/v1/admin/invoices/tax-config", body, token);
+
+export const adminDownloadInvoicePdf = (invoiceId: string, token: string) =>
+  downloadFile(`/api/v1/admin/invoices/${invoiceId}/pdf`, token, `${invoiceId}.pdf`);
+
+export const adminSendInvoiceEmail = (invoiceId: string, token: string) =>
+  api.post<InvoiceEmailResult>(`/api/v1/admin/invoices/${invoiceId}/send-email`, {}, token);
+
+export const customerDownloadInvoicePdf = (invoiceId: string, token: string) =>
+  downloadFile(`/api/v1/customer/invoices/${invoiceId}/pdf`, token, `${invoiceId}.pdf`);
 
 // --- Admin: webhook logs ---
 

@@ -13,6 +13,7 @@ without ever sending anything real in development.
 """
 import logging
 import smtplib
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -34,17 +35,34 @@ def send(
     subject: str,
     html_body: str,
     text_body: str | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
 ) -> None:
-    message = MIMEMultipart("alternative")
+    """`attachments` is a list of (filename, content_bytes, mime_subtype)
+    tuples, e.g. ("invoice.pdf", pdf_bytes, "pdf") - used for the invoice
+    PDF email (spec section 45). Optional; most templates send none."""
+    message = MIMEMultipart("mixed" if attachments else "alternative")
     message["Subject"] = subject
     message["From"] = f"{settings.EMAIL_SENDER_NAME} <{settings.EMAIL_SENDER_ADDRESS}>"
     message["To"] = to
     if settings.EMAIL_REPLY_TO:
         message["Reply-To"] = settings.EMAIL_REPLY_TO
 
-    if text_body:
-        message.attach(MIMEText(text_body, "plain"))
-    message.attach(MIMEText(html_body, "html"))
+    if attachments:
+        # A "mixed" root with an "alternative" body part is the standard
+        # shape for a plain/html body plus one or more attachments.
+        body_part = MIMEMultipart("alternative")
+        if text_body:
+            body_part.attach(MIMEText(text_body, "plain"))
+        body_part.attach(MIMEText(html_body, "html"))
+        message.attach(body_part)
+        for filename, content, subtype in attachments:
+            part = MIMEApplication(content, _subtype=subtype)
+            part.add_header("Content-Disposition", "attachment", filename=filename)
+            message.attach(part)
+    else:
+        if text_body:
+            message.attach(MIMEText(text_body, "plain"))
+        message.attach(MIMEText(html_body, "html"))
 
     try:
         with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:

@@ -1,7 +1,8 @@
-/** Admin Invoice detail (spec section 45) - read-only, with line items. */
+/** Admin Invoice detail (spec section 45) - line items plus PDF download
+ * and email resend actions. */
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { adminGetInvoice } from "../../api/endpoints";
+import { adminDownloadInvoicePdf, adminGetInvoice, adminSendInvoiceEmail } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
 import type { InvoiceAdminOut } from "../../api/types";
@@ -11,11 +12,42 @@ export function AdminInvoiceDetailPage() {
   const { adminToken } = useAuth();
   const [invoice, setInvoice] = useState<InvoiceAdminOut | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [emailResult, setEmailResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (!adminToken) return;
     adminGetInvoice(invoiceId, adminToken).then(setInvoice).catch(setError);
   }, [adminToken, invoiceId]);
+
+  const downloadPdf = async () => {
+    if (!adminToken) return;
+    setDownloading(true);
+    setError(null);
+    try {
+      await adminDownloadInvoicePdf(invoiceId, adminToken);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const resendEmail = async () => {
+    if (!adminToken) return;
+    setSending(true);
+    setError(null);
+    setEmailResult(null);
+    try {
+      const result = await adminSendInvoiceEmail(invoiceId, adminToken);
+      setEmailResult(result.sent ? `Sent to ${result.to}.` : "Could not send - check notification logs.");
+    } catch (err) {
+      setError(err);
+    } finally {
+      setSending(false);
+    }
+  };
 
   return (
     <section>
@@ -30,6 +62,18 @@ export function AdminInvoiceDetailPage() {
 
       {invoice && (
         <>
+          <div className="admin-panel">
+            <div className="button-row">
+              <button className="button button-primary" disabled={downloading} onClick={() => void downloadPdf()}>
+                {downloading ? "Downloading..." : "Download PDF"}
+              </button>
+              <button className="button button-secondary" disabled={sending} onClick={() => void resendEmail()}>
+                {sending ? "Sending..." : "Resend invoice email"}
+              </button>
+            </div>
+            {emailResult && <p className="hint">{emailResult}</p>}
+          </div>
+
           <div className="admin-panel">
             <dl className="summary-list">
               <dt>Customer</dt>
