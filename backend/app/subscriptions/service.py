@@ -278,6 +278,65 @@ def expire_due_subscriptions(db: Session) -> int:
     return expired_count
 
 
+def send_renewal_reminders(db: Session) -> int:
+    """Sweep entry point for the Celery beat task (app/subscriptions/tasks.py,
+    spec section 49) - emails every ACTIVE subscription expiring within
+    RENEWAL_REMINDER_DAYS_BEFORE days. Idempotency is a heuristic rather
+    than a dedicated column: it skips a subscription if a
+    'renewal_reminder' NotificationLog already exists for it within a
+    window wide enough to cover the current expiry cycle - good enough to
+    avoid spamming the same reminder every few minutes without adding new
+    schema for this pass (see docs/implementation-status.md)."""
+    from app.core.config import get_settings
+    from app.notifications.email import service as email_service
+    from app.notifications.models import NotificationLog
+
+    settings = get_settings()
+    now = datetime.now(timezone.utc)
+    window_end = now + timedelta(days=settings.RENEWAL_REMINDER_DAYS_BEFORE)
+
+    due = (
+        db.query(Subscription)
+        .filter(
+            Subscription.status == SubscriptionStatus.ACTIVE.value,
+            Subscription.expires_at.isnot(None),
+            Subscription.expires_at > now,
+            Subscription.expires_at <= window_end,
+        )
+        .all()
+    )
+
+    reminder_lookback = now - timedelta(days=settings.RENEWAL_REMINDER_DAYS_BEFORE + 2)
+    sent_count = 0
+    for subscription in due:
+        already_reminded = (
+            db.query(NotificationLog)
+            .filter(
+                NotificationLog.template_code == "renewal_reminder",
+                NotificationLog.related_entity_id == subscription.subscription_id,
+                NotificationLog.created_at >= reminder_lookback,
+            )
+            .first()
+        )
+        if already_reminded is not None:
+            continue
+
+        sent = email_service.send_templated_email(
+            db,
+            template_code="renewal_reminder",
+            to=subscription.customer.email,
+            context={
+                "plan_name": subscription.plan.name,
+                "expires_at": subscription.expires_at.date().isoformat(),
+            },
+            related_entity_type="subscription",
+            related_entity_id=subscription.subscription_id,
+        )
+        if sent:
+            sent_count += 1
+    return sent_count
+
+
 def cancel_subscription(db: Session, *, subscription: Subscription, cancelled_by: str, reason: str | None) -> Subscription:
     """Immediate cancellation (spec section 43): no refund, no future renewal."""
     now = datetime.now(timezone.utc)

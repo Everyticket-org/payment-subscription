@@ -42,6 +42,7 @@ from app.core.enums import PaymentType
 from app.core.exceptions import ConflictingCustomerIdentity, OtpVerificationRequired, PlanNotFound, Unauthorized
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
+from app.notifications.email import service as email_service
 from app.customers.schemas import (
     CustomerOut,
     IdentifyRequest,
@@ -107,6 +108,21 @@ def identify(body: IdentifyRequest, db: Session = Depends(get_db)):
         db, email=body.email, mobile=body.mobile, customer_id=existing.customer_id, purpose="IDENTIFY"
     )
     db.commit()
+
+    # Real delivery (spec section 11) - best-effort, after the OTP
+    # session itself is already committed so a broken SMTP server never
+    # blocks issuing the session. debug_otp_code below is a TEST_MODE-only
+    # convenience for local development, not the delivery mechanism.
+    if body.email:
+        email_service.send_templated_email(
+            db,
+            template_code="otp_verification",
+            to=body.email,
+            context={"code": code},
+            related_entity_type="otp_session",
+            related_entity_id=otp_session.otp_session_id,
+        )
+
     return IdentifyResponse(
         match_status="exact",
         otp_session_id=otp_session.otp_session_id,

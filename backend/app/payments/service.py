@@ -24,6 +24,7 @@ from app.core.ids import new_transaction_id
 from app.customers.models import Customer
 from app.invoices.models import Invoice
 from app.invoices.service import generate_invoice
+from app.notifications.email import service as email_service
 from app.payments.gateways.registry import get_gateway
 from app.payments.interfaces.gateway import GatewayPaymentResult
 from app.payments.models import PaymentTransaction
@@ -186,8 +187,6 @@ def process_gateway_result(
                     "transaction_id": transaction.transaction_id,
                 },
             )
-        # Confirmation email (spec section 49): queued the same way once
-        # the email service exists - see docs/implementation-status.md.
     elif result.status == PaymentStatus.FAILED.value:
         subscription_service.mark_payment_failed(db, subscription=subscription)
         audit_service.record(
@@ -204,6 +203,40 @@ def process_gateway_result(
 
     db.commit()
     db.refresh(transaction)
+
+    # Confirmation email (spec section 49) - sent AFTER the financial
+    # transaction above has committed, never inside it (spec section 58:
+    # no external call held open inside that commit). Best-effort; never
+    # raises (see email_service's module docstring).
+    if result.status == PaymentStatus.SUCCESS.value:
+        email_service.send_templated_email(
+            db,
+            template_code="payment_success",
+            to=subscription.customer.email,
+            context={
+                "plan_name": subscription.plan.name,
+                "currency": transaction.currency,
+                "amount": f"{float(transaction.amount):.2f}",
+                "transaction_id": transaction.transaction_id,
+            },
+            related_entity_type="payment_transaction",
+            related_entity_id=transaction.transaction_id,
+        )
+    elif result.status == PaymentStatus.FAILED.value:
+        email_service.send_templated_email(
+            db,
+            template_code="payment_failed",
+            to=subscription.customer.email,
+            context={
+                "plan_name": subscription.plan.name,
+                "currency": transaction.currency,
+                "amount": f"{float(transaction.amount):.2f}",
+                "failure_reason": result.failure_reason,
+            },
+            related_entity_type="payment_transaction",
+            related_entity_id=transaction.transaction_id,
+        )
+
     return transaction, invoice
 
 

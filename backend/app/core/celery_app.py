@@ -42,5 +42,9 @@ celery_app.conf.update(
             "task": "subscriptions.expire_due",
             "schedule": 300.0,  # seconds - expiry isn't time-critical to the minute
         },
+        "send-renewal-reminders": {
+            "task": "subscriptions.send_renewal_reminders",
+            "schedule": 3600.0,  # seconds - once an hour is plenty for a multi-day reminder window
+        },
     },
 )

@@ -20,6 +20,7 @@ from app.customers.portal_schemas import CustomerPortalOut
 from app.customers.schemas import CustomerOut
 from app.invoices.models import Invoice
 from app.invoices.schemas import InvoiceOut
+from app.notifications.email import service as email_service
 from app.payments import service as payment_service
 from app.payments.models import PaymentTransaction
 from app.payments.schemas import PaymentTransactionOut
@@ -202,9 +203,20 @@ def cancel(
     customer = _get_customer(db, customer_id)
     subscription = _get_owned_subscription(db, customer=customer, subscription_id=subscription_id)
 
+    plan_name = subscription.plan.name
     subscription_service.cancel_subscription(
         db, subscription=subscription, cancelled_by=customer.customer_id, reason=body.reason
     )
     db.commit()
     db.refresh(subscription)
+
+    email_service.send_templated_email(
+        db,
+        template_code="subscription_cancelled",
+        to=customer.email,
+        context={"plan_name": plan_name},
+        related_entity_type="subscription",
+        related_entity_id=subscription.subscription_id,
+    )
+
     return _to_portal_subscription(subscription)

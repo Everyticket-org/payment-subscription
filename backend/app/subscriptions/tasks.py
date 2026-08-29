@@ -25,3 +25,17 @@ def expire_due_subscriptions() -> int:
         return expired
     finally:
         db.close()
+
+
+@celery_app.task(name="subscriptions.send_renewal_reminders")
+def send_renewal_reminders() -> int:
+    """Runs periodically (see celery_app.py's beat_schedule) and emails
+    every ACTIVE subscription expiring soon (spec section 49)."""
+    db = SessionLocal()
+    try:
+        sent = subscription_service.send_renewal_reminders(db)
+        if sent:
+            logger.info("Sent %d renewal reminder emails", sent)
+        return sent
+    finally:
+        db.close()

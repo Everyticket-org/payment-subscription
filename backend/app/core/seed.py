@@ -18,6 +18,7 @@ from app.auth.models import AdminUser, Role
 from app.core.database import SessionLocal
 from app.core import models_registry  # noqa: F401
 from app.forms.models import RegistrationFormField
+from app.notifications.models import NotificationTemplate
 from app.plans.models import Plan, PlanTransition
 
 DEV_ADMIN_EMAIL = "admin@example.com"
@@ -91,6 +92,36 @@ def _get_or_create_field(db: Session, application: Application, **kwargs) -> Non
     db.add(RegistrationFormField(application_id=application.id, **kwargs))
 
 
+_EMAIL_WRAPPER_OPEN = (
+    "<div style=\"font-family:sans-serif;max-width:480px;margin:0 auto;\">"
+    "<div style=\"background:#d50355;color:#fff;padding:16px 20px;border-radius:8px 8px 0 0;\">"
+    "<strong>Everyticket Subscriptions</strong></div>"
+    "<div style=\"background:#f1e2de;padding:20px;border-radius:0 0 8px 8px;color:#2a1512;\">"
+)
+_EMAIL_WRAPPER_CLOSE = "</div></div>"
+
+
+def _get_or_create_template(db: Session, *, template_code: str, subject: str, body_html: str, body_text: str) -> None:
+    """Dev-seeded default templates (spec sections 49-50). Wrapped in a
+    minimal branded shell so even the un-customized default doesn't look
+    like plain unstyled text. An admin will eventually be able to edit
+    these via the (not-yet-built) admin CRUD API - see
+    docs/implementation-status.md."""
+    existing = db.query(NotificationTemplate).filter(NotificationTemplate.template_code == template_code).first()
+    if existing is not None:
+        return
+    db.add(
+        NotificationTemplate(
+            template_code=template_code,
+            channel="email",
+            subject=subject,
+            body_html=_EMAIL_WRAPPER_OPEN + body_html + _EMAIL_WRAPPER_CLOSE,
+            body_text=body_text,
+            active=True,
+        )
+    )
+
+
 def _get_or_create_admin(db: Session) -> AdminUser:
     """Dev-only seed admin (spec section 70). Credentials are printed by
     main() and documented in README.md - they are NOT meant for
@@ -144,6 +175,37 @@ def seed(db: Session) -> AdminUser:
     _get_or_create_field(db, application, field_key="address", label="Address", field_type="textarea", required=False, display_order=4)
 
     admin_user = _get_or_create_admin(db)
+
+    _get_or_create_template(
+        db, template_code="otp_verification",
+        subject="Your Everyticket Subscriptions verification code",
+        body_html="<p>Your verification code is:</p><p style=\"font-size:28px;font-weight:700;letter-spacing:4px;\">{{ code }}</p><p>This code expires in a few minutes. If you didn't request this, you can ignore this email.</p>",
+        body_text="Your verification code is: {{ code }}\n\nThis code expires in a few minutes. If you didn't request this, you can ignore this email.",
+    )
+    _get_or_create_template(
+        db, template_code="payment_success",
+        subject="Payment received - {{ plan_name }} subscription active",
+        body_html="<p>Hi,</p><p>Your payment of {{ currency }} {{ amount }} for the <strong>{{ plan_name }}</strong> plan was successful, and your subscription is now active.</p><p>Transaction: {{ transaction_id }}</p>",
+        body_text="Your payment of {{ currency }} {{ amount }} for the {{ plan_name }} plan was successful. Your subscription is now active. Transaction: {{ transaction_id }}",
+    )
+    _get_or_create_template(
+        db, template_code="payment_failed",
+        subject="Payment unsuccessful for your {{ plan_name }} subscription",
+        body_html="<p>Hi,</p><p>Your payment of {{ currency }} {{ amount }} for the <strong>{{ plan_name }}</strong> plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed - you can try again any time.</p>",
+        body_text="Your payment of {{ currency }} {{ amount }} for the {{ plan_name }} plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed.",
+    )
+    _get_or_create_template(
+        db, template_code="subscription_cancelled",
+        subject="Your {{ plan_name }} subscription has been cancelled",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription has been cancelled, effective immediately. No further charges will be made.</p>",
+        body_text="Your {{ plan_name }} subscription has been cancelled, effective immediately. No further charges will be made.",
+    )
+    _get_or_create_template(
+        db, template_code="renewal_reminder",
+        subject="Your {{ plan_name }} subscription expires soon",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.</p>",
+        body_text="Your {{ plan_name }} subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.",
+    )
 
     db.commit()
     return admin_user

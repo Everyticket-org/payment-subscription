@@ -82,6 +82,9 @@ class Settings(BaseSettings):
     # --- Webhook delivery ---
     WEBHOOK_RETRY_SCHEDULE_MINUTES: str = "5,15,60,360,1440"
 
+    # --- Renewal reminders (spec section 49) ---
+    RENEWAL_REMINDER_DAYS_BEFORE: int = 3
+
     # --- Frontend ---
     FRONTEND_URL: str = "http://localhost:5173"  # Vite dev server default
     # Comma-separated list of origins allowed to call the API from a
