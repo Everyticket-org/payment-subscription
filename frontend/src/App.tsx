@@ -6,6 +6,7 @@ import { PlansPage } from "./pages/public/PlansPage";
 import { SubscribePage } from "./pages/public/SubscribePage";
 import { PaymentReturnPage } from "./pages/public/PaymentReturnPage";
 import { CustomerLoginPage } from "./pages/public/CustomerLoginPage";
+import { SsoConsumePage } from "./pages/public/SsoConsumePage";
 import { PortalPage } from "./pages/customer/PortalPage";
 import { AdminLoginPage } from "./pages/admin/AdminLoginPage";
 import { AdminDashboardPage } from "./pages/admin/AdminDashboardPage";
@@ -32,6 +33,7 @@ function App() {
           <Route path="subscribe/:planCode" element={<SubscribePage />} />
           <Route path="payment/return" element={<PaymentReturnPage />} />
           <Route path="login" element={<CustomerLoginPage />} />
+          <Route path="sso/consume" element={<SsoConsumePage />} />
           <Route
             path="portal"
             element={

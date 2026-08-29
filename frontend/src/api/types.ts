@@ -101,6 +101,12 @@ export interface OtpVerifyResponse {
   token_type: string;
 }
 
+export interface SsoLinkOut {
+  sso_token: string;
+  consume_url: string;
+  expires_at: string;
+}
+
 export interface CustomerPortalOut {
   customer: Customer;
   active_subscription: PortalSubscriptionOut | null;

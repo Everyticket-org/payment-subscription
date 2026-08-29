@@ -36,6 +36,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_application, get_db
 from app.applications.models import Application
 from app.auth import otp_service
+from app.sso import service as sso_service
+from app.sso.schemas import SsoConsumeRequest
 from app.auth.deps import get_current_customer_id_optional
 from app.core.config import get_settings
 from app.core.enums import PaymentType
@@ -161,6 +163,27 @@ def verify_otp(body: OtpVerifyRequest, db: Session = Depends(get_db)):
         raise Unauthorized("Customer not found")
 
     token = customer_service.issue_customer_token(customer)
+    return OtpVerifyResponse(customer=CustomerOut.model_validate(customer), access_token=token)
+
+
+@router.post("/sso/consume", response_model=OtpVerifyResponse)
+def consume_sso_token(
+    body: SsoConsumeRequest,
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+):
+    """Everyticket SSO handoff (spec section 47). Redeems a signed,
+    single-use SSO token (validated against `application.sso_secret`,
+    falling back to the global `settings.SSO_SECRET`) and, on success,
+    issues a normal customer portal session token - the same token shape
+    /otp/verify returns, so the frontend can treat both entry points
+    identically. Replay protection, expiry, and signature checks all
+    happen inside sso_service.redeem_sso_token(); any failure there is an
+    AppError subclass and is translated into a 401 by the app-wide
+    exception handler."""
+    customer = sso_service.redeem_sso_token(db, application=application, token=body.token)
+    token = customer_service.issue_customer_token(customer)
+    db.commit()
     return OtpVerifyResponse(customer=CustomerOut.model_validate(customer), access_token=token)
 
 

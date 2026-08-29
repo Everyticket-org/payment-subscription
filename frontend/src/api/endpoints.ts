@@ -31,6 +31,7 @@ import type {
   RegistrationFormFieldCreateInput,
   RegistrationFormFieldOut,
   RegistrationFormFieldUpdateInput,
+  SsoLinkOut,
   SubscribeResponse,
   SubscriptionAdminOut,
   SubscriptionDetailAdminOut,
@@ -59,6 +60,9 @@ export const getRegistrationForm = () =>
 
 export const verifyOtp = (otpSessionId: string, code: string) =>
   api.post<OtpVerifyResponse>("/api/v1/public/otp/verify", { otp_session_id: otpSessionId, code });
+
+export const consumeSsoToken = (token: string) =>
+  api.post<OtpVerifyResponse>("/api/v1/public/sso/consume", { token });
 
 // --- Payment (mock gateway simulation) ---
 
@@ -166,6 +170,9 @@ export const adminSuspendCustomer = (customerId: string, reason: string | undefi
 
 export const adminActivateCustomer = (customerId: string, token: string) =>
   api.post<{ customer_id: string; status: string }>(`/api/v1/admin/customers/${customerId}/activate`, {}, token);
+
+export const adminGenerateSsoLink = (customerId: string, token: string) =>
+  api.post<SsoLinkOut>(`/api/v1/admin/customers/${customerId}/sso-link`, {}, token);
 
 // --- Admin: subscriptions ---
 

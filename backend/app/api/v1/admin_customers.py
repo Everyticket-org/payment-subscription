@@ -6,6 +6,8 @@ transaction history" - so this module only ever changes Customer.status
 (suspend/activate); subscriptions/payments/invoices are surfaced here
 read-only, sourced from their own domain models, never mutated.
 """
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
@@ -17,8 +19,9 @@ from app.applications.models import Application, CustomerApplicationMapping
 from app.audit import service as audit_service
 from app.auth.deps import require_permission
 from app.auth.models import AdminUser
+from app.core.config import get_settings
 from app.core.enums import CustomerStatus
-from app.core.exceptions import CustomerNotFound
+from app.core.exceptions import CustomerNotFound, Forbidden
 from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.schemas import (
     ApplicationMappingOut,
@@ -31,6 +34,8 @@ from app.customers.schemas import (
 from app.invoices.models import Invoice
 from app.payments.models import PaymentTransaction
 from app.subscriptions.models import Subscription
+from app.sso import service as sso_service
+from app.sso.schemas import SsoLinkOut
 
 router = APIRouter(prefix="/customers", tags=["admin-customers"])
 
@@ -44,6 +49,10 @@ def _get_customer(db: Session, customer_id: str) -> Customer:
 
 def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 @router.get("", response_model=PageOut[CustomerAdminListItem])
@@ -171,3 +180,42 @@ def activate_customer(
     db.commit()
     db.refresh(customer)
     return CustomerOut.model_validate(customer)
+
+
+@router.post("/{customer_id}/sso-link", response_model=SsoLinkOut)
+def generate_test_sso_link(
+    customer_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+    admin: AdminUser = Depends(require_permission("CUSTOMERS_MANAGE")),
+):
+    """TEST_MODE-only convenience (spec section 47/54): in production only
+    Everyticket itself ever calls sso_service.create_sso_token() (as part
+    of its own redirect flow, entirely outside this app). There is no real
+    Everyticket instance in this build, so this endpoint lets an admin
+    generate a working, single-use SSO token/consume-link for a given
+    customer to exercise the full handoff end-to-end. Force-disabled in
+    production regardless of this check, since Settings.enforce_test_mode_restrictions
+    hard-resets TEST_MODE to False outside ENVIRONMENT=development/test."""
+    settings = get_settings()
+    if not settings.TEST_MODE:
+        raise Forbidden("SSO test-link generation is only available with TEST_MODE enabled")
+
+    customer = _get_customer(db, customer_id)
+    token = sso_service.create_sso_token(db, application=application, customer=customer)
+
+    audit_service.record(
+        db,
+        actor=admin.email,
+        action="SSO_TEST_LINK_GENERATED",
+        entity_type="customer",
+        entity_id=customer.customer_id,
+        new_value={"application_code": application.code},
+        ip_address=_client_ip(request),
+    )
+    db.commit()
+
+    expires_at = _utcnow() + timedelta(seconds=settings.SSO_TOKEN_TTL_SECONDS)
+    consume_url = f"{settings.FRONTEND_URL.rstrip('/')}/sso/consume?token={token}"
+    return SsoLinkOut(sso_token=token, consume_url=consume_url, expires_at=expires_at)

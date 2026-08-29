@@ -6,11 +6,16 @@
  */
 import { Fragment, useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { adminActivateCustomer, adminGetCustomer, adminSuspendCustomer } from "../../api/endpoints";
+import {
+  adminActivateCustomer,
+  adminGenerateSsoLink,
+  adminGetCustomer,
+  adminSuspendCustomer,
+} from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
-import type { CustomerAdminDetailOut } from "../../api/types";
+import type { CustomerAdminDetailOut, SsoLinkOut } from "../../api/types";
 
 export function AdminCustomerDetailPage() {
   const { customerId = "" } = useParams();
@@ -18,6 +23,7 @@ export function AdminCustomerDetailPage() {
   const [detail, setDetail] = useState<CustomerAdminDetailOut | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [ssoLink, setSsoLink] = useState<SsoLinkOut | null>(null);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
@@ -45,6 +51,21 @@ export function AdminCustomerDetailPage() {
     try {
       await adminActivateCustomer(customerId, adminToken);
       reload();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGenerateSsoLink() {
+    if (!adminToken) return;
+    setBusy(true);
+    setError(null);
+    setSsoLink(null);
+    try {
+      const result = await adminGenerateSsoLink(customerId, adminToken);
+      setSsoLink(result);
     } catch (err) {
       setError(err);
     } finally {
@@ -93,8 +114,24 @@ export function AdminCustomerDetailPage() {
                     Activate
                   </button>
                 )}
+                <button className="button button-secondary" disabled={busy} onClick={handleGenerateSsoLink}>
+                  Generate test SSO link
+                </button>
               </div>
             </div>
+            {ssoLink && (
+              <div className="inline-form">
+                <p className="hint">
+                  Everyticket SSO test link (TEST_MODE only - expires {new Date(ssoLink.expires_at).toLocaleTimeString()}
+                  ):
+                </p>
+                <p style={{ wordBreak: "break-all" }}>
+                  <a href={ssoLink.consume_url} target="_blank" rel="noreferrer">
+                    {ssoLink.consume_url}
+                  </a>
+                </p>
+              </div>
+            )}
           </div>
 
           {detail.registration_data.length > 0 && (
