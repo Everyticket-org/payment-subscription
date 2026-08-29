@@ -331,6 +331,7 @@ def send_renewal_reminders(db: Session) -> int:
             },
             related_entity_type="subscription",
             related_entity_id=subscription.subscription_id,
+            application=db.get(Application, subscription.application_id),
         )
         if sent:
             sent_count += 1

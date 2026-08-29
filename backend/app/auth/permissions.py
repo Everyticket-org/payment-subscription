@@ -25,4 +25,6 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("NOTIFICATIONS_MANAGE", "Edit notification templates"),
     ("AUDIT_VIEW", "View audit logs"),
     ("TESTING_TOOLS_USE", "Use the admin Testing/Developer Tools module (test payments, subscription events, webhook simulation, test email/SSO, test data generation)"),
+    ("SYSTEM_CONFIG_VIEW", "View Payment Gateway / Everyticket Integration / Notification / Security / System configuration"),
+    ("SYSTEM_CONFIG_MANAGE", "Edit Payment Gateway / Everyticket Integration / Notification / Security / System configuration"),
 ]

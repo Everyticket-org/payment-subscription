@@ -88,6 +88,16 @@ def create_payment_transaction(
     )
     transaction.gateway_transaction_id = result.gateway_transaction_id
     transaction.raw_gateway_response = result.raw_response
+    # Real bug fixed here: this was never set before, so a PayU payment's
+    # status stayed INITIATED forever (instead of PENDING, what PayU's
+    # own create_payment() actually reports) until the surl/furl callback
+    # arrived - build_payment_out()'s checkout-surfacing check
+    # (status == "PENDING") never fired, so the frontend's hosted-
+    # checkout redirect form would never have rendered for a real PayU
+    # payment. Harmless no-op for the mock gateway, which already
+    # reports INITIATED here (its own outcome only ever changes via an
+    # explicit simulated callback).
+    transaction.status = result.status
     db.add(transaction)
     db.flush()
     return transaction
@@ -136,6 +146,7 @@ def process_gateway_result(
     db.flush()
 
     subscription = transaction.subscription
+    application = db.get(Application, subscription.application_id)
     invoice: Invoice | None = None
 
     if result.status == PaymentStatus.SUCCESS.value:
@@ -173,7 +184,6 @@ def process_gateway_result(
             PaymentType.DOWNGRADE.value: "subscription.downgraded",
             PaymentType.RENEWAL.value: "subscription.renewed",
         }.get(transaction.payment_type, "subscription.activated")
-        application = db.get(Application, subscription.application_id)
         if application is not None:
             webhook_service.queue_event(
                 db,
@@ -224,6 +234,7 @@ def process_gateway_result(
             },
             related_entity_type="payment_transaction",
             related_entity_id=transaction.transaction_id,
+            application=application,
         )
 
         # Invoice PDF email (spec section 45) - best-effort, same as every
@@ -251,6 +262,7 @@ def process_gateway_result(
                     related_entity_type="invoice",
                     related_entity_id=invoice.invoice_id,
                     attachments=[(f"{invoice.invoice_id}.pdf", pdf_bytes, "pdf")],
+                    application=application,
                 )
     elif result.status == PaymentStatus.FAILED.value:
         email_service.send_templated_email(
@@ -265,6 +277,7 @@ def process_gateway_result(
             },
             related_entity_type="payment_transaction",
             related_entity_id=transaction.transaction_id,
+            application=application,
         )
 
     return transaction, invoice

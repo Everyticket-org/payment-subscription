@@ -111,7 +111,11 @@ def get_registration_form(db: Session = Depends(get_db), application: Applicatio
 
 
 @router.post("/identify", response_model=IdentifyResponse)
-def identify(body: IdentifyRequest, db: Session = Depends(get_db)):
+def identify(
+    body: IdentifyRequest,
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+):
     """Spec section 9: call this before registration so a returning
     customer doesn't accidentally create a duplicate account/subscription."""
     match_status, existing = customer_service.find_match_status(db, email=body.email, mobile=body.mobile)
@@ -152,6 +156,7 @@ def identify(body: IdentifyRequest, db: Session = Depends(get_db)):
             context={"code": code},
             related_entity_type="otp_session",
             related_entity_id=otp_session.otp_session_id,
+            application=application,
         )
 
     return IdentifyResponse(

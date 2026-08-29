@@ -14,7 +14,7 @@ from app.api.deps import get_application, get_db
 from app.applications.models import Application
 from app.auth.deps import get_current_customer_id
 from app.core.enums import PaymentType, SubscriptionStatus
-from app.core.exceptions import AppError, CustomerNotFound, PlanNotFound, SubscriptionNotFound
+from app.core.exceptions import ActionNotAllowed, AppError, CustomerNotFound, PlanNotFound, SubscriptionNotFound
 from app.customers.models import Customer
 from app.customers.portal_schemas import CustomerPortalOut
 from app.customers.schemas import CustomerOut
@@ -156,6 +156,10 @@ def downgrade(
 
 
 def _change_plan(db, subscription_id, target_plan_code, customer_id, application, expect_type):
+    if expect_type == "UPGRADE" and not application.allow_upgrade:
+        raise ActionNotAllowed("Upgrades are currently disabled for this application")
+    if expect_type == "DOWNGRADE" and not application.allow_downgrade:
+        raise ActionNotAllowed("Downgrades are currently disabled for this application")
     customer = _get_customer(db, customer_id)
     subscription = _get_owned_subscription(db, customer=customer, subscription_id=subscription_id)
 
@@ -203,6 +207,8 @@ def renew(
     renewal on a billing schedule requires a Celery beat task, which is
     not wired up yet (see docs/implementation-status.md) - this endpoint
     is what that task would eventually call into as well."""
+    if not application.renewal_enabled:
+        raise ActionNotAllowed("Renewal is currently disabled for this application")
     customer = _get_customer(db, customer_id)
     subscription = _get_owned_subscription(db, customer=customer, subscription_id=subscription_id)
 
@@ -229,8 +235,11 @@ def cancel(
     body: CancelRequest,
     db: Session = Depends(get_db),
     customer_id: str = Depends(get_current_customer_id),
+    application: Application = Depends(get_application),
 ):
     """Spec section 43: immediate, no refund, no future renewal."""
+    if not application.allow_cancellation:
+        raise ActionNotAllowed("Cancellation is currently disabled for this application")
     customer = _get_customer(db, customer_id)
     subscription = _get_owned_subscription(db, customer=customer, subscription_id=subscription_id)
 
@@ -248,6 +257,7 @@ def cancel(
         context={"plan_name": plan_name},
         related_entity_type="subscription",
         related_entity_id=subscription.subscription_id,
+        application=application,
     )
 
     return _to_portal_subscription(subscription)

@@ -24,6 +24,7 @@ const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
   { label: "Notifications", path: "/admin/notifications", enabled: true },
   { label: "Audit logs", path: "/admin/audit", enabled: true },
   { label: "Testing tools", path: "/admin/testing", enabled: true },
+  { label: "Configuration", path: "/admin/config", enabled: true },
 ];
 
 export function AdminLayout() {

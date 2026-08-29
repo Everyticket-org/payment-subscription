@@ -70,6 +70,7 @@ from app.api.v1.admin_plans import router as admin_plans_router
 from app.api.v1.admin_subscriptions import router as admin_subscriptions_router
 from app.api.v1.admin_webhooks import router as admin_webhooks_router
 from app.api.v1.admin_testing import router as admin_testing_router
+from app.api.v1.admin_config import router as admin_config_router
 
 router.include_router(admin_dashboard_router)
 router.include_router(admin_plans_router)
@@ -82,3 +83,4 @@ router.include_router(admin_webhooks_router)
 router.include_router(admin_notifications_router)
 router.include_router(admin_audit_router)
 router.include_router(admin_testing_router)
+router.include_router(admin_config_router)

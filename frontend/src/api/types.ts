@@ -351,6 +351,107 @@ export interface InvoiceAdminOut {
   items: InvoiceItemOut[];
 }
 
+export interface ApplicationGeneralOut {
+  code: string;
+  name: string;
+  application_url: string;
+  logo_url: string | null;
+  favicon_url: string | null;
+  support_email: string | null;
+  support_phone: string | null;
+  timezone: string;
+  currency: string;
+  active: boolean;
+}
+
+export interface ApplicationGeneralUpdateInput {
+  name: string;
+  application_url: string;
+  logo_url?: string | null;
+  favicon_url?: string | null;
+  support_email?: string | null;
+  support_phone?: string | null;
+  timezone?: string;
+  currency?: string;
+  active?: boolean;
+}
+
+export interface ApplicationIntegrationOut {
+  api_url: string | null;
+  api_credentials_is_set: boolean;
+  webhook_url: string | null;
+  webhook_secret_is_set: boolean;
+  sso_secret_is_set: boolean;
+}
+
+export interface ApplicationIntegrationUpdateInput {
+  api_url?: string | null;
+  api_credentials?: Record<string, unknown> | null;
+  webhook_url?: string | null;
+  webhook_secret?: string | null;
+  sso_secret?: string | null;
+}
+
+export interface ApplicationPaymentOut {
+  default_gateway: string;
+  gateway_mode: string;
+}
+
+export interface ApplicationPaymentUpdateInput {
+  default_gateway: string;
+  gateway_mode?: string;
+}
+
+export interface ApplicationNotificationOut {
+  email_provider: string;
+  email_sender_name: string | null;
+  email_sender_address: string | null;
+  email_reply_to: string | null;
+}
+
+export interface ApplicationNotificationUpdateInput {
+  email_provider?: string;
+  email_sender_name?: string | null;
+  email_sender_address?: string | null;
+  email_reply_to?: string | null;
+}
+
+export interface ApplicationSubscriptionRulesOut {
+  allow_upgrade: boolean;
+  allow_downgrade: boolean;
+  allow_cancellation: boolean;
+  cancellation_behavior: string;
+  renewal_enabled: boolean;
+  repurchase_enabled: boolean;
+}
+
+export type ApplicationSubscriptionRulesUpdateInput = ApplicationSubscriptionRulesOut;
+
+export interface ApplicationConfigOut {
+  general: ApplicationGeneralOut;
+  integration: ApplicationIntegrationOut;
+  payment: ApplicationPaymentOut;
+  notification: ApplicationNotificationOut;
+  subscription_rules: ApplicationSubscriptionRulesOut;
+}
+
+export interface SecurityConfigOut {
+  otp_length: number;
+  otp_expiry_seconds: number;
+  otp_max_attempts: number;
+  otp_resend_cooldown_seconds: number;
+  allow_otp_bypass: boolean;
+  allow_admin_mfa_bypass: boolean;
+  test_mode: boolean;
+}
+
+export interface SecurityConfigUpdateInput {
+  otp_length: number;
+  otp_expiry_seconds: number;
+  otp_max_attempts: number;
+  otp_resend_cooldown_seconds: number;
+}
+
 export interface TaxConfigOut {
   gst_rate_percent: number;
   seller_gstin: string | null;

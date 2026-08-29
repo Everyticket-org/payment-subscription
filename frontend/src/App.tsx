@@ -24,6 +24,7 @@ import { AdminWebhooksPage } from "./pages/admin/AdminWebhooksPage";
 import { AdminNotificationsPage } from "./pages/admin/AdminNotificationsPage";
 import { AdminAuditLogsPage } from "./pages/admin/AdminAuditLogsPage";
 import { AdminTestingPage } from "./pages/admin/AdminTestingPage";
+import { AdminConfigPage } from "./pages/admin/AdminConfigPage";
 
 function App() {
   return (
@@ -71,6 +72,7 @@ function App() {
           <Route path="notifications" element={<AdminNotificationsPage />} />
           <Route path="audit" element={<AdminAuditLogsPage />} />
           <Route path="testing" element={<AdminTestingPage />} />
+          <Route path="config" element={<AdminConfigPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

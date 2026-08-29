@@ -14,6 +14,17 @@ import type {
   DashboardStatsOut,
   IdentifyResponse,
   InvoiceAdminOut,
+  ApplicationConfigOut,
+  ApplicationGeneralOut,
+  ApplicationGeneralUpdateInput,
+  ApplicationIntegrationOut,
+  ApplicationIntegrationUpdateInput,
+  ApplicationNotificationOut,
+  ApplicationNotificationUpdateInput,
+  ApplicationPaymentOut,
+  ApplicationPaymentUpdateInput,
+  ApplicationSubscriptionRulesOut,
+  ApplicationSubscriptionRulesUpdateInput,
   InvoiceEmailResult,
   MockCallbackResult,
   NotificationLogOut,
@@ -32,6 +43,8 @@ import type {
   RegistrationFormFieldCreateInput,
   RegistrationFormFieldOut,
   RegistrationFormFieldUpdateInput,
+  SecurityConfigOut,
+  SecurityConfigUpdateInput,
   SsoLinkOut,
   TaxConfigOut,
   TaxConfigUpdateInput,
@@ -311,3 +324,30 @@ export const generateTestData = (token: string) =>
 
 export const cleanupTestData = (token: string) =>
   api.post<TestDataCleanupOut>("/api/v1/admin/testing/data/cleanup", {}, token);
+
+
+// --- Admin: application/security configuration (spec sections 13, 51, 81) ---
+
+export const adminGetApplicationConfig = (token: string) =>
+  api.get<ApplicationConfigOut>("/api/v1/admin/config/application", token);
+
+export const adminUpdateGeneralConfig = (body: ApplicationGeneralUpdateInput, token: string) =>
+  api.put<ApplicationGeneralOut>("/api/v1/admin/config/application/general", body, token);
+
+export const adminUpdateIntegrationConfig = (body: ApplicationIntegrationUpdateInput, token: string) =>
+  api.put<ApplicationIntegrationOut>("/api/v1/admin/config/application/integration", body, token);
+
+export const adminUpdatePaymentConfig = (body: ApplicationPaymentUpdateInput, token: string) =>
+  api.put<ApplicationPaymentOut>("/api/v1/admin/config/application/payment", body, token);
+
+export const adminUpdateNotificationConfig = (body: ApplicationNotificationUpdateInput, token: string) =>
+  api.put<ApplicationNotificationOut>("/api/v1/admin/config/application/notification", body, token);
+
+export const adminUpdateSubscriptionRulesConfig = (body: ApplicationSubscriptionRulesUpdateInput, token: string) =>
+  api.put<ApplicationSubscriptionRulesOut>("/api/v1/admin/config/application/subscription-rules", body, token);
+
+export const adminGetSecurityConfig = (token: string) =>
+  api.get<SecurityConfigOut>("/api/v1/admin/config/security", token);
+
+export const adminUpdateSecurityConfig = (body: SecurityConfigUpdateInput, token: string) =>
+  api.put<SecurityConfigOut>("/api/v1/admin/config/security", body, token);

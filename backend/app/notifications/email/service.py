@@ -19,6 +19,7 @@ import logging
 from jinja2 import Template
 from sqlalchemy.orm import Session
 
+from app.applications.models import Application
 from app.core.config import get_settings
 from app.core.enums import NotificationStatus
 from app.notifications.email.providers.smtp import provider as smtp_provider
@@ -37,6 +38,7 @@ def send_templated_email(
     related_entity_type: str | None = None,
     related_entity_id: str | None = None,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    application: Application | None = None,
 ) -> bool:
     """Looks up an active NotificationTemplate by code, renders it with
     Jinja2 against `context`, sends it via the configured provider, and
@@ -45,8 +47,30 @@ def send_templated_email(
 
     `attachments`, if given, is a list of (filename, content_bytes,
     mime_subtype) tuples - e.g. the invoice PDF (spec section 45). Only
-    the smtp provider path uses it today."""
+    the smtp provider path uses it today.
+
+    `application`, if given, overrides EMAIL_PROVIDER/EMAIL_SENDER_NAME/
+    EMAIL_SENDER_ADDRESS/EMAIL_REPLY_TO from that Application row's own
+    config (spec section 51's Notification Configuration screen) for any
+    field it has actually set, falling back to the global Settings
+    otherwise - same per-application-override-else-global-default
+    pattern app.sso.service and app.webhooks.service already use for
+    sso_secret/webhook_secret. Built via settings.model_copy(), never by
+    mutating the process-wide cached Settings singleton."""
     settings = get_settings()
+    if application is not None:
+        overrides = {
+            key: value
+            for key, value in (
+                ("EMAIL_PROVIDER", application.email_provider),
+                ("EMAIL_SENDER_NAME", application.email_sender_name),
+                ("EMAIL_SENDER_ADDRESS", application.email_sender_address),
+                ("EMAIL_REPLY_TO", application.email_reply_to),
+            )
+            if value
+        }
+        if overrides:
+            settings = settings.model_copy(update=overrides)
 
     if not to:
         logger.info("send_templated_email(%s): no recipient address, skipping", template_code)

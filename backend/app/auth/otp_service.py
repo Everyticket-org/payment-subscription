@@ -16,6 +16,11 @@ Settings.enforce_test_mode_restrictions). This is a deliberate stand-in
 for "the code was sent to the user's phone/email" until a real
 notification channel exists - it is not a production-safe delivery
 mechanism.
+
+OTP_LENGTH/OTP_EXPIRY_SECONDS/OTP_MAX_ATTEMPTS/OTP_RESEND_COOLDOWN_SECONDS
+are admin-tunable at runtime via app.auth.security_config (spec
+section 51's Security Configuration screen) - env/Settings values are
+only the default until an admin saves an override.
 """
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -24,6 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import service as audit_service
 from app.auth.models import OtpSession
+from app.auth.security_config import get_security_config
 from app.core.config import get_settings
 from app.core.exceptions import OtpInvalidOrExpired, OtpRateLimited
 from app.core.ids import new_otp_session_id
@@ -59,7 +65,7 @@ def assert_resend_allowed(db: Session, *, email: str | None, mobile: str | None,
 
     now = datetime.now(timezone.utc)
     elapsed = (now - ensure_aware(last_session.created_at)).total_seconds()
-    cooldown = settings.OTP_RESEND_COOLDOWN_SECONDS
+    cooldown = get_security_config(db).otp_resend_cooldown_seconds
     if elapsed < cooldown:
         wait_seconds = int(cooldown - elapsed) + 1
         raise OtpRateLimited(f"Please wait {wait_seconds} more second(s) before requesting another OTP code")
@@ -71,7 +77,8 @@ def create_otp_session(
     """Returns (session, plaintext_code). Caller decides whether/how to
     surface the plaintext code (see module docstring - only in
     TEST_MODE)."""
-    code = _generate_code(settings.OTP_LENGTH)
+    security_config = get_security_config(db)
+    code = _generate_code(security_config.otp_length)
     now = datetime.now(timezone.utc)
 
     session = OtpSession(
@@ -81,8 +88,8 @@ def create_otp_session(
         customer_id=customer_id,
         purpose=purpose,
         otp_hash=hash_password(code),
-        expires_at=now + timedelta(seconds=settings.OTP_EXPIRY_SECONDS),
-        max_attempts=settings.OTP_MAX_ATTEMPTS,
+        expires_at=now + timedelta(seconds=security_config.otp_expiry_seconds),
+        max_attempts=security_config.otp_max_attempts,
     )
     db.add(session)
     db.flush()

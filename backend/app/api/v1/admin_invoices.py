@@ -9,6 +9,7 @@ from app.audit import service as audit_service
 from app.auth.deps import require_permission
 from app.auth.models import AdminUser
 from app.core.exceptions import AppError
+from app.applications.models import Application
 from app.customers.models import Customer
 from app.invoices.models import Invoice
 from app.invoices.schemas import InvoiceAdminOut, InvoiceEmailResult, TaxConfigOut, TaxConfigUpdate
@@ -110,6 +111,7 @@ def send_invoice_email(
 
     pdf_bytes = get_or_render_pdf(db, invoice)
     to = invoice.customer.email
+    application = db.get(Application, invoice.subscription.application_id)
     sent = email_service.send_templated_email(
         db,
         template_code="invoice_generated",
@@ -125,6 +127,7 @@ def send_invoice_email(
         related_entity_type="invoice",
         related_entity_id=invoice.invoice_id,
         attachments=[(f"{invoice.invoice_id}.pdf", pdf_bytes, "pdf")],
+        application=application,
     )
     audit_service.record(
         db, actor=admin.email, action="INVOICE_EMAIL_RESENT", entity_type="invoice",

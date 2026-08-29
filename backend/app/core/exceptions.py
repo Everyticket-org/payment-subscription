@@ -112,3 +112,14 @@ class Unauthorized(AppError):
 class Forbidden(AppError):
     http_status = 403
     error_code = "FORBIDDEN"
+
+
+class ActionNotAllowed(AppError):
+    """A subscription action (upgrade/downgrade/cancel/renew) that this
+    Application's own admin-configured rules currently disable (spec
+    section 13's "Subscription" config group / section 51's System
+    Configuration screen) - distinct from Forbidden, which is about WHO is
+    calling, not whether the action itself is currently allowed at all."""
+
+    http_status = 403
+    error_code = "ACTION_NOT_ALLOWED"
