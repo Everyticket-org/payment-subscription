@@ -32,6 +32,12 @@ import type {
   RegistrationFormFieldOut,
   RegistrationFormFieldUpdateInput,
   SsoLinkOut,
+  TestDataCleanupOut,
+  TestDataGeneratedOut,
+  TestEmailResult,
+  TestModeStatusOut,
+  TestPaymentResult,
+  TestWebhookSendResult,
   SubscribeResponse,
   SubscriptionAdminOut,
   SubscriptionDetailAdminOut,
@@ -250,3 +256,40 @@ export const adminListAuditLogs = (
   params: { entity_type?: string; entity_id?: string; actor?: string; action?: string; limit?: number; offset?: number },
   token: string,
 ) => api.get<PageOut<AuditLogOut>>(withQuery("/api/v1/admin/audit-logs", params), token);
+
+
+// --- Admin: testing / developer tools (spec section 54) ---
+
+export const testPayment = (
+  body: { customer_id: string; plan_code: string; scenario: string },
+  token: string,
+) => api.post<TestPaymentResult>("/api/v1/admin/testing/payment", body, token);
+
+export const testSubscriptionEvent = (
+  body: { subscription_id: string; event: string; target_plan_code?: string },
+  token: string,
+) => api.post<SubscriptionAdminOut>("/api/v1/admin/testing/subscription-event", body, token);
+
+export const testWebhookSend = (
+  body: { payload: Record<string, unknown>; headers?: Record<string, string> },
+  token: string,
+) => api.post<TestWebhookSendResult>("/api/v1/admin/testing/webhook/send", body, token);
+
+export const testWebhookFailureSimulate = (statusCode: string, token: string) =>
+  api.post<WebhookDeliveryOut>("/api/v1/admin/testing/webhook/simulate-failure", { status_code: statusCode }, token);
+
+export const testEmail = (body: { template_code: string; to: string }, token: string) =>
+  api.post<TestEmailResult>("/api/v1/admin/testing/email", body, token);
+
+export const getTestModeStatus = (token: string) => api.get<TestModeStatusOut>("/api/v1/admin/testing/status", token);
+
+export const setOtpMfaBypass = (
+  body: { allow_otp_bypass?: boolean; allow_admin_mfa_bypass?: boolean },
+  token: string,
+) => api.post<TestModeStatusOut>("/api/v1/admin/testing/otp-mfa-bypass", body, token);
+
+export const generateTestData = (token: string) =>
+  api.post<TestDataGeneratedOut>("/api/v1/admin/testing/data/generate", {}, token);
+
+export const cleanupTestData = (token: string) =>
+  api.post<TestDataCleanupOut>("/api/v1/admin/testing/data/cleanup", {}, token);

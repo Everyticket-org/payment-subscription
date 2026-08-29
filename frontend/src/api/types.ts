@@ -101,6 +101,50 @@ export interface OtpVerifyResponse {
   token_type: string;
 }
 
+export interface TestPaymentResult {
+  payment: PaymentAdminOut;
+  subscription: SubscriptionAdminOut;
+  invoice_id: string | null;
+  note: string;
+}
+
+export interface TestWebhookSendResult {
+  sent: boolean;
+  request?: { url: string; headers: Record<string, string>; body: unknown };
+  http_status: number | null;
+  response_body?: string;
+  error?: string;
+  elapsed_ms?: number;
+}
+
+export interface TestEmailResult {
+  sent: boolean;
+  status: string | null;
+  provider_response: string | null;
+}
+
+export interface TestModeStatusOut {
+  environment: string;
+  test_mode: boolean;
+  allow_otp_bypass: boolean;
+  allow_admin_mfa_bypass: boolean;
+}
+
+export interface TestDataGeneratedOut {
+  customer_id: string;
+  plan_code: string;
+  subscription_id: string;
+  transaction_id: string;
+  invoice_id: string | null;
+  external_customer_id: string;
+}
+
+export interface TestDataCleanupOut {
+  plans_deleted: number;
+  customers_deleted: number;
+  subscriptions_deleted: number;
+}
+
 export interface SsoLinkOut {
   sso_token: string;
   consume_url: string;

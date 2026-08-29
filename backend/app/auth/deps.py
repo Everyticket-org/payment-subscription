@@ -4,6 +4,7 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.auth.models import AdminUser
+from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.exceptions import Forbidden, Unauthorized
 from app.core.security import decode_token
@@ -86,3 +87,19 @@ def require_permission(code: str):
         return current
 
     return _check
+
+
+def require_test_mode() -> None:
+    """
+    Dependency guarding every TEST_MODE-only admin action (spec sections
+    47, 54, 55 - SSO test-link generation, the whole Testing/Developer
+    Tools module): raises Forbidden unless settings.TEST_MODE is on.
+    Backend-enforced, not just a hidden frontend route (section 55) -
+    and TEST_MODE itself is force-reset to False in production regardless
+    of any env misconfiguration, via Settings.enforce_test_mode_restrictions
+    (see app.core.config.get_settings), so this can never open up in a
+    real deployment even if someone mis-sets TEST_MODE=true there.
+    """
+    settings = get_settings()
+    if not settings.TEST_MODE:
+        raise Forbidden("This action is only available with TEST_MODE enabled")

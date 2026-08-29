@@ -2,11 +2,14 @@
  * Standard admin-panel chrome: fixed sidebar nav + topbar, replacing the
  * public site's header/footer entirely for everything under /admin
  * (spec sections 12, 51-53). Every module below is backed by a real
- * admin_*.py API router (see docs/implementation-status.md) - Testing/
- * Developer Tools (spec section 54), SSO, and dynamic registration-form
- * management are the remaining not-yet-built admin surfaces.
+ * admin_*.py API router (see docs/implementation-status.md). Also shows
+ * a prominent "TEST MODE" badge in the topbar whenever the backend
+ * reports TEST_MODE is on (spec section 55: "Display TEST MODE
+ * prominently in development/staging").
  */
+import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { getTestModeStatus } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
 
 const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
@@ -20,11 +23,20 @@ const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
   { label: "Webhook logs", path: "/admin/webhooks", enabled: true },
   { label: "Notifications", path: "/admin/notifications", enabled: true },
   { label: "Audit logs", path: "/admin/audit", enabled: true },
+  { label: "Testing tools", path: "/admin/testing", enabled: true },
 ];
 
 export function AdminLayout() {
   const { adminToken, setAdminToken } = useAuth();
   const location = useLocation();
+  const [testMode, setTestMode] = useState(false);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    getTestModeStatus(adminToken)
+      .then((status) => setTestMode(status.test_mode))
+      .catch(() => setTestMode(false));
+  }, [adminToken]);
 
   return (
     <div className="admin-shell">
@@ -62,6 +74,7 @@ export function AdminLayout() {
       <div className="admin-main">
         <header className="admin-topbar">
           <span className="admin-topbar-title">Admin console</span>
+          {testMode && <span className="badge badge-warning">TEST MODE</span>}
           {adminToken && (
             <button className="button button-secondary" onClick={() => setAdminToken(null)}>
               Sign out

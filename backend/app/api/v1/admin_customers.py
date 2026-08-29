@@ -17,11 +17,11 @@ from app.api.v1.admin_common import DEFAULT_LIMIT, MAX_LIMIT, PageOut, paginate
 from app.api.v1.admin_serializers import to_invoice_admin_out, to_payment_admin_out, to_subscription_admin_out
 from app.applications.models import Application, CustomerApplicationMapping
 from app.audit import service as audit_service
-from app.auth.deps import require_permission
+from app.auth.deps import require_permission, require_test_mode
 from app.auth.models import AdminUser
 from app.core.config import get_settings
 from app.core.enums import CustomerStatus
-from app.core.exceptions import CustomerNotFound, Forbidden
+from app.core.exceptions import CustomerNotFound
 from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.schemas import (
     ApplicationMappingOut,
@@ -189,19 +189,15 @@ def generate_test_sso_link(
     db: Session = Depends(get_db),
     application: Application = Depends(get_application),
     admin: AdminUser = Depends(require_permission("CUSTOMERS_MANAGE")),
+    _test_mode: None = Depends(require_test_mode),
 ):
     """TEST_MODE-only convenience (spec section 47/54): in production only
     Everyticket itself ever calls sso_service.create_sso_token() (as part
     of its own redirect flow, entirely outside this app). There is no real
     Everyticket instance in this build, so this endpoint lets an admin
     generate a working, single-use SSO token/consume-link for a given
-    customer to exercise the full handoff end-to-end. Force-disabled in
-    production regardless of this check, since Settings.enforce_test_mode_restrictions
-    hard-resets TEST_MODE to False outside ENVIRONMENT=development/test."""
+    customer to exercise the full handoff end-to-end."""
     settings = get_settings()
-    if not settings.TEST_MODE:
-        raise Forbidden("SSO test-link generation is only available with TEST_MODE enabled")
-
     customer = _get_customer(db, customer_id)
     token = sso_service.create_sso_token(db, application=application, customer=customer)
 

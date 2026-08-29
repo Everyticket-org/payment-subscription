@@ -6,10 +6,10 @@ module - dashboard, plans, customers, subscriptions, payments, invoices,
 webhook logs, notification templates/logs, audit logs - is a sibling
 app.api.v1.admin_*.py router included below, each gated by
 app.auth.deps.require_permission (spec section 12's role/permission
-model, seeded onto SUPERADMIN in app.core.seed). Registration-form field
-management, SSO, dynamic-form-driven registration, invoice PDF
-generation, and the Testing/Developer Tools module (spec section 54) are
-not yet built - see docs/implementation-status.md.
+model, seeded onto SUPERADMIN in app.core.seed) - including
+admin_testing.py, the Testing/Developer Tools module (spec section 54),
+additionally gated by app.auth.deps.require_test_mode. Invoice PDF
+generation is not yet built - see docs/implementation-status.md.
 """
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
@@ -70,6 +70,7 @@ from app.api.v1.admin_payments import router as admin_payments_router
 from app.api.v1.admin_plans import router as admin_plans_router
 from app.api.v1.admin_subscriptions import router as admin_subscriptions_router
 from app.api.v1.admin_webhooks import router as admin_webhooks_router
+from app.api.v1.admin_testing import router as admin_testing_router
 
 router.include_router(admin_dashboard_router)
 router.include_router(admin_plans_router)
@@ -81,3 +82,4 @@ router.include_router(admin_invoices_router)
 router.include_router(admin_webhooks_router)
 router.include_router(admin_notifications_router)
 router.include_router(admin_audit_router)
+router.include_router(admin_testing_router)

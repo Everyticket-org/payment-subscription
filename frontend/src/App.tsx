@@ -23,6 +23,7 @@ import { AdminInvoiceDetailPage } from "./pages/admin/AdminInvoiceDetailPage";
 import { AdminWebhooksPage } from "./pages/admin/AdminWebhooksPage";
 import { AdminNotificationsPage } from "./pages/admin/AdminNotificationsPage";
 import { AdminAuditLogsPage } from "./pages/admin/AdminAuditLogsPage";
+import { AdminTestingPage } from "./pages/admin/AdminTestingPage";
 
 function App() {
   return (
@@ -69,6 +70,7 @@ function App() {
           <Route path="webhooks" element={<AdminWebhooksPage />} />
           <Route path="notifications" element={<AdminNotificationsPage />} />
           <Route path="audit" element={<AdminAuditLogsPage />} />
+          <Route path="testing" element={<AdminTestingPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

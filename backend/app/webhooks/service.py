@@ -162,6 +162,71 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     return succeeded
 
 
+def attempt_delivery_with_client(
+    db: Session, delivery: WebhookDelivery, *, http_client: httpx.Client | None = None
+) -> bool:
+    """Public entry point for the admin Testing module's WEBHOOK FAILURE
+    SIMULATOR (spec section 54): attempts exactly ONE specific delivery
+    (never the whole due-queue dispatch_pending() would pick up) through
+    an optionally-injected http_client - e.g. an httpx.MockTransport that
+    always returns a chosen status code or raises a timeout - so an admin
+    can verify the real retry-schedule/EXHAUSTED bookkeeping logic in
+    _attempt_one() without ever touching any *other* pending delivery a
+    real integration might have queued at the same time."""
+    return _attempt_one(db, delivery, http_client=http_client)
+
+
+def send_ad_hoc_webhook(
+    *, application: Application, payload: dict, extra_headers: dict[str, str] | None = None, timeout: float = 10.0
+) -> dict:
+    """TEST EVERYTICKET WEBHOOK (spec section 54): a one-off signed POST
+    of admin-supplied JSON to the application's configured webhook
+    destination. Unlike queue_event()/dispatch_pending(), this never
+    writes a WebhookEvent/WebhookDelivery row - it's a live diagnostic
+    tool for an admin to poke the destination directly, not a real
+    business event, so there is nothing here to retry or track. Returns
+    a dict of exactly what the spec asks the UI to show: the request that
+    was sent, the response (or error) that came back, the HTTP status,
+    and elapsed time - never raises, since a failed test send (including
+    "no destination configured", a connection error, or a timeout) is
+    itself a valid, informative test result rather than a 500."""
+    import time as _time
+
+    url, secret = _resolve_destination(application)
+    if not url:
+        return {
+            "sent": False,
+            "error": "No webhook destination configured for this application (no webhook_url and no EVERYTICKET_WEBHOOK_URL fallback)",
+        }
+
+    body = json.dumps(payload, separators=(",", ":"), default=str).encode("utf-8")
+    headers = {"Content-Type": "application/json", **(extra_headers or {})}
+    if secret:
+        headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
+
+    started = _time.monotonic()
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(url, content=body, headers=headers)
+        elapsed_ms = round((_time.monotonic() - started) * 1000, 1)
+        return {
+            "sent": True,
+            "request": {"url": url, "headers": headers, "body": payload},
+            "http_status": response.status_code,
+            "response_body": response.text[:4000],
+            "elapsed_ms": elapsed_ms,
+        }
+    except httpx.HTTPError as exc:
+        elapsed_ms = round((_time.monotonic() - started) * 1000, 1)
+        return {
+            "sent": False,
+            "request": {"url": url, "headers": headers, "body": payload},
+            "http_status": None,
+            "error": str(exc),
+            "elapsed_ms": elapsed_ms,
+        }
+
+
 def dispatch_pending(db: Session, *, limit: int = 50, http_client: httpx.Client | None = None) -> int:
     """Finds every delivery due right now (PENDING, or FAILED with
     next_retry_at already in the past) and attempts each once. Returns

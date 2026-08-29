@@ -23,4 +23,5 @@ PERMISSIONS: list[tuple[str, str]] = [
     ("NOTIFICATIONS_VIEW", "View notification templates and send logs"),
     ("NOTIFICATIONS_MANAGE", "Edit notification templates"),
     ("AUDIT_VIEW", "View audit logs"),
+    ("TESTING_TOOLS_USE", "Use the admin Testing/Developer Tools module (test payments, subscription events, webhook simulation, test email/SSO, test data generation)"),
 ]
