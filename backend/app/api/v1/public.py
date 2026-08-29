@@ -14,12 +14,15 @@ POST /otp/verify) is explicitly accepted. Flow for a RETURNING customer:
         -> returns a customer-scoped bearer token
     POST /plans/{code}/subscribe  (Authorization: Bearer <token>)
         -> identifies the customer from the token instead of the body;
-           create_pending_subscription() then routes SAME/HIGHER/LOWER
-           plan-while-ACTIVE to a 409 (use the dedicated
-           upgrade/downgrade endpoints instead), or creates a fresh
-           PENDING_PAYMENT subscription for EXPIRED/CANCELLED/no-existing-
-           subscription cases (repurchase, spec section 41 - reuses the
-           same customer_id).
+           auto-routes per spec sections 9/22 - SAME plan while ACTIVE is
+           refused (409 INVALID_PLAN_TRANSITION, no duplicate
+           subscription/payment created), HIGHER/LOWER plan while ACTIVE
+           is silently treated as an upgrade/downgrade against the
+           EXISTING subscription (same payment_type the dedicated
+           /customer/subscriptions/{id}/upgrade|downgrade endpoints use),
+           and EXPIRED/CANCELLED/no-existing-subscription creates a fresh
+           PENDING_PAYMENT subscription (repurchase, spec section 41 -
+           reuses the same customer_id).
 
 A brand-new customer (POST /identify said "none") may skip straight to
 /subscribe with email+mobile in the body - no OTP required, since there is
@@ -122,7 +125,16 @@ def identify(body: IdentifyRequest, db: Session = Depends(get_db)):
             message="Email and mobile match different existing accounts. Please contact support to resolve this.",
         )
 
-    # match_status == "exact"
+    # match_status == "exact". Resend rate limiting (spec section 11):
+    # refuse to issue (and email) another code if the most recent
+    # IDENTIFY session for this exact email+mobile pair was created too
+    # recently - otherwise a client could hammer /identify to flood the
+    # customer's inbox with OTP codes. Deliberately checked here rather
+    # than via a separate /otp/resend endpoint, since /identify already
+    # IS how a "resend" is triggered today (there is no other call site
+    # that creates an IDENTIFY-purpose OtpSession).
+    otp_service.assert_resend_allowed(db, email=body.email, mobile=body.mobile, purpose="IDENTIFY")
+
     otp_session, code = otp_service.create_otp_session(
         db, email=body.email, mobile=body.mobile, customer_id=existing.customer_id, purpose="IDENTIFY"
     )
@@ -229,6 +241,41 @@ def subscribe(
                 "Call POST /public/identify and verify via OTP before subscribing."
             )
         customer = customer_service.create_customer(db, email=body.email, mobile=body.mobile)
+
+    # Plan auto-routing for an already-identified existing customer (spec
+    # sections 9, 22): SAME/HIGHER/LOWER/EXPIRED/CANCELLED cases. An
+    # EXPIRED/CANCELLED subscription is NOT "active" (get_active_subscription
+    # only ever returns ACTIVE rows), so that case falls through to the
+    # unchanged create_pending_subscription() call below - a genuine
+    # repurchase, reusing this same customer.customer_id (spec section 41),
+    # never a new customer or a new Everyticket mapping.
+    existing_active = subscription_service.get_active_subscription(
+        db, customer_id=customer.id, application_id=application.id
+    )
+    if existing_active is not None:
+        # assert_transition_allowed() itself raises InvalidPlanTransition
+        # (409) when to_plan == from_plan - i.e. the SAME PLAN case ("do
+        # not create another subscription, do not create another
+        # payment") is already refused here, before anything is created.
+        transition_type = subscription_service.assert_transition_allowed(
+            db, from_plan=existing_active.plan, to_plan=plan
+        )
+        payment_type = PaymentType.UPGRADE.value if transition_type == "UPGRADE" else PaymentType.DOWNGRADE.value
+        payment = payment_service.create_payment_transaction(
+            db,
+            customer=customer,
+            subscription=existing_active,
+            plan=plan,
+            payment_type=payment_type,
+            gateway_code=application.default_gateway,
+        )
+        db.commit()
+        db.refresh(customer)
+        db.refresh(existing_active)
+        db.refresh(payment)
+        return SubscribeResponse(
+            customer=customer, subscription=existing_active, payment=payment_service.build_payment_out(payment)
+        )
 
     subscription = subscription_service.create_pending_subscription(
         db, customer=customer, application=application, plan=plan

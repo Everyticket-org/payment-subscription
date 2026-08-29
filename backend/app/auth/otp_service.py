@@ -38,6 +38,33 @@ def _generate_code(length: int) -> str:
     return "".join(secrets.choice("0123456789") for _ in range(length))
 
 
+def assert_resend_allowed(db: Session, *, email: str | None, mobile: str | None, purpose: str) -> None:
+    """
+    OTP resend rate limiting (spec section 11). Looks up the most
+    recently created OtpSession matching this exact email+mobile+purpose
+    and, if one was created within OTP_RESEND_COOLDOWN_SECONDS, raises
+    OtpRateLimited rather than letting the caller issue (and email/SMS)
+    yet another code. Matches on BOTH email and mobile (not either alone)
+    so this can never rate-limit an unrelated customer who happens to
+    share just one of the two fields.
+    """
+    last_session = (
+        db.query(OtpSession)
+        .filter(OtpSession.email == email, OtpSession.mobile == mobile, OtpSession.purpose == purpose)
+        .order_by(OtpSession.created_at.desc())
+        .first()
+    )
+    if last_session is None:
+        return
+
+    now = datetime.now(timezone.utc)
+    elapsed = (now - ensure_aware(last_session.created_at)).total_seconds()
+    cooldown = settings.OTP_RESEND_COOLDOWN_SECONDS
+    if elapsed < cooldown:
+        wait_seconds = int(cooldown - elapsed) + 1
+        raise OtpRateLimited(f"Please wait {wait_seconds} more second(s) before requesting another OTP code")
+
+
 def create_otp_session(
     db: Session, *, email: str | None, mobile: str | None, customer_id: str | None, purpose: str
 ) -> tuple[OtpSession, str]:
