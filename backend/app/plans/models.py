@@ -64,3 +64,6 @@ class PlanTransition(Base, TimestampMixin):
     from_plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"), nullable=False, index=True)
     to_plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id"), nullable=False, index=True)
     transition_type: Mapped[str] = mapped_column(String(20), nullable=False)  # UPGRADE | DOWNGRADE
+
+    from_plan: Mapped["Plan"] = relationship(foreign_keys=[from_plan_id])
+    to_plan: Mapped["Plan"] = relationship(foreign_keys=[to_plan_id])

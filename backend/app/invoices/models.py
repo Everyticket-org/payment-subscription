@@ -32,6 +32,11 @@ class Invoice(Base, TimestampMixin):
     pdf_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     items: Mapped[list["InvoiceItem"]] = relationship(back_populates="invoice", cascade="all, delete-orphan")
+    # Convenience read-only relationships for the admin API (spec section 51
+    # 'Invoices' module).
+    customer: Mapped["Customer"] = relationship()
+    subscription: Mapped["Subscription"] = relationship()
+    payment_transaction: Mapped["PaymentTransaction"] = relationship()
 
 
 class InvoiceItem(Base, TimestampMixin):

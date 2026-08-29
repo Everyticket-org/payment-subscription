@@ -52,6 +52,13 @@ class PaymentTransaction(Base, TimestampMixin):
     raw_gateway_response: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     subscription: Mapped["Subscription"] = relationship(back_populates="payment_transactions")
+    # Convenience read-only relationships for the admin API (spec section 51
+    # 'Payments' module) - PaymentTransaction only ever needs to WRITE
+    # customer_id/target_plan_id as plain FKs (see app.payments.service), so
+    # these were not needed until admin list/detail views wanted to render
+    # the customer_id/plan_code without an extra query per row.
+    customer: Mapped["Customer"] = relationship()
+    target_plan: Mapped["Plan"] = relationship()
 
 
 class PaymentGatewayConfig(Base, TimestampMixin):

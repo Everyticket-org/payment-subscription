@@ -1,12 +1,15 @@
 """
 Admin API (spec sections 12, 51-54, 61: /api/v1/admin/).
 
-Only authentication is implemented in this pass (login + MFA verify + a
-protected /me). Plan/form management, customer/subscription/payment/
-invoice views, webhook/email/audit logs, and the Testing module are not
-yet built - see docs/implementation-status.md. The router is wired up now
-so the URL namespace exists and get_current_admin is ready for those
-endpoints to depend on.
+Auth (login + MFA verify + /me) lives in this module; every other admin
+module - dashboard, plans, customers, subscriptions, payments, invoices,
+webhook logs, notification templates/logs, audit logs - is a sibling
+app.api.v1.admin_*.py router included below, each gated by
+app.auth.deps.require_permission (spec section 12's role/permission
+model, seeded onto SUPERADMIN in app.core.seed). Registration-form field
+management, SSO, dynamic-form-driven registration, invoice PDF
+generation, and the Testing/Developer Tools module (spec section 54) are
+not yet built - see docs/implementation-status.md.
 """
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
@@ -49,3 +52,30 @@ def me(current: AdminUser = Depends(get_current_admin)):
         mfa_enabled=current.mfa_enabled,
         roles=[r.code for r in current.roles],
     )
+
+
+# --- Sibling admin modules (spec sections 51-56) - each defines its own
+# APIRouter with a resource-specific prefix (e.g. "/plans"), included here
+# under this module's "/admin" prefix so every admin endpoint still lives
+# under /api/v1/admin/*. Kept as separate files rather than one giant
+# admin.py for the same reason app/api/v1/*.py is already split by
+# resource (public.py, customer.py, payment.py, ...). ---
+from app.api.v1.admin_audit import router as admin_audit_router
+from app.api.v1.admin_customers import router as admin_customers_router
+from app.api.v1.admin_dashboard import router as admin_dashboard_router
+from app.api.v1.admin_invoices import router as admin_invoices_router
+from app.api.v1.admin_notifications import router as admin_notifications_router
+from app.api.v1.admin_payments import router as admin_payments_router
+from app.api.v1.admin_plans import router as admin_plans_router
+from app.api.v1.admin_subscriptions import router as admin_subscriptions_router
+from app.api.v1.admin_webhooks import router as admin_webhooks_router
+
+router.include_router(admin_dashboard_router)
+router.include_router(admin_plans_router)
+router.include_router(admin_customers_router)
+router.include_router(admin_subscriptions_router)
+router.include_router(admin_payments_router)
+router.include_router(admin_invoices_router)
+router.include_router(admin_webhooks_router)
+router.include_router(admin_notifications_router)
+router.include_router(admin_audit_router)

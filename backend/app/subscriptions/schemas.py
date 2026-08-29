@@ -38,6 +38,36 @@ class CancelRequest(BaseModel):
     reason: str | None = None
 
 
+class SubscriptionHistoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    event_type: str
+    occurred_at: datetime
+    event_metadata: dict | None = None
+
+
+class SubscriptionAdminOut(BaseModel):
+    """Admin list/detail row (spec section 51 'Subscriptions' module).
+    `customer_id`/`plan_code` are the public string ids, never internal
+    surrogate PKs - consistent with every other admin-facing schema."""
+    model_config = ConfigDict(from_attributes=True)
+    subscription_id: str
+    customer_id: str
+    plan_code: str
+    plan_name: str
+    status: str
+    provisioning_status: str
+    starts_at: datetime | None = None
+    expires_at: datetime | None = None
+    cancelled_at: datetime | None = None
+    cancellation_reason: str | None = None
+    created_at: datetime
+
+
+class SubscriptionDetailAdminOut(BaseModel):
+    subscription: SubscriptionAdminOut
+    history: list[SubscriptionHistoryOut] = []
+
+
 # Resolve forward refs lazily to avoid a circular import at module load time.
 from app.customers.schemas import CustomerOut  # noqa: E402
 from app.payments.schemas import PaymentTransactionOut  # noqa: E402

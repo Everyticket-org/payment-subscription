@@ -1,5 +1,7 @@
 """Pydantic schemas for customers, dynamic registration data, and
 duplicate-detection/OTP (spec sections 7, 9-11, 18)."""
+from datetime import datetime
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -59,3 +61,52 @@ class OtpVerifyResponse(BaseModel):
     customer: CustomerOut
     access_token: str
     token_type: str = "bearer"
+
+
+class CustomerAdminListItem(BaseModel):
+    """One row in the admin 'Customers' list (spec section 51/53)."""
+    model_config = ConfigDict(from_attributes=True)
+    customer_id: str
+    email: str
+    mobile: str
+    status: str
+    created_at: datetime
+
+
+class RegistrationDataOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    application_id: int
+    subscription_id: int | None = None
+    data: dict
+    created_at: datetime
+
+
+class ApplicationMappingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    external_customer_id: str | None = None
+    external_instance_id: str | None = None
+
+
+class CustomerAdminDetailOut(BaseModel):
+    """Full admin detail view (spec section 53): identity, registration
+    data, Everyticket mapping, subscriptions, payments, invoices,
+    subscription history, and audit history are assembled by the endpoint
+    from several tables - see app/api/v1/admin/customers.py."""
+    model_config = ConfigDict(from_attributes=False)
+    customer: CustomerOut
+    registration_data: list[RegistrationDataOut] = []
+    application_mapping: ApplicationMappingOut | None = None
+    subscriptions: list["SubscriptionAdminOut"] = []
+    payments: list["PaymentAdminOut"] = []
+    invoices: list["InvoiceAdminOut"] = []
+
+
+class SuspendCustomerRequest(BaseModel):
+    reason: str | None = None
+
+
+from app.invoices.schemas import InvoiceAdminOut  # noqa: E402
+from app.payments.schemas import PaymentAdminOut  # noqa: E402
+from app.subscriptions.schemas import SubscriptionAdminOut  # noqa: E402
+
+CustomerAdminDetailOut.model_rebuild()

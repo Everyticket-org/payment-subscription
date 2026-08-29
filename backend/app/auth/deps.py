@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.models import AdminUser
 from app.core.database import get_db
-from app.core.exceptions import Unauthorized
+from app.core.exceptions import Forbidden, Unauthorized
 from app.core.security import decode_token
 
 
@@ -67,3 +67,22 @@ def get_current_customer_id_optional(
     if not authorization:
         return None
     return get_current_customer_id(authorization=authorization)
+
+
+def require_permission(code: str):
+    """
+    Dependency factory: Depends(require_permission("PLANS_MANAGE")) resolves
+    the current admin (reusing get_current_admin's token check) and then
+    additionally requires that at least one of the admin's roles carries
+    the given permission code (app.auth.permissions.PERMISSIONS). Raises
+    Forbidden (403) rather than Unauthorized (401) - the caller IS a valid
+    admin, they just lack this specific permission.
+    """
+
+    def _check(current: AdminUser = Depends(get_current_admin)) -> AdminUser:
+        permission_codes = {permission.code for role in current.roles for permission in role.permissions}
+        if code not in permission_codes:
+            raise Forbidden(f"Missing required permission: {code}")
+        return current
+
+    return _check

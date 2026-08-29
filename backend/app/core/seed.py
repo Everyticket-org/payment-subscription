@@ -14,7 +14,8 @@ from sqlalchemy.orm import Session
 
 from app.applications.models import Application
 from app.auth import service as auth_service
-from app.auth.models import AdminUser, Role
+from app.auth.models import AdminUser, Permission, Role
+from app.auth.permissions import PERMISSIONS
 from app.core.database import SessionLocal
 from app.core import models_registry  # noqa: F401
 from app.forms.models import RegistrationFormField
@@ -122,20 +123,47 @@ def _get_or_create_template(db: Session, *, template_code: str, subject: str, bo
     )
 
 
-def _get_or_create_admin(db: Session) -> AdminUser:
-    """Dev-only seed admin (spec section 70). Credentials are printed by
-    main() and documented in README.md - they are NOT meant for
-    production use; production admin accounts should be created through a
-    proper (not-yet-built) admin-user-management flow."""
-    existing = db.query(AdminUser).filter(AdminUser.email == DEV_ADMIN_EMAIL).first()
+def _get_or_create_permission(db: Session, *, code: str, name: str) -> Permission:
+    existing = db.query(Permission).filter(Permission.code == code).first()
     if existing is not None:
         return existing
+    permission = Permission(code=code, name=name)
+    db.add(permission)
+    db.flush()
+    return permission
 
+
+def _sync_superadmin_role(db: Session) -> Role:
+    """SUPERADMIN always carries every known permission (spec section 12).
+    Re-synced on every seed() call (not just at role creation) so a
+    PERMISSIONS catalog entry added later is retroactively granted to an
+    already-seeded dev database without a manual migration/backfill step."""
     role = db.query(Role).filter(Role.code == "SUPERADMIN").first()
     if role is None:
         role = Role(code="SUPERADMIN", name="Super Admin")
         db.add(role)
         db.flush()
+
+    existing_codes = {permission.code for permission in role.permissions}
+    for code, name in PERMISSIONS:
+        permission = _get_or_create_permission(db, code=code, name=name)
+        if code not in existing_codes:
+            role.permissions.append(permission)
+    db.add(role)
+    db.flush()
+    return role
+
+
+def _get_or_create_admin(db: Session) -> AdminUser:
+    """Dev-only seed admin (spec section 70). Credentials are printed by
+    main() and documented in README.md - they are NOT meant for
+    production use; production admin accounts should be created through a
+    proper (not-yet-built) admin-user-management flow."""
+    role = _sync_superadmin_role(db)
+
+    existing = db.query(AdminUser).filter(AdminUser.email == DEV_ADMIN_EMAIL).first()
+    if existing is not None:
+        return existing
 
     user = auth_service.create_admin_user(
         db, email=DEV_ADMIN_EMAIL, full_name="Dev Admin", password=DEV_ADMIN_PASSWORD, mfa_enabled=True
