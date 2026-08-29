@@ -10,20 +10,24 @@ new-subscription -> payment -> active -> invoice flow (mock gateway AND a
 real PayU hosted-checkout integration, hash-verified both ways), admin
 login + MFA + a full permission-gated admin CRUD API/UI (plans,
 customers, subscriptions, payments, invoices, webhook logs, notification
-templates/logs, audit logs, dashboard), duplicate customer detection +
-OTP verification with real email delivery, customer-portal
-upgrade/downgrade/renew/cancel, outbound Everyticket webhook dispatch with
-retry, and Celery-beat-scheduled subscription expiry + renewal reminders
-- all backed by a real Postgres schema and a 49-test automated suite
-(`pytest tests/ -v`), plus hand-verified via curl against real Postgres.
-A React frontend covers the public subscribe flow (mock simulate buttons
-or a real PayU checkout redirect, depending on the application's
-configured gateway), customer OTP login + portal, and the full admin
+templates/logs, audit logs, dashboard, registration-form fields),
+duplicate customer detection + OTP verification with real email
+delivery, customer-portal upgrade/downgrade/renew/cancel, outbound
+Everyticket webhook dispatch with retry, Celery-beat-scheduled
+subscription expiry + renewal reminders, a dynamic per-application
+registration-form renderer, and Everyticket SSO (signed single-use
+tokens, DB-backed replay protection, a TEST_MODE admin action to
+generate a working test link) - all backed by a real Postgres schema and
+a 56-test automated suite (`pytest tests/ -v`), plus hand-verified via
+curl against real Postgres. A React frontend covers the public subscribe
+flow (dynamic registration form; mock simulate buttons or a real PayU
+checkout redirect, depending on the application's configured gateway),
+customer OTP login + portal + SSO landing page, and the full admin
 console (standard sidebar-panel shell, every module a real page) - see
 `frontend/README.md`. Still not built: the Testing/Developer Tools admin
-module (spec section 54), SSO + standalone OTP customer login, the
-dynamic registration-form renderer, invoice PDF generation, and OTP
-resend cooldown / plan auto-routing on repurchase.
+module (spec section 54), invoice PDF generation, OTP resend cooldown /
+plan auto-routing on repurchase, and the remaining system/gateway/
+integration configuration admin screens.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.

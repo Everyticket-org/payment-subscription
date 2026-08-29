@@ -513,6 +513,79 @@ pre-existing `/ready` gap); OpenAPI schema builds cleanly with all 28 new
 routes; frontend `npm run build` clean in the isolated `~/frontend-check`
 scratch copy, 53 modules, no TypeScript errors.
 
+## Increment 8 (2026-08-29): dynamic registration-form renderer
+
+Closes spec section 8/18's remaining gap: `RegistrationFormField` rows
+existed and were seeded once in `app/core/seed.py`, but were never
+admin-editable, and `SubscribePage` always collected a fixed field set
+instead of whatever fields were actually configured for the application.
+
+**Backend**: `GET /api/v1/public/registration-form` returns active fields
+in display order, no auth required - the dynamic renderer's data source.
+Admin CRUD (`app/api/v1/admin_forms.py`, new `FORMS_MANAGE` permission):
+list (including inactive), create (409 on duplicate `field_key`), update
+(including the `active` toggle). Fields are never hard-deleted - a
+`field_key` may already be referenced by existing
+`CustomerRegistrationData` rows - only deactivated, which immediately
+removes it from the public endpoint. Deliberately did **not** add
+server-side required-field enforcement on `/subscribe` in this pass:
+doing so would 422 every existing test/manual `/subscribe` call that
+passes `registration_data: {}` (~15+ call sites across 6 test files),
+since the seeded `museum_name`/`contact_person` fields are `required=True`
+- a breaking behavior change to every existing caller for a pass that's
+supposed to be additive. Left as a known gap below rather than silently
+shipped.
+
+**Frontend**: `DynamicRegistrationForm.tsx` (+ `useRegistrationFormFields()`
+hook) renders whatever `RegistrationFormField` rows come back from the
+public endpoint above, covering all 11 field types; wired into both
+branches of `SubscribePage` (signed-in and new-customer). New
+`AdminRegistrationFormPage` (list + per-row toggle-required/toggle-active
++ create form) with its own admin nav entry.
+
+Verified: 50 backend tests (1 new - public read + admin CRUD in one
+test), 49 passing (same pre-existing `/ready` gap); frontend `npm run
+build` clean in the isolated scratch copy, 55 modules.
+
+## Increment 9 (2026-08-29): Everyticket SSO
+
+Closes spec section 47. `app/sso/service.py` signs/redeems single-use SSO
+tokens with `Application.sso_secret` (falling back to `settings.SSO_SECRET`)
+- kept distinct from this app's internal `JWT_SECRET`, since Everyticket
+and this app share this secret out-of-band while `JWT_SECRET` must never
+leave this app. Replay protection is DB-backed (`SsoSession.nonce`/`used`,
+the model already existed) rather than relying solely on the JWT's own
+`exp` claim, so a token can't be redeemed twice even if it would still
+verify.
+
+**API**: `POST /api/v1/public/sso/consume` redeems a token and issues a
+normal customer portal session token (same response shape as
+`/otp/verify`, so the frontend treats both entry points identically).
+`POST /api/v1/admin/customers/{id}/sso-link` is TEST_MODE-gated (also
+requires `CUSTOMERS_MANAGE`) and generates a working test token/consume
+URL, since no real Everyticket instance exists in this build to issue one
+- force-disabled in production regardless, via
+`Settings.enforce_test_mode_restrictions`. Deliberately did not build a
+general admin "login as customer" feature - out of scope for spec section
+47, which only covers Everyticket-initiated SSO, not admin-initiated
+customer impersonation.
+
+Also confirmed spec section 48 (standalone direct customer access via
+email/mobile/OTP, without going through `/subscribe`) is already
+effectively satisfied by existing code - `CustomerLoginPage.tsx` +
+`/identify` + `/otp/verify` cover it; no separate endpoint was needed.
+
+**Frontend**: `SsoConsumePage` reads `?token=` from the URL, redeems it,
+and redirects to `/portal`; `AdminCustomerDetailPage` gained a "Generate
+test SSO link" action so the whole flow is exercisable end-to-end from
+the admin console.
+
+Verified with 6 new tests (`tests/test_sso.py`: happy path, replay
+rejection, expiry rejection - forced via the DB row rather than sleeping
+past the real TTL - unknown-token rejection, and both admin-endpoint
+gates), full suite 56/57 (same pre-existing `/ready` gap); frontend `npm
+run build` clean in the isolated scratch copy, 56 modules.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -541,19 +614,19 @@ called out in the relevant module's docstring too:
   subscriptions, payments, invoices, webhook logs, notification templates/
   logs, and audit logs are all real endpoints with a real UI, and every
   one of them checks a specific permission (`require_permission`), not
-  just "is this token a valid admin token". Still missing: registration
-  **form field** management (spec section 18's admin side - the fields
-  themselves are seeded once in `app/core/seed.py` and never editable via
-  API/UI), and the Testing/Developer Tools module (section 54, see
-  below).
+  just "is this token a valid admin token". **Registration form field**
+  management (spec section 18's admin side) **done as of increment 8**
+  (see above). Still missing: the Testing/Developer Tools module (section
+  54, see below).
 - **Customer portal** (section 46): **`GET /customer/me` done as of
   increment 2** (active subscription, all subscriptions, payments,
-  invoices). **SSO** (section 47) and **direct OTP customer access**
-  (section 48, i.e. logging in via OTP alone without first going through
-  `/subscribe`): tables exist (sso_sessions, otp_sessions); no
-  service/API layer yet - the OTP flow built in increment 2 is scoped to
-  the duplicate-detection use case inside `/subscribe`, not a standalone
-  customer login.
+  invoices). **SSO** (section 47) **done as of increment 9** - signed,
+  single-use, DB-backed-replay-protected tokens, redeemed via
+  `/public/sso/consume`, with a TEST_MODE admin action to generate a
+  working test link since no real Everyticket instance exists in this
+  build. **Direct OTP customer access** (section 48) confirmed already
+  satisfied by existing code (`CustomerLoginPage.tsx` + `/identify` +
+  `/otp/verify`) - no separate endpoint was needed.
 - **PayU gateway adapter** (section 25): **built as of increment 4** (see above) - real hosted-checkout integration with hash-verified callback, plus the frontend checkout redirect flow. Not yet exercised against PayU's real sandbox (needs Vishal's test credentials in his local `.env`); no server-to-server status-polling fallback (`get_payment_status()` intentionally not implemented - the surl/furl callback is authoritative for V1, per PayU's own guidance).
 - **Everyticket integration adapter + outbound webhooks** (sections
   30-37): **built as of increment 5** (see above) - queue-then-dispatch
@@ -583,13 +656,14 @@ called out in the relevant module's docstring too:
   TEST SSO/OTP-MFA-bypass-toggle/TEST DATA GENERATOR surface yet - this is
   the next logical piece now that the admin CRUD API + UI it would sit
   alongside exists (increment 7).
-- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3, admin CRUD UI added in increment 7** (see above) - public plan/subscribe flow, customer OTP login + portal, admin login/MFA + dashboard + full admin CRUD console (plans/customers/subscriptions/payments/invoices/webhooks/notifications/audit logs). Still missing: the dynamic registration-form renderer (section 8 - `SubscribePage` still collects a fixed field set rather than rendering whatever `RegistrationFormField` rows are configured), and any Testing-module UI (section 54, since the module itself isn't built yet).
+- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3, admin CRUD UI added in increment 7, dynamic registration-form renderer added in increment 8, SSO consume page added in increment 9** (see above) - public plan/subscribe flow (now with the dynamic per-application registration form), customer OTP login + portal + SSO landing page, admin login/MFA + dashboard + full admin CRUD console (plans/customers/subscriptions/payments/invoices/webhooks/notifications/audit logs/registration-form fields). Still missing: any Testing-module UI (section 54, since the module itself isn't built yet).
 - **Audit logging**: the `record()` helper and table exist; used for
-  payment success/failure, MFA bypass, and (as of increment 7) every
-  admin CRUD mutation (plan/feature/transition create-update-delete,
-  customer suspend/activate, webhook delivery retry, template edit).
-  Still not wired into: registration-form field changes (not built yet)
-  and system/gateway/integration configuration changes (not built yet).
+  payment success/failure, MFA bypass, every admin CRUD mutation as of
+  increment 7 (plan/feature/transition create-update-delete, customer
+  suspend/activate, webhook delivery retry, template edit), registration-
+  form field create/update as of increment 8, and SSO test-link
+  generation as of increment 9. Still not wired into: system/gateway/
+  integration configuration changes (not built yet).
 
 ## Local setup (what's runnable today)
 
@@ -644,10 +718,10 @@ confirm it with `docker compose up --build` before relying on it.
 
 ## Suggested next-session order
 
-Follows spec section 91's implementation order. Items 1-3 and 8 (struck
-through) were completed in increments 2-3 (2026-08-27); items 4-7 (also
-struck through) were completed in increments 5-7 (2026-08-29, see above).
-What's left is genuinely the tail of the spec now, not the core:
+Follows spec section 91's implementation order. Items 1-8 (struck
+through) are all done as of increments 2-9 (2026-08-27 through
+2026-08-29, see above). What's left is genuinely the tail of the spec
+now, not the core:
 
 1. ~~Admin auth (JWT + password + MFA with dev/staging bypass)~~ - done.
 2. ~~Duplicate customer detection + OTP (sections 9-11)~~ - done.
@@ -660,37 +734,29 @@ What's left is genuinely the tail of the spec now, not the core:
    actual sandbox.
 7. ~~Admin portal API surface~~ - done (increment 7), except the
    Testing/simulation module specifically (spec section 54) - that's the
-   next concrete piece of scope, now that it has the admin CRUD
-   foundation (auth, permissions, UI shell) to sit alongside.
-8. ~~React frontend~~ - done (increments 3, 7), except the dynamic
-   registration-form renderer (spec section 8 - `SubscribePage` still
-   collects a fixed field set, not whatever `RegistrationFormField` rows
-   are actually configured for the application).
+   next concrete piece of scope.
+8. ~~React frontend~~ - done (increments 3, 7, 8, 9), including the
+   dynamic registration-form renderer and the SSO consume page.
 
 Remaining open items, roughly in spec order:
 
-- **Registration-form field admin management** (section 18's admin
-  side) + the **dynamic form renderer** on `SubscribePage` (section 8) -
-  these two go together: there's no point building admin CRUD for
-  `RegistrationFormField` rows the frontend still ignores, or a dynamic
-  renderer with no admin UI to configure what it renders.
 - **Testing/Developer Tools admin module** (section 54) - TEST PAYMENT/
   TEST SUBSCRIPTION EVENTS/TEST EVERYTICKET WEBHOOK/WEBHOOK FAILURE
   SIMULATOR/TEST EMAIL/TEST SSO/OTP-MFA-bypass toggles/TEST DATA
   GENERATOR, all behind admin auth+permissions (reuse `require_permission`
-  from increment 7).
-- **SSO** (section 47) + **standalone direct-OTP customer login**
-  (section 48) - `sso_sessions`/`otp_sessions` tables exist; no
-  service/API layer for either yet (today's OTP flow is scoped to the
-  `/subscribe` duplicate-detection case only).
+  from increment 7). The "TEST SSO" piece can now reuse increment 9's
+  `create_sso_token()`/consume-link plumbing directly rather than
+  building it from scratch.
 - **OTP resend cooldown** (`OTP_RESEND_COOLDOWN_SECONDS` exists, nothing
   reads it) and **SAME/HIGHER/LOWER/EXPIRED plan auto-routing** on
   `/subscribe` for an existing active subscriber (today that path just
   refuses with `CUSTOMER_ALREADY_SUBSCRIBED`).
 - **Invoice PDF generation, download, and email delivery**, plus real
   GST/tax calculation (`tax_amount` is always 0 today).
-- **Registration-form / system / gateway / integration configuration**
-  admin screens (spec sections 51's remaining config modules) and
-  extending audit logging to cover their changes once they exist.
+- **System / gateway / integration configuration** admin screens (spec
+  section 51's remaining config modules: Payment Gateway Configuration,
+  Everyticket Integration Configuration, Notification Configuration,
+  Security Configuration, System Configuration) and extending audit
+  logging to cover their changes once they exist.
 - A full regression pass + docs/README refresh once the above land,
   before calling Phase 1 complete against the master spec.
