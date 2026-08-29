@@ -1,10 +1,12 @@
 # Everyticket Subscriptions - frontend
 
 React + TypeScript + Vite. Covers the public plan/subscribe flow, customer OTP login + portal
-(view subscription, upgrade/downgrade/renew/cancel), and admin login (password + MFA) + a minimal
-dashboard. See `docs/implementation-status.md` at the repo root for what's built vs. still spec -
-there's no admin CRUD API yet, so the admin dashboard is intentionally just a "you're signed in"
-confirmation for now.
+(view subscription, upgrade/downgrade/renew/cancel), and a full admin console: login (password +
+MFA), a real dashboard, and CRUD/read-only screens for plans, customers, subscriptions, payments,
+invoices, webhook logs, notification templates/logs, and audit logs. See
+`docs/implementation-status.md` at the repo root for what's built vs. still spec - the
+Testing/Developer Tools admin module and the dynamic registration-form renderer are the main
+frontend gaps left.
 
 ## Local development
 

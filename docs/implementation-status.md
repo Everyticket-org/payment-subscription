@@ -384,6 +384,135 @@ frontend source in a separate directory, specifically to avoid running
 native Windows install (Linux-built native binaries, e.g. esbuild, would
 have broken his own `npm run dev`/`npm run build` afterward).
 
+## Increment 5 (2026-08-29): Everyticket webhook dispatch + subscription expiry scheduler
+
+**Outbound webhooks (spec sections 30-37)** - `app/webhooks/service.py`
+splits enqueue from delivery, matching this codebase's existing "no
+external HTTP call held open inside a sensitive transaction" principle
+(spec section 58): `queue_event()` is a pure DB write (WebhookEvent +
+WebhookDelivery(PENDING) rows, HMAC-SHA256 signature computed later at
+send time) - safe to call from inside `PaymentService`'s transaction,
+which now actually does so on payment SUCCESS (replacing the old "NOTE"
+comment) instead of just planning to. `dispatch_pending()` is the real
+delivery sweep - HTTP POST with `X-Webhook-Signature: sha256=<hex>`,
+retry schedule from `WEBHOOK_RETRY_SCHEDULE_MINUTES`, EXHAUSTED once the
+schedule runs out - callable directly in tests with a fake `httpx`
+transport, or periodically via a new Celery beat task
+(`app/webhooks/tasks.py`, every 60s).
+
+**Subscription expiry + renewal reminders (spec sections 40, 49)** -
+`app/subscriptions/service.py` gained `expire_due_subscriptions()` (ACTIVE
+past `expires_at` -> EXPIRED, queues a `subscription.expired` webhook
+event) and `send_renewal_reminders()` (ACTIVE subscriptions expiring
+within `RENEWAL_REMINDER_DAYS_BEFORE` days get a reminder email, deduped
+via a NotificationLog lookback window rather than new schema). Both are
+Celery beat tasks now (`app/subscriptions/tasks.py`): expiry every 5
+minutes, reminders hourly.
+
+Verified with 6 new tests (`tests/test_webhooks.py`, `httpx.MockTransport`
+- no real network) and 3 new tests (`tests/test_subscription_expiry.py`),
+plus the full existing suite (31/32 - the 1 failure is the pre-existing
+`/ready` Postgres-reachability gap, not a regression). Hit and fixed one
+new bug in the process: a naive/aware datetime comparison in the retry
+test, same known SQLite round-trip quirk `ensure_aware()` (`app/core/time.py`)
+already exists to work around elsewhere in this codebase.
+
+## Increment 6 (2026-08-29): email service - real OTP delivery, payment/cancellation/renewal emails
+
+**Email service (spec sections 49-50)** - `app/notifications/email/service.py`'s
+`send_templated_email()` is the single choke point every send goes
+through: looks up the active `NotificationTemplate` by code, renders
+subject/HTML/text with Jinja2, sends via a new stdlib-`smtplib` SMTP
+provider (`app/notifications/email/providers/smtp/provider.py`), and
+always writes a `NotificationLog` row (SENT or FAILED) - and never
+raises, so a broken mail server degrades to "logged as FAILED", not a
+500 on some unrelated request. Four real call sites replace what used to
+be either nothing or a debug-only code path: `/public/identify`'s OTP
+delivery (the old `debug_otp_code` TEST_MODE convenience stays, it just
+isn't the only path anymore), and payment-success/payment-failed/
+subscription-cancelled emails - all fired *after* their transaction's
+`db.commit()`, per spec section 58's "no external I/O inside a financial
+transaction" rule.
+
+`app/core/seed.py` seeds 5 templates (`otp_verification`,
+`payment_success`, `payment_failed`, `subscription_cancelled`,
+`renewal_reminder`), each wrapped in a small branded HTML shell using the
+actual brand colors (`#d50355` / `#f1e2de`) rather than unstyled text.
+
+Verified with 8 new tests (`tests/test_email_service.py`, a monkeypatched
+fake `smtplib.SMTP` - both success and failure variants - no real SMTP
+server), covering template rendering, NotificationLog writes, and all
+four trigger points including renewal-reminder idempotency. Full suite:
+39/40 (the 1 failure is the same pre-existing `/ready` gap).
+
+## Increment 7 (2026-08-29): admin CRUD API + full admin console UI
+
+Built directly on top of increment 4's admin console shell (which had
+every module in the sidebar marked "soon") and closes the permission gap
+flagged since increment 2: `Role`/`Permission` tables existed but nothing
+was ever seeded onto them or checked against them - `get_current_admin`
+verified a token was valid, not that its holder could do anything
+specific.
+
+**Permission enforcement (spec section 12)** - `app/auth/permissions.py`
+defines the permission-code catalog (`PLANS_MANAGE`, `CUSTOMERS_VIEW`/
+`_MANAGE`, `SUBSCRIPTIONS_VIEW`, `PAYMENTS_VIEW`, `INVOICES_VIEW`,
+`WEBHOOKS_VIEW`/`_MANAGE`, `NOTIFICATIONS_VIEW`/`_MANAGE`, `AUDIT_VIEW`,
+`DASHBOARD_VIEW`); `app/core/seed.py` re-syncs all of them onto
+SUPERADMIN on every seed run (so a newly added catalog entry is
+retroactively granted, no migration needed); `app/auth/deps.py` gained
+`require_permission(code)`, a FastAPI dependency every admin endpoint
+below now uses instead of just `get_current_admin` - a valid-but-
+under-permissioned admin token gets 403, distinct from the 401 an
+invalid one gets (both cases have a test).
+
+**Admin API** (`app/api/v1/admin_*.py`, 28 new routes under the existing
+`/api/v1/admin/` namespace):
+- Dashboard: active/new subscriptions, 30-day revenue, failed payments,
+  expiring/expired counts, provisioning failures, webhook failures.
+- Plans: full CRUD for plans, plan features, and plan transitions.
+  Plans are never hard-deleted (referenced by FK from subscriptions/
+  payments/history) - only deactivated.
+- Customers: paginated search (email/mobile/customer_id) + full detail
+  (registration data, Everyticket mapping, subscriptions, payments,
+  invoices) + suspend/activate. Per spec section 53, financial
+  transaction history itself has no edit path here.
+- Subscriptions/Payments/Invoices: read-only list + detail, cross-linked
+  to each other and to the owning customer.
+- Webhook Logs: event/delivery list + detail, and a retry action that
+  only resets a delivery to PENDING - the actual HTTP dispatch stays
+  Celery beat's job (increment 5), never the admin request itself.
+- Notification Logs/Templates: send-log list + template subject/body/
+  active edit.
+- Audit Logs: filterable, paginated read of the append-only trail every
+  mutating endpoint above writes to via `audit_service.record()`.
+
+A shared `PageOut[T]` limit/offset pagination wrapper
+(`app/api/v1/admin_common.py`) and a handful of read-only ORM
+relationships (`PaymentTransaction.customer`/`target_plan`,
+`Invoice.customer`/`subscription`/`payment_transaction`,
+`PlanTransition.from_plan`/`to_plan` - no schema/migration changes) keep
+the admin_*.py modules from re-querying the same joins by hand.
+
+**Frontend**: every admin nav item is now a real page instead of a
+disabled "soon" placeholder - AdminPlansPage (list, create, per-plan edit
++ features, transitions manager), AdminCustomersPage/DetailPage,
+AdminSubscriptionsPage/DetailPage, AdminPaymentsPage/DetailPage,
+AdminInvoicesPage/DetailPage, AdminWebhooksPage, AdminNotificationsPage,
+AdminAuditLogsPage, and AdminDashboardPage rewritten to render the real
+stats instead of "no API yet". `api/client.ts` gained `put()`/`delete()`
+(previously GET/POST only) and a `withQuery()` helper; new
+`StatusBadge`/`Pagination` shared components keep status coloring and
+paging consistent across every list screen; new CSS classes
+(`.admin-panel`, `.badge-*`, `.stat-grid`, `.data-table` pagination, etc.)
+all read the existing brand tokens - no new color literals.
+
+Verified: 49 backend tests (9 new in `tests/test_admin_api.py`, covering
+every module plus the 403-vs-401 permission case), 48 passing (same
+pre-existing `/ready` gap); OpenAPI schema builds cleanly with all 28 new
+routes; frontend `npm run build` clean in the isolated `~/frontend-check`
+scratch copy, 53 modules, no TypeScript errors.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -406,13 +535,17 @@ called out in the relevant module's docstring too:
   EXPIRED) still has no scheduler - `expire_subscription()` exists and is
   ready to be called, nothing calls it yet (needs the Celery beat task
   under "Background jobs" below).
-- **Admin portal & auth** (sections 12, 51-53): **login/MFA/`/me` done as
-  of increment 2** (see above). Still missing: any admin CRUD API
-  (plans, forms, customers, subscriptions, payments, invoices, webhook
-  logs, audit logs) beyond the login flow itself, and role/permission
-  enforcement beyond "is this token a valid admin token" (Role/Permission
-  tables exist and are seeded with a SUPERADMIN role, but no endpoint
-  checks a specific permission yet).
+- **Admin portal & auth** (sections 12, 51-53): **login/MFA/`/me` done
+  as of increment 2; the full admin CRUD API + permission enforcement +
+  matching UI done as of increment 7** (see above) - plans, customers,
+  subscriptions, payments, invoices, webhook logs, notification templates/
+  logs, and audit logs are all real endpoints with a real UI, and every
+  one of them checks a specific permission (`require_permission`), not
+  just "is this token a valid admin token". Still missing: registration
+  **form field** management (spec section 18's admin side - the fields
+  themselves are seeded once in `app/core/seed.py` and never editable via
+  API/UI), and the Testing/Developer Tools module (section 54, see
+  below).
 - **Customer portal** (section 46): **`GET /customer/me` done as of
   increment 2** (active subscription, all subscriptions, payments,
   invoices). **SSO** (section 47) and **direct OTP customer access**
@@ -423,26 +556,40 @@ called out in the relevant module's docstring too:
   customer login.
 - **PayU gateway adapter** (section 25): **built as of increment 4** (see above) - real hosted-checkout integration with hash-verified callback, plus the frontend checkout redirect flow. Not yet exercised against PayU's real sandbox (needs Vishal's test credentials in his local `.env`); no server-to-server status-polling fallback (`get_payment_status()` intentionally not implemented - the surl/furl callback is authoritative for V1, per PayU's own guidance).
 - **Everyticket integration adapter + outbound webhooks** (sections
-  30-37): webhook_events/webhook_deliveries tables exist; nothing
-  dispatches to them yet - `PaymentService` has an explicit comment
-  marking where `subscription.activated` should be queued.
-- **Email notifications** (sections 49-50): notification_templates/
-  notification_logs tables exist; no EmailService/SMTP sending yet.
+  30-37): **built as of increment 5** (see above) - queue-then-dispatch
+  webhook delivery with HMAC signing and a retry schedule, driven by a
+  Celery beat task, plus an admin Webhook Logs view with a manual retry
+  action (increment 7).
+- **Email notifications** (sections 49-50): **built as of increment 6**
+  (see above) - real SMTP delivery for OTP/payment-success/payment-failed/
+  subscription-cancelled/renewal-reminder, always logged to
+  NotificationLog, plus an admin template-edit + send-log UI (increment 7).
 - **Invoices**: row + line item generation works; no PDF rendering,
   download, or email delivery yet. Tax is always 0 (no GST rate config).
-- **Background jobs** (Celery/Redis, section 59): `celery_app.py` exists
-  with an empty task list; no actual tasks (webhook retry, expiry
-  processing, renewal, reminders) implemented.
-- **Testing/simulation admin module** (section 54): the mock payment
-  simulator exists as a plain API endpoint
-  (`POST /api/v1/payment/mock/callback`); it is not yet behind admin
-  auth or exposed as the dedicated admin Testing module the spec
-  describes, and the webhook/email/SSO/test-data-generator simulators
-  don't exist yet.
-- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3** (see above) - public plan/subscribe flow, customer OTP login + portal, admin login/MFA + minimal dashboard, all verified against the real backend with Playwright. Still missing: any admin CRUD UI (no admin CRUD API exists yet to call), and the dynamic registration-form renderer (section 8).
-- **Audit logging**: the `record()` helper and table exist and are used
-  for payment success/failure; not yet wired into every action the spec
-  lists (plan changes, config changes, bypass usage, etc.).
+- **Background jobs** (Celery/Redis, section 59): **built as of
+  increment 5** (see above) - `celery_app.py`'s `beat_schedule` now runs
+  webhook dispatch (60s), subscription expiry (5m), and renewal reminders
+  (hourly). Not yet exercised against a real running Celery worker/beat +
+  Redis broker in this pass (verified by calling the sweep functions
+  directly, per this codebase's "testable without external dependencies"
+  approach, spec section 73) - confirm with `celery -A app.core.celery_app
+  worker` / `celery -A app.core.celery_app beat` before relying on it in
+  a real deployment.
+- **Testing/simulation admin module** (section 54): still not built as
+  its own dedicated admin module. The mock payment simulator exists as a
+  plain, non-admin-gated API endpoint (`POST /api/v1/payment/mock/
+  callback`); there's no admin-facing TEST PAYMENT/TEST SUBSCRIPTION
+  EVENTS/TEST EVERYTICKET WEBHOOK/WEBHOOK FAILURE SIMULATOR/TEST EMAIL/
+  TEST SSO/OTP-MFA-bypass-toggle/TEST DATA GENERATOR surface yet - this is
+  the next logical piece now that the admin CRUD API + UI it would sit
+  alongside exists (increment 7).
+- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3, admin CRUD UI added in increment 7** (see above) - public plan/subscribe flow, customer OTP login + portal, admin login/MFA + dashboard + full admin CRUD console (plans/customers/subscriptions/payments/invoices/webhooks/notifications/audit logs). Still missing: the dynamic registration-form renderer (section 8 - `SubscribePage` still collects a fixed field set rather than rendering whatever `RegistrationFormField` rows are configured), and any Testing-module UI (section 54, since the module itself isn't built yet).
+- **Audit logging**: the `record()` helper and table exist; used for
+  payment success/failure, MFA bypass, and (as of increment 7) every
+  admin CRUD mutation (plan/feature/transition create-update-delete,
+  customer suspend/activate, webhook delivery retry, template edit).
+  Still not wired into: registration-form field changes (not built yet)
+  and system/gateway/integration configuration changes (not built yet).
 
 ## Local setup (what's runnable today)
 
@@ -497,26 +644,53 @@ confirm it with `docker compose up --build` before relying on it.
 
 ## Suggested next-session order
 
-Follows spec section 91's implementation order. Items 1-3 (below,
-struck through) were completed in increment 2 (2026-08-27, see above).
-Item 8 (React frontend) was pulled forward and completed in increment 3
-(2026-08-27, see above) at Vishal's explicit request, ahead of items 4-7 -
-those are still open and are the actual next step:
+Follows spec section 91's implementation order. Items 1-3 and 8 (struck
+through) were completed in increments 2-3 (2026-08-27); items 4-7 (also
+struck through) were completed in increments 5-7 (2026-08-29, see above).
+What's left is genuinely the tail of the spec now, not the core:
 
 1. ~~Admin auth (JWT + password + MFA with dev/staging bypass)~~ - done.
 2. ~~Duplicate customer detection + OTP (sections 9-11)~~ - done.
 3. ~~Upgrade/downgrade/cancel/renew service layer + API~~ - done.
-   (`expire_subscription()` exists but isn't scheduled yet - folds into
-   item 4's Celery work below.)
-4. Everyticket integration adapter + outbound webhook dispatch/retry
-   (Celery task), wired into `PaymentService`'s existing "NOTE" comment;
-   same Celery worker should also schedule `expire_subscription()` for
-   subscriptions past `expires_at`.
-5. Email service + templates, wired the same way.
-6. PayU adapter (register alongside Mock in the gateway registry -
-   no core changes needed).
-7. Admin portal API surface + Testing/simulation module.
-8. ~~React frontend, starting with the public subscribe flow~~ - done
-   (increment 3). Still not built: admin CRUD UI (blocked on item 7's
-   admin CRUD API not existing yet) and the dynamic registration-form
-   renderer (spec section 8).
+4. ~~Everyticket integration adapter + outbound webhook dispatch/retry~~ -
+   done (increment 5), including the expiry/reminder Celery beat tasks.
+5. ~~Email service + templates~~ - done (increment 6).
+6. ~~PayU adapter~~ - done (increment 4). Still needs Vishal's real test
+   credentials in his own `backend/.env` to exercise against PayU's
+   actual sandbox.
+7. ~~Admin portal API surface~~ - done (increment 7), except the
+   Testing/simulation module specifically (spec section 54) - that's the
+   next concrete piece of scope, now that it has the admin CRUD
+   foundation (auth, permissions, UI shell) to sit alongside.
+8. ~~React frontend~~ - done (increments 3, 7), except the dynamic
+   registration-form renderer (spec section 8 - `SubscribePage` still
+   collects a fixed field set, not whatever `RegistrationFormField` rows
+   are actually configured for the application).
+
+Remaining open items, roughly in spec order:
+
+- **Registration-form field admin management** (section 18's admin
+  side) + the **dynamic form renderer** on `SubscribePage` (section 8) -
+  these two go together: there's no point building admin CRUD for
+  `RegistrationFormField` rows the frontend still ignores, or a dynamic
+  renderer with no admin UI to configure what it renders.
+- **Testing/Developer Tools admin module** (section 54) - TEST PAYMENT/
+  TEST SUBSCRIPTION EVENTS/TEST EVERYTICKET WEBHOOK/WEBHOOK FAILURE
+  SIMULATOR/TEST EMAIL/TEST SSO/OTP-MFA-bypass toggles/TEST DATA
+  GENERATOR, all behind admin auth+permissions (reuse `require_permission`
+  from increment 7).
+- **SSO** (section 47) + **standalone direct-OTP customer login**
+  (section 48) - `sso_sessions`/`otp_sessions` tables exist; no
+  service/API layer for either yet (today's OTP flow is scoped to the
+  `/subscribe` duplicate-detection case only).
+- **OTP resend cooldown** (`OTP_RESEND_COOLDOWN_SECONDS` exists, nothing
+  reads it) and **SAME/HIGHER/LOWER/EXPIRED plan auto-routing** on
+  `/subscribe` for an existing active subscriber (today that path just
+  refuses with `CUSTOMER_ALREADY_SUBSCRIBED`).
+- **Invoice PDF generation, download, and email delivery**, plus real
+  GST/tax calculation (`tax_amount` is always 0 today).
+- **Registration-form / system / gateway / integration configuration**
+  admin screens (spec sections 51's remaining config modules) and
+  extending audit logging to cover their changes once they exist.
+- A full regression pass + docs/README refresh once the above land,
+  before calling Phase 1 complete against the master spec.
