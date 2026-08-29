@@ -24,6 +24,27 @@ webhook_secret if set, else EVERYTICKET_WEBHOOK_SECRET - the same
 override/fallback pattern PayU's credentials use (env vars are the
 production source of truth; the Application row is a per-application
 override, per that model's own docstring).
+
+PROVISIONING (spec sections 32, 37): a "subscription.activated" delivery
+is special-cased. Everyticket's response body - not just the HTTP status -
+carries the real provisioning result (spec section 32: "Everyticket should
+return its external identity" as {success, external_customer_id,
+instance_id}), so _handle_activation_outcome() below parses it and:
+  - on success: sets Subscription.provisioning_status=SUCCESS and
+    upserts the CustomerApplicationMapping (permanent customer<->
+    external-identity mapping, spec section 8) with whatever identity
+    Everyticket returned - never inserting a second mapping row for the
+    same customer+application (spec section 32: no duplicate instances).
+  - on failure (network error, non-2xx, or a 2xx body that explicitly
+    says success:false): sets provisioning_status=FAILED and sends a
+    one-time "provisioning_issue" notification (spec section 37: "Customer
+    should receive an appropriate status message"). The payment/
+    subscription itself is NEVER touched here (spec section 30:
+    "Everyticket provisioning failure does not make payment fail") -
+    only this delivery's own retry/backoff bookkeeping, which already
+    gives provisioning its "retried automatically" behavior (spec section
+    31) for free, and the admin "manual retry" endpoint
+    (app/api/v1/admin_webhooks.py) covers "Admin can manually retry".
 """
 import hashlib
 import hmac
@@ -34,13 +55,16 @@ from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy.orm import Session
 
-from app.applications.models import Application
+from app.applications.models import Application, CustomerApplicationMapping
 from app.core.config import get_settings
-from app.core.enums import WebhookDeliveryStatus
+from app.core.enums import ProvisioningStatus, WebhookDeliveryStatus
 from app.core.ids import new_event_id
+from app.subscriptions.models import Subscription
 from app.webhooks.models import WebhookDelivery, WebhookEvent
 
 logger = logging.getLogger("subscription")
+
+_ACTIVATION_EVENT_TYPE = "subscription.activated"
 
 
 def _resolve_destination(application: Application | None) -> tuple[str | None, str | None]:
@@ -94,6 +118,17 @@ def queue_event(
     )
     db.add(delivery)
     db.flush()
+
+    if event_type == _ACTIVATION_EVENT_TYPE and entity_type == "subscription":
+        # Spec sections 20, 37: provisioning genuinely starts now - a
+        # delivery attempt for it is durably queued - rather than staying
+        # NOT_STARTED until the first HTTP attempt actually fires.
+        subscription = db.query(Subscription).filter(Subscription.subscription_id == entity_id).first()
+        if subscription is not None and subscription.provisioning_status == ProvisioningStatus.NOT_STARTED.value:
+            subscription.provisioning_status = ProvisioningStatus.IN_PROGRESS.value
+            db.add(subscription)
+            db.flush()
+
     return event
 
 
@@ -141,6 +176,26 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         if owns_client:
             client.close()
 
+    if event.event_type == _ACTIVATION_EVENT_TYPE and event.entity_type == "subscription":
+        # May downgrade `succeeded` to False if Everyticket returned a 2xx
+        # but its body explicitly reported success:false - see this
+        # module's docstring. A bug in this best-effort side effect must
+        # never break the delivery's own retry bookkeeping below, hence
+        # the broad try/except.
+        try:
+            succeeded = _handle_activation_outcome(
+                db,
+                application=application,
+                subscription_id=event.entity_id,
+                http_succeeded=succeeded,
+                response_body=delivery.response_body,
+            )
+        except Exception:
+            logger.exception(
+                "Provisioning-outcome handling failed for subscription %s - leaving delivery status as-is",
+                event.entity_id,
+            )
+
     delivery.attempt_count += 1
     delivery.last_attempt_at = datetime.now(timezone.utc)
 
@@ -160,6 +215,132 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     db.add(delivery)
     db.commit()
     return succeeded
+
+
+def _handle_activation_outcome(
+    db: Session,
+    *,
+    application: Application | None,
+    subscription_id: str,
+    http_succeeded: bool,
+    response_body: str | None,
+) -> bool:
+    """Interprets Everyticket's response to a subscription.activated
+    delivery attempt (spec section 32) and updates
+    Subscription.provisioning_status accordingly. Returns the effective
+    "did provisioning actually succeed" outcome, which the caller also
+    uses as the delivery's own success/failure for retry purposes (a 2xx
+    HTTP response with a body that explicitly says success:false is NOT
+    a successful delivery - Everyticket didn't actually provision
+    anything, so it must be retried same as a network/HTTP failure).
+
+    Best-effort only: an unknown subscription_id (e.g. a unit test that
+    queues an event without a real Subscription row) is logged and
+    ignored rather than raised, so this never breaks delivery dispatch
+    itself.
+    """
+    provisioning_ok = http_succeeded
+    external_customer_id: str | None = None
+    external_instance_id: str | None = None
+
+    if http_succeeded and response_body:
+        try:
+            parsed = json.loads(response_body)
+        except (TypeError, ValueError):
+            parsed = None
+        if isinstance(parsed, dict):
+            if parsed.get("success") is False:
+                provisioning_ok = False
+            external_customer_id = parsed.get("external_customer_id")
+            external_instance_id = parsed.get("instance_id")
+
+    subscription = db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
+    if subscription is None:
+        logger.warning("Provisioning outcome received for unknown subscription %s - ignoring", subscription_id)
+        return provisioning_ok
+
+    was_failed = subscription.provisioning_status == ProvisioningStatus.FAILED.value
+    subscription.provisioning_status = (
+        ProvisioningStatus.SUCCESS.value if provisioning_ok else ProvisioningStatus.FAILED.value
+    )
+    db.add(subscription)
+
+    if provisioning_ok:
+        if application is not None and (external_customer_id or external_instance_id):
+            _upsert_external_mapping(
+                db,
+                customer_id=subscription.customer_id,
+                application_id=application.id,
+                external_customer_id=external_customer_id,
+                external_instance_id=external_instance_id,
+            )
+    elif not was_failed:
+        # Only on the transition INTO failure - not on every subsequent
+        # retry attempt that also fails - so a customer isn't emailed
+        # repeatedly while the automatic retry schedule works through
+        # its backoff (spec section 35's default schedule).
+        _notify_provisioning_issue(db, subscription=subscription, application=application)
+
+    return provisioning_ok
+
+
+def _upsert_external_mapping(
+    db: Session,
+    *,
+    customer_id: int,
+    application_id: int,
+    external_customer_id: str | None,
+    external_instance_id: str | None,
+) -> None:
+    """Spec section 8: one permanent mapping row per (customer,
+    application) - update it in place rather than inserting a second one,
+    which is also what makes a repurchase-after-expiry re-activation (spec
+    section 41: "reuse external_customer_id", no new museum) safe even
+    though it re-sends a fresh subscription.activated event."""
+    mapping = (
+        db.query(CustomerApplicationMapping)
+        .filter(
+            CustomerApplicationMapping.customer_id == customer_id,
+            CustomerApplicationMapping.application_id == application_id,
+        )
+        .first()
+    )
+    if mapping is None:
+        mapping = CustomerApplicationMapping(customer_id=customer_id, application_id=application_id)
+    if external_customer_id:
+        mapping.external_customer_id = external_customer_id
+    if external_instance_id:
+        mapping.external_instance_id = external_instance_id
+    db.add(mapping)
+
+
+def _notify_provisioning_issue(db: Session, *, subscription: Subscription, application: Application | None) -> None:
+    """Spec section 37: "Customer should receive an appropriate status
+    message." A notification failure must never break provisioning
+    bookkeeping, so this is best-effort/logged, never raised - matching
+    every other notification call site in this codebase
+    (app.payments.service's own invoice-email send is wrapped the same way)."""
+    from app.notifications.email import service as email_service  # local import: avoids a module-load cycle
+
+    try:
+        customer = subscription.customer
+        plan = subscription.plan
+        email_service.send_templated_email(
+            db,
+            template_code="provisioning_issue",
+            to=customer.email if customer else None,
+            context={
+                "plan_name": plan.name if plan else "",
+                "subscription_id": subscription.subscription_id,
+            },
+            related_entity_type="subscription",
+            related_entity_id=subscription.subscription_id,
+            application=application,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to send provisioning_issue email for subscription %s", subscription.subscription_id
+        )
 
 
 def attempt_delivery_with_client(

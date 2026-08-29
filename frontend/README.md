@@ -1,18 +1,21 @@
 # Everyticket Subscriptions - frontend
 
 React + TypeScript + Vite. Covers the public plan/subscribe flow (with a dynamic
-per-application registration form), customer OTP login + portal (view subscription,
-upgrade/downgrade/renew/cancel) + an Everyticket SSO landing page, and a full admin console:
-login (password + MFA), a real dashboard, CRUD/read-only screens for plans, customers,
-subscriptions, payments, invoices, webhook logs, notification templates/logs, audit logs, and
-registration-form fields (plus a "Generate test SSO link" action on the customer detail page),
-a Testing/Developer Tools page (test payment simulation, test subscription events, a live
-webhook sender, a webhook failure/retry simulator, test email sending, OTP/MFA bypass toggles,
-and a test-data generator + cleanup) with a "TEST MODE" badge shown in the admin topbar whenever
-the backend has it on, and a GST/tax configuration panel on the Invoices page plus PDF
-download/email-resend actions on the invoice detail page (also downloadable from the customer
-portal's own invoice list). See `docs/implementation-status.md` at the repo root for what's
-built vs. still spec.
+per-application registration form; mock simulate buttons or a real PayU checkout redirect,
+depending on the application's configured gateway), customer OTP login + portal (view
+subscription incl. its provisioning status, upgrade/downgrade/renew/cancel) + an Everyticket SSO
+landing page, and a full admin console: login (password + MFA), a real dashboard, CRUD/read-only
+screens for plans, customers, subscriptions, payments, invoices, webhook logs, notification
+templates/logs, audit logs, and registration-form fields (plus a "Generate test SSO link" action
+on the customer detail page), a Configuration page (Payment Gateway, Everyticket Integration,
+Notification, Subscription Rules, and Security config - each screen backed by real enforcement,
+not just storage), a Testing/Developer Tools page (test payment simulation, test subscription
+events, a live webhook sender, a webhook failure/retry simulator, test email sending, OTP/MFA
+bypass toggles, and a test-data generator + cleanup) with a "TEST MODE" badge shown in the admin
+topbar whenever the backend has it on, and a GST/tax configuration panel on the Invoices page
+plus PDF download/email-resend actions on the invoice detail page (also downloadable from the
+customer portal's own invoice list). See `docs/implementation-status.md` at the repo root for
+what's built vs. still spec.
 
 ## Local development
 
@@ -40,12 +43,10 @@ npm run preview  # serve the production build locally to sanity-check it
 
 ## Notes
 
-- No real payment gateway is wired up in the backend yet (Mock only) - every place a payment is
-  required (subscribe, upgrade, downgrade, renew) shows a "simulate payment success/failure"
-  action instead of a real checkout, calling the same mock-callback endpoint a real gateway
-  webhook will eventually use.
+- Which payment flow renders (mock "simulate success/failure" buttons vs. a real PayU
+  hosted-checkout redirect) is driven entirely by the application's configured
+  `default_gateway` (Admin > Configuration > Payment Gateway) - both call through the same
+  subscribe/upgrade/downgrade/renew endpoints.
 - Customer auth token and admin auth token are both kept in `localStorage` (see
   `src/context/AuthContext.tsx`) - this is a real standalone app the user runs in their own
   browser, not an embedded preview, so that's the normal, correct place for them.
-- There's no dynamic registration-form renderer yet (spec section 8) - `registration_data` is
-  sent as `{}` on subscribe.

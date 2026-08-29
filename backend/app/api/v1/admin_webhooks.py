@@ -19,7 +19,7 @@ from app.audit import service as audit_service
 from app.auth.deps import require_permission
 from app.auth.models import AdminUser
 from app.core.enums import WebhookDeliveryStatus
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, WebhookAlreadyDelivered
 from app.webhooks.models import WebhookDelivery, WebhookEvent
 from app.webhooks.schemas import WebhookDeliveryOut, WebhookEventOut
 
@@ -104,6 +104,10 @@ def retry_delivery(
     delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
     if delivery is None:
         raise WebhookDeliveryNotFoundError(f"Unknown webhook delivery {delivery_id}")
+    if delivery.status == WebhookDeliveryStatus.SUCCESS.value:
+        raise WebhookAlreadyDelivered(
+            f"Webhook delivery {delivery_id} already succeeded - retrying it risks a duplicate downstream instance"
+        )
 
     old_status = delivery.status
     delivery.status = WebhookDeliveryStatus.PENDING.value

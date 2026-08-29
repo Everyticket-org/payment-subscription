@@ -786,6 +786,188 @@ customer's invoice, and the email-resend round trip via a faked SMTP) -
 83 total tests, 82 passing (same pre-existing `/ready` gap), 57-module
 clean frontend build.
 
+## Increment 13 (2026-08-29): admin System/Gateway/Integration/Notification/Security configuration screens
+
+Closes spec section 51's last remaining named admin module - Payment
+Gateway Configuration, Everyticket Integration Configuration,
+Notification Configuration, Security Configuration, System Configuration
+- against the field groups spec section 13 already defined on the
+`Application` model (general/integration/payment/email/subscription
+rules/testing), most of which existed as columns but were never
+admin-editable, and several of which were never actually read by
+anything at all.
+
+**New `app/api/v1/admin_config.py`**: `GET /api/v1/admin/config/application`
+(full config, secrets masked - only an `*_is_set` flag for
+`webhook_secret`/`sso_secret`/`api_credentials`, never the plaintext
+value) plus one `PUT` per screen (general/integration/payment/
+notification/subscription-rules), all gated by two new permissions
+(`SYSTEM_CONFIG_VIEW`/`SYSTEM_CONFIG_MANAGE`) and audit-logged. A `PUT`
+secret field left blank/omitted leaves the stored value unchanged, so the
+frontend never has to round-trip a secret it can't even see back to the
+server.
+
+**Notification Configuration is wired for real, not just stored**:
+`email_service.send_templated_email()` gained an optional `application`
+parameter that overrides `EMAIL_PROVIDER`/`EMAIL_SENDER_NAME`/
+`EMAIL_SENDER_ADDRESS`/`EMAIL_REPLY_TO` from that row for any field it has
+actually set (via `Settings.model_copy()` - never mutating the
+process-wide cached `Settings` singleton), falling back to the global
+env defaults otherwise - the same per-application-override pattern
+`app.sso.service`/`app.webhooks.service` already use for `sso_secret`/
+`webhook_secret`. Wired into every real send site: OTP delivery, payment
+success/failure, invoice email, renewal reminders, and subscription
+cancellation.
+
+**Subscription rules are wired for real too**: `allow_upgrade`/
+`allow_downgrade`/`allow_cancellation`/`renewal_enabled` are now checked
+in `app/api/v1/customer.py`'s upgrade/downgrade/renew/cancel endpoints -
+disabled means an immediate 403 `ACTION_NOT_ALLOWED` (a new exception),
+before any payment transaction or subscription mutation happens.
+`cancellation_behavior`/`repurchase_enabled` are stored for
+forward-compatibility but not enforced yet - V1 only ever implements
+IMMEDIATE cancellation (spec section 43) and always allows repurchase
+after expiry/cancellation (spec section 41) regardless of this flag.
+
+**Payment Gateway Configuration**: `default_gateway` was already read at
+every payment-creation call site (this pass just adds the admin screen
+for it), plus `gateway_mode` (stored, not yet consulted anywhere).
+Gateway *credentials* (PayU's merchant key/salt) deliberately stay
+env-only (`backend/.env`) - not exposed through this screen, since
+round-tripping raw payment-gateway secrets through a web form isn't worth
+the risk when an already-secure channel exists.
+
+**New `app/auth/security_config.py`** (Security Configuration): OTP
+length/expiry-seconds/max-attempts/resend-cooldown become admin-tunable
+at runtime, `system_settings`-backed (same pattern as the invoice tax
+config from increment 12), read live by `app/auth/otp_service.py` on
+every OTP issue/resend-check. Deliberately does NOT cover JWT token
+expiry (much larger blast radius - affects every issued token's
+validation) or the `ALLOW_OTP_BYPASS`/`ALLOW_ADMIN_MFA_BYPASS` safety
+switches (env-enforced via `Settings.enforce_test_mode_restrictions`,
+already have their own runtime toggle in the Testing Tools module,
+section 55) - this screen's `GET` surfaces those two flags plus
+`TEST_MODE` read-only, so an admin has one place to see the full current
+security posture without a second, differently-persisted way to change
+the safety-critical ones.
+
+**Real pre-existing bug found and fixed** while testing the
+payment-gateway screen end-to-end: `payment_service.create_payment_transaction()`
+never propagated the gateway adapter's own reported status onto the
+`PaymentTransaction` row - it stayed at its initial `INITIATED` value
+forever (for the mock gateway this is a no-op, since Mock's
+`create_payment()` also reports `INITIATED`; for PayU it's very much not
+a no-op, since PayU's `create_payment()` reports `PENDING`). This meant
+`payment_service.build_payment_out()`'s checkout-surfacing condition
+(`transaction.status == "PENDING"`) never fired for a real PayU payment,
+so the frontend's hosted-checkout redirect form would never have
+rendered - a real, user-facing break in the exact flow Vishal asked to
+be able to test end-to-end with his own PayU credentials. No prior test
+had ever driven `/subscribe` through to inspecting `payment.checkout` in
+the response, so this had gone uncaught since the PayU adapter was built
+in increment 4. Fixed by setting `transaction.status = result.status`
+right alongside the existing `gateway_transaction_id`/`raw_gateway_response`
+assignment.
+
+**Frontend**: new `AdminConfigPage` (one section per screen - General/
+Integration/Payment/Notification/Subscription rules/Security in a single
+page, since each is a small field group of the same one V1 application),
+"Configuration" added to the sidebar.
+
+Verified: 8 new tests (secret masking on GET, the permission gate,
+general-config round trip, integration secrets never echoed back on
+GET, the payment-gateway switch actually changing a subsequent
+`/subscribe` call's gateway - this is what caught the status bug above -
+the notification override actually changing the sent email's `From`
+header via a faked SMTP, the subscription-rule toggles actually 403ing
+each of upgrade/renew/cancel, and the security config actually changing
+the generated OTP code's length) - 91 total tests, 90 passing (same
+pre-existing `/ready` gap), 58-module clean frontend build.
+
+With this increment, every module spec section 51 names is a real,
+admin-editable, backend-enforced screen. What's left is the housekeeping
+item from the very start of this project: a full regression pass and a
+docs/README refresh confirming everything above is consistent, before
+calling Phase 1 complete against the master spec.
+
+## Increment 14 (2026-08-29): Everyticket provisioning result handling (failure + retry)
+
+Closes the last two open items on spec section 88's Phase 1 acceptance
+checklist: "Provisioning failure works" / "Provisioning retry works".
+Found while doing this pass's full section-88 regression sweep:
+`Subscription.provisioning_status`, `ProvisioningStatus`, and the
+`ProvisioningFailed` exception all existed as columns/enums/classes since
+increment 1, and the admin dashboard already counted `FAILED` rows, but
+nothing anywhere ever transitioned `provisioning_status` away from its
+`NOT_STARTED` default - `app/api/v1/webhooks.py` (where spec section 32
+says "Everyticket's response callbacks land") was a router with zero
+endpoints. A real Everyticket provisioning failure would have been
+completely invisible.
+
+Re-reading spec sections 30-37 clarified the actual shape: section 32
+("Everyticket Response") describes Everyticket returning its
+`{success, external_customer_id, instance_id}` result in the **response
+body of the same outbound `subscription.activated` webhook** this app
+already sends (section 31), not a separate inbound endpoint - so there
+was no missing router, just a missing step in
+`app.webhooks.service._attempt_one()`, which previously only looked at
+the HTTP status code and threw the response body away.
+
+**`app/webhooks/service.py`**: `_attempt_one()` now special-cases
+`event_type == "subscription.activated"`. On a 2xx response, it parses
+the JSON body - a `success: false` in the body overrides an otherwise-2xx
+HTTP status back to a *failed* delivery (so it still gets picked up by
+the existing retry schedule, since a 2xx that didn't actually provision
+anything is not a real success); on success it upserts the
+`CustomerApplicationMapping` row (spec section 8) with the returned
+`external_customer_id`/`instance_id` - update-in-place, never a second
+insert, which is also what keeps a repurchase-after-expiry re-activation
+(section 41: reuse the same external identity) safe even though it
+re-sends a fresh `subscription.activated` event. `queue_event()` now also
+flips a fresh subscription's `provisioning_status` to `IN_PROGRESS` the
+moment a delivery is durably queued, rather than leaving it at
+`NOT_STARTED` until the first HTTP attempt fires.
+
+**Retry "for free"**: provisioning failure and retry did not need new
+scheduling logic - the webhook delivery retry mechanism already built in
+increment 5 (`WEBHOOK_RETRY_SCHEDULE_MINUTES`, Celery-beat-driven
+`dispatch_pending()`) already retries a FAILED delivery automatically,
+and the admin Webhook Logs "retry" button (increment 7) already lets an
+admin force one early - this increment just makes `provisioning_status`
+actually track that same delivery's outcome. Per spec section 30
+("Everyticket provisioning failure does not make payment fail"), none of
+this ever touches the payment or subscription's own `status` - only
+`provisioning_status` and the delivery's own retry bookkeeping.
+
+**Customer notification**: a `provisioning_issue` email template
+(section 49's "Provisioning issue if appropriate") is sent once, on the
+transition INTO `FAILED` - not resent on every subsequent retry attempt
+that also fails - so a customer isn't spammed while the automatic
+backoff schedule works through its attempts (section 37: "Customer
+should receive an appropriate status message").
+
+**Idempotency hardening**: `POST /api/v1/admin/webhooks/deliveries/{id}/retry`
+now refuses (409 `WEBHOOK_ALREADY_DELIVERED`) to reset an
+already-`SUCCESS` delivery back to `PENDING` - resending a
+successfully-delivered `subscription.activated` event risks Everyticket
+provisioning a second instance for the same customer (section 32's "do
+not create duplicate instances if the activation event is retried"),
+which was previously possible via this endpoint (the automatic
+Celery-beat sweep was already safe, since it only ever picks up
+`PENDING`/`FAILED` deliveries).
+
+Verified: 6 new tests (`tests/test_provisioning.py` - queuing sets
+`IN_PROGRESS`, a successful response sets `SUCCESS` and stores the
+mapping, an explicit `success: false` body on a 2xx is treated as a
+failure and scheduled for retry, a failed delivery sets `FAILED` and
+emails the customer exactly once even across two failed attempts, a
+later successful retry recovers to `SUCCESS` and updates the mapping,
+and the admin retry endpoint 409s against an already-succeeded
+delivery) - 97 total tests, 96 passing (same pre-existing `/ready` gap),
+no frontend changes needed (the admin subscription/customer detail pages
+already render `provisioning_status` and the Everyticket mapping fields -
+they were just never fed anything but `NOT_STARTED`/`null` before).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -813,8 +995,11 @@ called out in the relevant module's docstring too:
   one of them checks a specific permission (`require_permission`), not
   just "is this token a valid admin token". **Registration form field**
   management (spec section 18's admin side) **done as of increment 8**,
-  and the **Testing/Developer Tools module** (section 54) **done as of
-  increment 10** (see above).
+  the **Testing/Developer Tools module** (section 54) **done as of
+  increment 10**, and the **System/Gateway/Integration/Notification/
+  Security Configuration screens** (section 51's remaining modules)
+  **done as of increment 13** (see above) - the last admin module the
+  spec names.
 - **Customer portal** (section 46): **`GET /customer/me` done as of
   increment 2** (active subscription, all subscriptions, payments,
   invoices). **SSO** (section 47) **done as of increment 9** - signed,
@@ -829,7 +1014,11 @@ called out in the relevant module's docstring too:
   30-37): **built as of increment 5** (see above) - queue-then-dispatch
   webhook delivery with HMAC signing and a retry schedule, driven by a
   Celery beat task, plus an admin Webhook Logs view with a manual retry
-  action (increment 7).
+  action (increment 7). **Provisioning result handling (failure + retry,
+  section 88's checklist) built as of increment 14** (see above) -
+  Everyticket's response body to the activation webhook now actually
+  drives `Subscription.provisioning_status`, the `CustomerApplicationMapping`
+  upsert, and a one-time customer notification on failure.
 - **Email notifications** (sections 49-50): **built as of increment 6**
   (see above) - real SMTP delivery for OTP/payment-success/payment-failed/
   subscription-cancelled/renewal-reminder, always logged to
@@ -858,9 +1047,10 @@ called out in the relevant module's docstring too:
   payment success/failure, MFA bypass, every admin CRUD mutation as of
   increment 7 (plan/feature/transition create-update-delete, customer
   suspend/activate, webhook delivery retry, template edit), registration-
-  form field create/update as of increment 8, and SSO test-link
-  generation as of increment 9. Still not wired into: system/gateway/
-  integration configuration changes (not built yet).
+  form field create/update as of increment 8, SSO test-link generation
+  as of increment 9, and every application-config change (general/
+  integration/payment/notification/subscription-rules/security) as of
+  increment 13.
 
 ## Local setup (what's runnable today)
 
@@ -935,12 +1125,22 @@ now, not the core:
    dynamic registration-form renderer, the SSO consume page, and the
    Testing Tools admin page.
 
-Remaining open items, roughly in spec order:
+Remaining open items:
 
-- **System / gateway / integration configuration** admin screens (spec
-  section 51's remaining config modules: Payment Gateway Configuration,
-  Everyticket Integration Configuration, Notification Configuration,
-  Security Configuration, System Configuration) and extending audit
-  logging to cover their changes once they exist.
-- A full regression pass + docs/README refresh once the above land,
-  before calling Phase 1 complete against the master spec.
+- **Section 88's Phase 1 acceptance checklist has been walked item by
+  item** (increment 14) - every item is satisfied by code in this repo
+  except two, both environment limitations rather than missing features:
+  "Docker Compose works" (no Docker daemon available in the environment
+  this was built in - `docker-compose.yml` exists and should be
+  sanity-checked once run for real) and the PayU adapter's real-sandbox
+  path ("PayU adapter exists" is satisfied - PayU's own test credentials
+  haven't been exercised end-to-end yet, which needs Vishal's own
+  credentials in his local `backend/.env`, never pasted into chat).
+- Docs/README refresh: **done as of increment 14** (this pass) - `README.md`,
+  `frontend/README.md`, and this file are all now current through
+  increment 14.
+- Everything above is unit-tested (97 tests) against SQLite; no end-to-end
+  manual pass against a real Postgres + real PayU sandbox + a real
+  Everyticket-shaped webhook receiver has been done in this environment -
+  that's the natural next step once Vishal is ready to test, per his own
+  standing instruction to test everything at the end.

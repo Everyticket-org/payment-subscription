@@ -123,3 +123,16 @@ class ActionNotAllowed(AppError):
 
     http_status = 403
     error_code = "ACTION_NOT_ALLOWED"
+
+
+class WebhookAlreadyDelivered(AppError):
+    """An admin tried to manually retry a webhook delivery that has
+    already SUCCEEDED (spec section 32: "Do not create duplicate
+    instances if the activation event is retried") - resending a
+    successfully-delivered subscription.activated event risks Everyticket
+    provisioning a second museum/instance for the same customer, so this
+    is refused rather than silently resetting an already-good delivery
+    back to PENDING."""
+
+    http_status = 409
+    error_code = "WEBHOOK_ALREADY_DELIVERED"

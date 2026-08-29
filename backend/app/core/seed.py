@@ -240,6 +240,12 @@ def seed(db: Session) -> AdminUser:
         body_html="<p>Hi,</p><p>Your invoice for the <strong>{{ plan_name }}</strong> plan is attached to this email as a PDF.</p><p>Invoice: {{ invoice_id }}<br/>Amount: {{ currency }} {{ amount }}<br/>Tax: {{ currency }} {{ tax_amount }}<br/>Total: {{ currency }} {{ total_amount }}</p>",
         body_text="Your invoice for the {{ plan_name }} plan is attached as a PDF. Invoice: {{ invoice_id }}. Amount: {{ currency }} {{ amount }}. Tax: {{ currency }} {{ tax_amount }}. Total: {{ currency }} {{ total_amount }}.",
     )
+    _get_or_create_template(
+        db, template_code="provisioning_issue",
+        subject="Setting up your {{ plan_name }} subscription",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription ({{ subscription_id }}) is active and your payment is confirmed. We're having a temporary issue finishing setup with our integration partner, and we're retrying automatically - there's nothing you need to do. We'll follow up if we need anything further from you.</p>",
+        body_text="Your {{ plan_name }} subscription ({{ subscription_id }}) is active and your payment is confirmed. We're having a temporary issue finishing setup with our integration partner and are retrying automatically - no action is needed from you.",
+    )
 
     db.commit()
     return admin_user

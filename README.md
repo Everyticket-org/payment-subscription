@@ -5,14 +5,17 @@ registration, payments, subscription lifecycle, invoicing, Everyticket
 integration, admin/customer portals). Everyticket itself - ticketing,
 booking, POS, etc. - is a separate application and is out of scope here.
 
-**Current status:** Phase 1 core is functionally complete - a working
-new-subscription -> payment -> active -> invoice flow (mock gateway AND a
-real PayU hosted-checkout integration, hash-verified both ways), admin
-login + MFA + a full permission-gated admin CRUD API/UI (plans,
-customers, subscriptions, payments, invoices, webhook logs, notification
-templates/logs, audit logs, dashboard, registration-form fields),
-duplicate customer detection + OTP verification with real email
-delivery, customer-portal upgrade/downgrade/renew/cancel, outbound
+**Current status:** Phase 1 is functionally complete against the master
+spec's ~90 sections - a working new-subscription -> payment -> active ->
+invoice flow (mock gateway AND a real PayU hosted-checkout integration,
+hash-verified both ways), admin login + MFA + a full permission-gated
+admin CRUD API/UI (plans, customers, subscriptions, payments, invoices,
+webhook logs, notification templates/logs, audit logs, dashboard,
+registration-form fields, plus Payment Gateway/Everyticket
+Integration/Notification/Subscription-Rules/Security configuration
+screens), duplicate customer detection + OTP verification with real
+email delivery, customer-portal upgrade/downgrade/renew/cancel (each
+individually admin-disable-able, and actually enforced), outbound
 Everyticket webhook dispatch with retry, Celery-beat-scheduled
 subscription expiry + renewal reminders, a dynamic per-application
 registration-form renderer, Everyticket SSO (signed single-use tokens,
@@ -24,19 +27,26 @@ OTP/MFA bypass toggles, and a test-data generator + cleanup - all
 TEST_MODE- and permission-gated) - an authenticated existing customer calling /subscribe for a
 different plan is now auto-routed to an upgrade/downgrade against their
 existing subscription instead of a flat refusal, and OTP resend requests
-are rate-limited. Invoices now carry real GST/tax calculation from an
+are rate-limited. Invoices carry real GST/tax calculation from an
 admin-configurable rate, PDF generation (rendered once, cached to disk),
 admin+customer download, and automatic-plus-on-demand email delivery
-with the PDF attached - all backed by a real Postgres schema and an
-83-test automated suite (`pytest tests/ -v`), plus hand-verified via curl
-against real Postgres. A React frontend covers the public subscribe flow
-(dynamic registration form; mock simulate buttons or a real PayU
-checkout redirect, depending on the application's configured gateway),
-customer OTP login + portal + SSO landing page, and the full admin
-console (standard sidebar-panel shell, every module a real page, plus a
-"TEST MODE" badge shown whenever the backend has it on) - see
-`frontend/README.md`. Still not built: the remaining system/gateway/
-integration configuration admin screens.
+with the PDF attached. Everyticket's response to the initial activation
+webhook is parsed for real (spec section 32): a successful response
+stores the returned external_customer_id/instance_id against the
+customer, while a failure (network error, non-2xx, or an explicit
+success:false body) sets the subscription's provisioning_status to
+FAILED, retries automatically on the same webhook backoff schedule, and
+emails the customer once - all without ever touching the
+payment/subscription's own status (spec section 30) - all backed by a
+real Postgres schema and a 97-test automated suite (`pytest tests/ -v`),
+plus hand-verified via curl against real Postgres. A React frontend
+covers the public subscribe flow (dynamic registration form; mock
+simulate buttons or a real PayU checkout redirect, depending on the
+application's configured gateway), customer OTP login + portal + SSO
+landing page, and the full admin console (standard sidebar-panel shell,
+every module a real page including a Configuration screen for all five
+config groups, plus a "TEST MODE" badge shown whenever the backend has it
+on) - see `frontend/README.md`.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.
