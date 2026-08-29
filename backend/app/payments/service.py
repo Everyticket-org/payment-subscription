@@ -26,6 +26,7 @@ from app.invoices.service import generate_invoice
 from app.payments.gateways.registry import get_gateway
 from app.payments.interfaces.gateway import GatewayPaymentResult
 from app.payments.models import PaymentTransaction
+from app.payments.schemas import PaymentTransactionOut
 from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
@@ -60,17 +61,48 @@ def create_payment_transaction(
     db.add(transaction)
     db.flush()
 
+    # Redirect-based gateways (PayU) need customer/plan display details the
+    # mock gateway ignores. This app doesn't collect a customer name field
+    # yet (see docs/implementation-status.md's dynamic-registration-form
+    # gap) so firstname is derived from the email's local part - a
+    # documented simplification, not a guess at PayU's own API.
+    derived_firstname = (customer.email.split("@")[0] if customer.email else "Customer").replace(".", " ").title()
     result = gateway.create_payment(
         transaction_id=transaction.transaction_id,
         amount=float(plan.price),
         currency=plan.currency,
-        metadata={"subscription_id": subscription.subscription_id, "customer_id": customer.customer_id},
+        metadata={
+            "subscription_id": subscription.subscription_id,
+            "customer_id": customer.customer_id,
+            "productinfo": plan.name,
+            "firstname": derived_firstname,
+            "email": customer.email,
+            "phone": customer.mobile,
+        },
     )
     transaction.gateway_transaction_id = result.gateway_transaction_id
     transaction.raw_gateway_response = result.raw_response
     db.add(transaction)
     db.flush()
     return transaction
+
+
+def build_payment_out(transaction: PaymentTransaction) -> PaymentTransactionOut:
+    """Builds the API-facing payment shape, surfacing PayU's hosted-checkout
+    form fields (action_url/fields/hash) when this is a redirect-based
+    gateway payment still awaiting the customer completing checkout on
+    PayU's own page. The mock gateway never sets these - checkout stays
+    None and the frontend keeps using its existing "simulate payment"
+    buttons."""
+    payment_out = PaymentTransactionOut.model_validate(transaction)
+    if (
+        transaction.gateway == "payu"
+        and transaction.status == "PENDING"
+        and isinstance(transaction.raw_gateway_response, dict)
+        and "fields" in transaction.raw_gateway_response
+    ):
+        payment_out.checkout = transaction.raw_gateway_response
+    return payment_out
 
 
 def process_gateway_result(

@@ -155,7 +155,9 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
     db.refresh(customer)
     db.refresh(subscription)
     db.refresh(payment)
-    return SubscribeResponse(customer=customer, subscription=subscription, payment=payment)
+    return SubscribeResponse(
+        customer=customer, subscription=subscription, payment=payment_service.build_payment_out(payment)
+    )
 
 
 @router.post("/subscriptions/{subscription_id}/renew", response_model=SubscribeResponse)
@@ -184,7 +186,9 @@ def renew(
     db.refresh(customer)
     db.refresh(subscription)
     db.refresh(payment)
-    return SubscribeResponse(customer=customer, subscription=subscription, payment=payment)
+    return SubscribeResponse(
+        customer=customer, subscription=subscription, payment=payment_service.build_payment_out(payment)
+    )
 
 
 @router.post("/subscriptions/{subscription_id}/cancel", response_model=PortalSubscriptionOut)

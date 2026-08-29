@@ -201,4 +201,6 @@ def subscribe(
     db.refresh(subscription)
     db.refresh(payment)
 
-    return SubscribeResponse(customer=customer, subscription=subscription, payment=payment)
+    return SubscribeResponse(
+        customer=customer, subscription=subscription, payment=payment_service.build_payment_out(payment)
+    )

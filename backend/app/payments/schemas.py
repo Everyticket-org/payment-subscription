@@ -9,6 +9,13 @@ class PaymentTransactionOut(BaseModel):
     amount: float
     currency: str
     status: str
+    failure_reason: str | None = None
+    # Populated only for redirect-based gateways (PayU) whose payment is
+    # PENDING and needs the browser to POST to a hosted checkout page -
+    # not an ORM attribute, so callers set this explicitly after
+    # constructing the base object from the PaymentTransaction row (see
+    # app/api/v1/public.py and customer.py). None for the mock gateway.
+    checkout: dict | None = None
 
 
 class MockCallbackRequest(BaseModel):
