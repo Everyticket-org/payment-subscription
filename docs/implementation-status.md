@@ -586,6 +586,78 @@ past the real TTL - unknown-token rejection, and both admin-endpoint
 gates), full suite 56/57 (same pre-existing `/ready` gap); frontend `npm
 run build` clean in the isolated scratch copy, 56 modules.
 
+## Increment 10 (2026-08-29): admin Testing/Developer Tools module
+
+Closes spec section 54 ("mandatory... must allow complete testing without
+repeatedly performing real payments"). New `app/api/v1/admin_testing.py`,
+gated by two stacked dependencies on every endpoint: a new
+`require_test_mode()` (`app/auth/deps.py`) plus `require_permission
+("TESTING_TOOLS_USE")` (new permission code) - and every mutating action
+writes an audit-log entry (spec section 56 explicitly lists "Test payment
+simulated" as an example). `require_test_mode()` was factored out of the
+inline check the increment-9 SSO test-link endpoint already had, so both
+now share one gate.
+
+Each tool deliberately reuses the exact internal service function a real
+request would use, rather than a parallel "test" code path:
+
+- **TEST PAYMENT**: drives `payment_service.simulate_mock_callback()` -
+  SUCCESS/FAILED/PENDING/TIMEOUT, plus DUPLICATE_CALLBACK (calls SUCCESS
+  twice to exercise the idempotency guard). Always MockPaymentGateway,
+  per the spec's own wording - PayU's hosted-checkout redirect can't be
+  driven headlessly from an admin click.
+- **TEST SUBSCRIPTION EVENTS**: ACTIVATE/RENEW/UPGRADE/DOWNGRADE/CANCEL/
+  EXPIRE/PAYMENT_FAILED, calling the same `subscription_service`
+  functions a real payment callback or the Celery beat expiry sweep
+  would call.
+- **TEST EVERYTICKET WEBHOOK**: new `webhook_service.send_ad_hoc_webhook()`
+  - a signed one-off POST of admin-edited JSON/headers to the
+  application's configured destination. Never writes a
+  WebhookEvent/WebhookDelivery row (a live diagnostic send, not a real
+  business event) - shows request/response/HTTP status/elapsed time.
+- **WEBHOOK FAILURE SIMULATOR**: queues one real delivery row, then
+  attempts just that row (new `webhook_service.attempt_delivery_with_client()`,
+  a public wrapper around the existing `_attempt_one()`) through an
+  `httpx.MockTransport` forced to return 400/401/404/500 or raise a
+  timeout - verifies the real retry-schedule/EXHAUSTED bookkeeping
+  without ever touching any other pending delivery a real integration
+  might have queued concurrently.
+- **TEST EMAIL**: calls `send_templated_email()` directly with sample
+  context values matching each seeded template's variables, and reports
+  back the `NotificationLog` row it wrote.
+- **TEST SSO**: no new endpoint - reuses the increment-9
+  `POST /admin/customers/{id}/sso-link` action directly; the frontend
+  page just points at it.
+- **OTP/MFA BYPASS**: toggles `ALLOW_OTP_BYPASS`/`ALLOW_ADMIN_MFA_BYPASS`
+  on the cached `Settings` singleton in-memory only (never persisted,
+  resets to `.env` on restart) - reachable at all only because
+  `require_test_mode()` already guarantees `is_production` is False
+  (`enforce_test_mode_restrictions` force-resets `TEST_MODE` regardless
+  of env misconfiguration); an explicit `is_production` check is kept
+  anyway as deliberate defense-in-depth per spec section 55's "never
+  rely only on hiding frontend routes."
+- **TEST DATA GENERATOR**: one call creates a full linked customer/plan/
+  subscription/payment/invoice/Everyticket-mapping chain, marked with a
+  `TEST-` plan_code prefix and `@test.invalid` customer email domain
+  (spec: "mark test records clearly as TEST"); cleanup deletes exactly
+  those rows, in FK-safe child-to-parent order, identified solely by
+  those two markers so it can never touch real data.
+
+**Frontend**: new `AdminTestingPage` (one section per tool, plus a
+read-only environment-status panel with the two bypass toggle buttons),
+wired into `AdminLayout`'s nav. `AdminLayout`'s topbar also gained a
+prominent "TEST MODE" badge whenever the backend reports `TEST_MODE` is
+on (spec section 55's "display TEST MODE prominently in development/
+staging").
+
+Verified with 15 new tests (`tests/test_admin_testing.py`: both gates,
+every tool's happy path including the UPGRADE-needs-target-plan
+validation, and an OTP-bypass toggle round-trip that restores state in a
+`finally` block since `Settings` is one process-wide cached instance
+shared by every test in the run). Full suite: 71 total, 70 passing (same
+pre-existing `/ready` gap); frontend `npm run build` clean in the
+isolated scratch copy, 57 modules.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -615,9 +687,9 @@ called out in the relevant module's docstring too:
   logs, and audit logs are all real endpoints with a real UI, and every
   one of them checks a specific permission (`require_permission`), not
   just "is this token a valid admin token". **Registration form field**
-  management (spec section 18's admin side) **done as of increment 8**
-  (see above). Still missing: the Testing/Developer Tools module (section
-  54, see below).
+  management (spec section 18's admin side) **done as of increment 8**,
+  and the **Testing/Developer Tools module** (section 54) **done as of
+  increment 10** (see above).
 - **Customer portal** (section 46): **`GET /customer/me` done as of
   increment 2** (active subscription, all subscriptions, payments,
   invoices). **SSO** (section 47) **done as of increment 9** - signed,
@@ -648,15 +720,13 @@ called out in the relevant module's docstring too:
   approach, spec section 73) - confirm with `celery -A app.core.celery_app
   worker` / `celery -A app.core.celery_app beat` before relying on it in
   a real deployment.
-- **Testing/simulation admin module** (section 54): still not built as
-  its own dedicated admin module. The mock payment simulator exists as a
-  plain, non-admin-gated API endpoint (`POST /api/v1/payment/mock/
-  callback`); there's no admin-facing TEST PAYMENT/TEST SUBSCRIPTION
-  EVENTS/TEST EVERYTICKET WEBHOOK/WEBHOOK FAILURE SIMULATOR/TEST EMAIL/
-  TEST SSO/OTP-MFA-bypass-toggle/TEST DATA GENERATOR surface yet - this is
-  the next logical piece now that the admin CRUD API + UI it would sit
-  alongside exists (increment 7).
-- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3, admin CRUD UI added in increment 7, dynamic registration-form renderer added in increment 8, SSO consume page added in increment 9** (see above) - public plan/subscribe flow (now with the dynamic per-application registration form), customer OTP login + portal + SSO landing page, admin login/MFA + dashboard + full admin CRUD console (plans/customers/subscriptions/payments/invoices/webhooks/notifications/audit logs/registration-form fields). Still missing: any Testing-module UI (section 54, since the module itself isn't built yet).
+- **Testing/simulation admin module** (section 54): **built as of
+  increment 10** (see above) - TEST PAYMENT, TEST SUBSCRIPTION EVENTS,
+  TEST EVERYTICKET WEBHOOK, WEBHOOK FAILURE SIMULATOR, TEST EMAIL, TEST
+  SSO (reuses increment 9's admin sso-link action), OTP/MFA bypass
+  toggles, and a TEST DATA GENERATOR + cleanup, all TEST_MODE- and
+  permission-gated with a real admin UI.
+- **React frontend** (section 77 of the original spec said Angular; corrected to React by Vishal on 2026-08-27 - see "Framework correction" note below): **built as of increment 3, admin CRUD UI added in increment 7, dynamic registration-form renderer added in increment 8, SSO consume page added in increment 9, Testing Tools page added in increment 10** (see above) - public plan/subscribe flow (with the dynamic per-application registration form), customer OTP login + portal + SSO landing page, and a full admin console (dashboard, plans, customers, subscriptions, payments, invoices, webhooks, notifications, audit logs, registration-form fields, and the Testing/Developer Tools module, with a "TEST MODE" badge shown whenever the backend has it on).
 - **Audit logging**: the `record()` helper and table exist; used for
   payment success/failure, MFA bypass, every admin CRUD mutation as of
   increment 7 (plan/feature/transition create-update-delete, customer
@@ -740,13 +810,6 @@ now, not the core:
 
 Remaining open items, roughly in spec order:
 
-- **Testing/Developer Tools admin module** (section 54) - TEST PAYMENT/
-  TEST SUBSCRIPTION EVENTS/TEST EVERYTICKET WEBHOOK/WEBHOOK FAILURE
-  SIMULATOR/TEST EMAIL/TEST SSO/OTP-MFA-bypass toggles/TEST DATA
-  GENERATOR, all behind admin auth+permissions (reuse `require_permission`
-  from increment 7). The "TEST SSO" piece can now reuse increment 9's
-  `create_sso_token()`/consume-link plumbing directly rather than
-  building it from scratch.
 - **OTP resend cooldown** (`OTP_RESEND_COOLDOWN_SECONDS` exists, nothing
   reads it) and **SAME/HIGHER/LOWER/EXPIRED plan auto-routing** on
   `/subscribe` for an existing active subscriber (today that path just

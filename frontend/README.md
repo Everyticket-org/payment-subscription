@@ -3,11 +3,14 @@
 React + TypeScript + Vite. Covers the public plan/subscribe flow (with a dynamic
 per-application registration form), customer OTP login + portal (view subscription,
 upgrade/downgrade/renew/cancel) + an Everyticket SSO landing page, and a full admin console:
-login (password + MFA), a real dashboard, and CRUD/read-only screens for plans, customers,
+login (password + MFA), a real dashboard, CRUD/read-only screens for plans, customers,
 subscriptions, payments, invoices, webhook logs, notification templates/logs, audit logs, and
-registration-form fields (plus a "Generate test SSO link" action on the customer detail page).
-See `docs/implementation-status.md` at the repo root for what's built vs. still spec - the
-Testing/Developer Tools admin module is the main frontend gap left.
+registration-form fields (plus a "Generate test SSO link" action on the customer detail page),
+and a Testing/Developer Tools page (test payment simulation, test subscription events, a live
+webhook sender, a webhook failure/retry simulator, test email sending, OTP/MFA bypass toggles,
+and a test-data generator + cleanup) with a "TEST MODE" badge shown in the admin topbar whenever
+the backend has it on. See `docs/implementation-status.md` at the repo root for what's built vs.
+still spec.
 
 ## Local development
 

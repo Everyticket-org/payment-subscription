@@ -15,19 +15,23 @@ duplicate customer detection + OTP verification with real email
 delivery, customer-portal upgrade/downgrade/renew/cancel, outbound
 Everyticket webhook dispatch with retry, Celery-beat-scheduled
 subscription expiry + renewal reminders, a dynamic per-application
-registration-form renderer, and Everyticket SSO (signed single-use
-tokens, DB-backed replay protection, a TEST_MODE admin action to
-generate a working test link) - all backed by a real Postgres schema and
-a 56-test automated suite (`pytest tests/ -v`), plus hand-verified via
-curl against real Postgres. A React frontend covers the public subscribe
-flow (dynamic registration form; mock simulate buttons or a real PayU
-checkout redirect, depending on the application's configured gateway),
-customer OTP login + portal + SSO landing page, and the full admin
-console (standard sidebar-panel shell, every module a real page) - see
-`frontend/README.md`. Still not built: the Testing/Developer Tools admin
-module (spec section 54), invoice PDF generation, OTP resend cooldown /
-plan auto-routing on repurchase, and the remaining system/gateway/
-integration configuration admin screens.
+registration-form renderer, Everyticket SSO (signed single-use tokens,
+DB-backed replay protection, a TEST_MODE admin action to generate a
+working test link), and a full admin Testing/Developer Tools module
+(test payment simulation, test subscription events, a live webhook
+sender, a webhook failure/retry simulator, test email sending, test SSO,
+OTP/MFA bypass toggles, and a test-data generator + cleanup - all
+TEST_MODE- and permission-gated) - all backed by a real Postgres schema
+and a 71-test automated suite (`pytest tests/ -v`), plus hand-verified
+via curl against real Postgres. A React frontend covers the public
+subscribe flow (dynamic registration form; mock simulate buttons or a
+real PayU checkout redirect, depending on the application's configured
+gateway), customer OTP login + portal + SSO landing page, and the full
+admin console (standard sidebar-panel shell, every module a real page,
+plus a "TEST MODE" badge shown whenever the backend has it on) - see
+`frontend/README.md`. Still not built: invoice PDF generation, OTP resend
+cooldown / plan auto-routing on repurchase, and the remaining system/
+gateway/integration configuration admin screens.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.
