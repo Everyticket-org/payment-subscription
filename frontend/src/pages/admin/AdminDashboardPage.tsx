@@ -1,55 +1,54 @@
 /**
- * Deliberately minimal: the backend has no admin CRUD API yet beyond
- * login/me (see docs/implementation-status.md - plans/customers/
- * subscriptions/payments/invoices/webhook-logs/audit-logs admin
- * endpoints are still on the roadmap), so there's nothing further to
- * build here until that surface exists. This confirms the admin session
- * works and gives a clear "nothing here yet" rather than a broken page.
+ * Admin dashboard (spec section 52): active/new subscriptions, revenue,
+ * failed payments, expiring/expired subscriptions, provisioning
+ * failures, webhook failures - backed by GET /api/v1/admin/dashboard.
  */
 import { useEffect, useState } from "react";
-import { getAdminMe } from "../../api/endpoints";
+import { getAdminDashboard } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
-import type { AdminUserOut } from "../../api/types";
+import type { DashboardStatsOut } from "../../api/types";
+
+function Stat({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="stat-card">
+      <p className="stat-label">{label}</p>
+      <p className="stat-value">{value}</p>
+    </div>
+  );
+}
 
 export function AdminDashboardPage() {
   const { adminToken } = useAuth();
-  const [me, setMe] = useState<AdminUserOut | null>(null);
+  const [stats, setStats] = useState<DashboardStatsOut | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
     if (!adminToken) return;
-    getAdminMe(adminToken).then(setMe).catch(setError);
+    getAdminDashboard(adminToken).then(setStats).catch(setError);
   }, [adminToken]);
 
   return (
     <section>
       <h1>Dashboard</h1>
+      <p className="lede">Everyticket subscriptions at a glance - last 30 days unless noted.</p>
 
       <ErrorBanner error={error} />
 
-      {me && (
-        <div className="card">
-          <dl className="summary-list">
-            <dt>Email</dt>
-            <dd>{me.email}</dd>
-            <dt>Name</dt>
-            <dd>{me.full_name}</dd>
-            <dt>Roles</dt>
-            <dd>{me.roles.join(", ") || "-"}</dd>
-            <dt>MFA</dt>
-            <dd>{me.mfa_enabled ? "Enabled" : "Disabled"}</dd>
-          </dl>
+      {stats === null && !error && <p>Loading...</p>}
+
+      {stats && (
+        <div className="stat-grid">
+          <Stat label="Active subscriptions" value={stats.active_subscriptions} />
+          <Stat label="New subscriptions (30d)" value={stats.new_subscriptions_30d} />
+          <Stat label="Revenue (30d)" value={`${stats.revenue_currency} ${stats.revenue_30d.toFixed(2)}`} />
+          <Stat label="Failed payments (30d)" value={stats.failed_payments_30d} />
+          <Stat label="Expiring within 7 days" value={stats.expiring_within_7d} />
+          <Stat label="Expired subscriptions" value={stats.expired_total} />
+          <Stat label="Provisioning failures" value={stats.provisioning_failures} />
+          <Stat label="Webhook failures" value={stats.webhook_failures} />
         </div>
       )}
-
-      <div className="card">
-        <p className="hint">
-          There's no admin management API yet (plans, customers, subscriptions, payments, invoices,
-          webhook/audit logs) - this page just confirms your admin session works. See
-          docs/implementation-status.md for what's planned next.
-        </p>
-      </div>
     </section>
   );
 }

@@ -143,3 +143,221 @@ export interface ApiErrorBody {
   error_code: string;
   message: string;
 }
+
+
+// --- Admin (mirrors backend/app/api/v1/admin_*.py + the schemas they use) ---
+
+export interface PageOut<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DashboardStatsOut {
+  active_subscriptions: number;
+  new_subscriptions_30d: number;
+  revenue_30d: number;
+  revenue_currency: string;
+  failed_payments_30d: number;
+  expiring_within_7d: number;
+  expired_total: number;
+  provisioning_failures: number;
+  webhook_failures: number;
+}
+
+export interface PlanFeatureAdminOut {
+  id: number;
+  feature_key: string;
+  feature_label: string;
+  feature_value?: string | null;
+  display_order: number;
+}
+
+export interface PlanAdminOut {
+  plan_code: string;
+  name: string;
+  description?: string | null;
+  price: number;
+  currency: string;
+  billing_interval: string;
+  billing_frequency: number;
+  active: boolean;
+  display_order: number;
+  features: PlanFeatureAdminOut[];
+}
+
+export interface PlanCreateInput {
+  plan_code: string;
+  name: string;
+  description?: string;
+  price: number;
+  currency?: string;
+  billing_interval?: "month" | "year";
+  billing_frequency?: number;
+  display_order?: number;
+}
+
+export interface PlanUpdateInput {
+  name?: string;
+  description?: string;
+  price?: number;
+  currency?: string;
+  billing_interval?: "month" | "year";
+  billing_frequency?: number;
+  active?: boolean;
+  display_order?: number;
+}
+
+export interface PlanTransitionOut {
+  id: number;
+  from_plan_code: string;
+  to_plan_code: string;
+  transition_type: "UPGRADE" | "DOWNGRADE";
+}
+
+export interface CustomerAdminListItem {
+  customer_id: string;
+  email: string;
+  mobile: string;
+  status: string;
+  created_at: string;
+}
+
+export interface RegistrationDataOut {
+  application_id: number;
+  subscription_id: number | null;
+  data: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ApplicationMappingOut {
+  external_customer_id: string | null;
+  external_instance_id: string | null;
+}
+
+export interface SubscriptionAdminOut {
+  subscription_id: string;
+  customer_id: string;
+  plan_code: string;
+  plan_name: string;
+  status: string;
+  provisioning_status: string;
+  starts_at: string | null;
+  expires_at: string | null;
+  cancelled_at: string | null;
+  cancellation_reason: string | null;
+  created_at: string;
+}
+
+export interface SubscriptionHistoryOut {
+  event_type: string;
+  occurred_at: string;
+  event_metadata: Record<string, unknown> | null;
+}
+
+export interface SubscriptionDetailAdminOut {
+  subscription: SubscriptionAdminOut;
+  history: SubscriptionHistoryOut[];
+}
+
+export interface PaymentAdminOut {
+  transaction_id: string;
+  customer_id: string;
+  subscription_id: string;
+  plan_code: string;
+  gateway: string;
+  gateway_transaction_id?: string | null;
+  amount: number;
+  currency: string;
+  payment_type: string;
+  status: string;
+  failure_reason?: string | null;
+  created_at: string;
+  updated_at: string;
+  raw_gateway_response?: Record<string, unknown> | null;
+}
+
+export interface InvoiceItemOut {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+}
+
+export interface InvoiceAdminOut {
+  invoice_id: string;
+  customer_id: string;
+  subscription_id: string;
+  transaction_id: string;
+  invoice_date: string;
+  billing_period_start: string;
+  billing_period_end: string;
+  gst_number?: string | null;
+  amount: number;
+  tax_amount: number;
+  total_amount: number;
+  currency: string;
+  items: InvoiceItemOut[];
+}
+
+export interface CustomerAdminDetailOut {
+  customer: Customer;
+  registration_data: RegistrationDataOut[];
+  application_mapping: ApplicationMappingOut | null;
+  subscriptions: SubscriptionAdminOut[];
+  payments: PaymentAdminOut[];
+  invoices: InvoiceAdminOut[];
+}
+
+export interface WebhookDeliveryOut {
+  id: number;
+  destination_url: string;
+  status: string;
+  attempt_count: number;
+  http_status?: number | null;
+  response_body?: string | null;
+  last_attempt_at?: string | null;
+  next_retry_at?: string | null;
+}
+
+export interface WebhookEventOut {
+  event_id: string;
+  event_type: string;
+  entity_type: string;
+  entity_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+  deliveries: WebhookDeliveryOut[];
+}
+
+export interface NotificationTemplateOut {
+  template_code: string;
+  channel: string;
+  subject: string;
+  body_html: string;
+  body_text?: string | null;
+  active: boolean;
+}
+
+export interface NotificationLogOut {
+  template_code: string;
+  channel: string;
+  recipient: string;
+  status: string;
+  provider_response?: string | null;
+  related_entity_type?: string | null;
+  related_entity_id?: string | null;
+  created_at: string;
+}
+
+export interface AuditLogOut {
+  actor: string;
+  action: string;
+  entity_type: string;
+  entity_id: string;
+  old_value?: Record<string, unknown> | null;
+  new_value?: Record<string, unknown> | null;
+  ip_address?: string | null;
+  created_at: string;
+}

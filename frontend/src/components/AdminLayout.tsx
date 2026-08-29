@@ -1,25 +1,24 @@
 /**
  * Standard admin-panel chrome: fixed sidebar nav + topbar, replacing the
  * public site's header/footer entirely for everything under /admin
- * (spec sections 12, 51-53). Only "Dashboard" is a real page today -
- * Plans/Customers/Subscriptions/Payments/Invoices/Webhook Logs/Audit Logs
- * are listed and disabled rather than hidden, so the shell communicates
- * the intended admin surface even before docs/implementation-status.md's
- * admin CRUD API exists to back them (see that file for the current
- * status of each).
+ * (spec sections 12, 51-53). Every module below is backed by a real
+ * admin_*.py API router (see docs/implementation-status.md) - Testing/
+ * Developer Tools (spec section 54), SSO, and dynamic registration-form
+ * management are the remaining not-yet-built admin surfaces.
  */
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
   { label: "Dashboard", path: "/admin", enabled: true },
-  { label: "Plans", path: "/admin/plans", enabled: false },
-  { label: "Customers", path: "/admin/customers", enabled: false },
-  { label: "Subscriptions", path: "/admin/subscriptions", enabled: false },
-  { label: "Payments", path: "/admin/payments", enabled: false },
-  { label: "Invoices", path: "/admin/invoices", enabled: false },
-  { label: "Webhook logs", path: "/admin/webhooks", enabled: false },
-  { label: "Audit logs", path: "/admin/audit", enabled: false },
+  { label: "Plans", path: "/admin/plans", enabled: true },
+  { label: "Customers", path: "/admin/customers", enabled: true },
+  { label: "Subscriptions", path: "/admin/subscriptions", enabled: true },
+  { label: "Payments", path: "/admin/payments", enabled: true },
+  { label: "Invoices", path: "/admin/invoices", enabled: true },
+  { label: "Webhook logs", path: "/admin/webhooks", enabled: true },
+  { label: "Notifications", path: "/admin/notifications", enabled: true },
+  { label: "Audit logs", path: "/admin/audit", enabled: true },
 ];
 
 export function AdminLayout() {
@@ -38,7 +37,12 @@ export function AdminLayout() {
               <Link
                 key={item.path}
                 to={item.path}
-                className={"admin-nav-link" + (location.pathname === item.path ? " active" : "")}
+                className={
+                  "admin-nav-link" +
+                  ((item.path === "/admin" ? location.pathname === item.path : location.pathname.startsWith(item.path))
+                    ? " active"
+                    : "")
+                }
               >
                 {item.label}
               </Link>

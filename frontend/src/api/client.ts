@@ -30,7 +30,7 @@ export class ApiError extends Error {
 }
 
 interface RequestOptions {
-  method?: "GET" | "POST" | "PATCH" | "DELETE";
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string | null;
 }
@@ -78,8 +78,26 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   return data as T;
 }
 
+/** Appends non-empty query params to a path - shared by every admin list
+ * endpoint (limit/offset plus a handful of optional filters). Skips
+ * undefined/null/"" values entirely rather than sending `?status=` empty,
+ * which several backend Query(...) filters would otherwise treat as a
+ * literal empty-string filter instead of "no filter". */
+export function withQuery(path: string, params: Record<string, string | number | undefined | null>): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    search.set(key, String(value));
+  }
+  const qs = search.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 export const api = {
   get: <T>(path: string, token?: string | null) => request<T>(path, { method: "GET", token }),
   post: <T>(path: string, body?: unknown, token?: string | null) =>
     request<T>(path, { method: "POST", body: body ?? {}, token }),
+  put: <T>(path: string, body?: unknown, token?: string | null) =>
+    request<T>(path, { method: "PUT", body: body ?? {}, token }),
+  delete: <T>(path: string, token?: string | null) => request<T>(path, { method: "DELETE", token }),
 };
