@@ -27,6 +27,10 @@ import type {
   PlanTransitionOut,
   PlanUpdateInput,
   PortalSubscriptionOut,
+  RegistrationFormFieldAdminOut,
+  RegistrationFormFieldCreateInput,
+  RegistrationFormFieldOut,
+  RegistrationFormFieldUpdateInput,
   SubscribeResponse,
   SubscriptionAdminOut,
   SubscriptionDetailAdminOut,
@@ -49,6 +53,9 @@ export const subscribe = (
 
 export const identify = (email: string, mobile: string) =>
   api.post<IdentifyResponse>("/api/v1/public/identify", { email, mobile });
+
+export const getRegistrationForm = () =>
+  api.get<RegistrationFormFieldOut[]>("/api/v1/public/registration-form");
 
 export const verifyOtp = (otpSessionId: string, code: string) =>
   api.post<OtpVerifyResponse>("/api/v1/public/otp/verify", { otp_session_id: otpSessionId, code });
@@ -215,6 +222,20 @@ export const adminListNotificationLogs = (
   params: { status?: string; template_code?: string; recipient?: string; limit?: number; offset?: number },
   token: string,
 ) => api.get<PageOut<NotificationLogOut>>(withQuery("/api/v1/admin/notifications/logs", params), token);
+
+// --- Admin: registration form fields ---
+
+export const adminListRegistrationFormFields = (token: string) =>
+  api.get<RegistrationFormFieldAdminOut[]>("/api/v1/admin/registration-form", token);
+
+export const adminCreateRegistrationFormField = (body: RegistrationFormFieldCreateInput, token: string) =>
+  api.post<RegistrationFormFieldAdminOut>("/api/v1/admin/registration-form", body, token);
+
+export const adminUpdateRegistrationFormField = (
+  fieldId: number,
+  body: RegistrationFormFieldUpdateInput,
+  token: string,
+) => api.put<RegistrationFormFieldAdminOut>(`/api/v1/admin/registration-form/${fieldId}`, body, token);
 
 // --- Admin: audit logs ---
 

@@ -12,6 +12,7 @@ docs/implementation-status.md).
 PERMISSIONS: list[tuple[str, str]] = [
     ("DASHBOARD_VIEW", "View admin dashboard"),
     ("PLANS_MANAGE", "Create/edit/deactivate plans, features, and transitions"),
+    ("FORMS_MANAGE", "Create/edit/deactivate dynamic registration-form fields"),
     ("CUSTOMERS_VIEW", "View customer details"),
     ("CUSTOMERS_MANAGE", "Suspend/reactivate customers"),
     ("SUBSCRIPTIONS_VIEW", "View subscriptions and subscription history"),

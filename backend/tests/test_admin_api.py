@@ -262,3 +262,56 @@ def test_admin_without_permission_gets_403(client, seeded_db, db_session):
     resp = client.get("/api/v1/admin/dashboard", headers=headers)
     assert resp.status_code == 403
     assert resp.json()["error_code"] == "FORBIDDEN"
+
+
+def test_registration_form_public_and_admin_crud(client, seeded_db):
+    # Public: the seeded fields (museum_name, contact_person, gstin,
+    # address) are readable with no auth at all - this is what the
+    # dynamic form renderer (spec section 8) fetches.
+    public = client.get("/api/v1/public/registration-form")
+    assert public.status_code == 200, public.text
+    keys = {f["field_key"] for f in public.json()}
+    assert {"museum_name", "contact_person"}.issubset(keys)
+
+    headers = _admin_headers(client)
+
+    create = client.post(
+        "/api/v1/admin/registration-form",
+        json={"field_key": "tax_id", "label": "Tax ID", "field_type": "text", "required": False},
+        headers=headers,
+    )
+    assert create.status_code == 201, create.text
+    field_id = create.json()["id"]
+
+    duplicate = client.post(
+        "/api/v1/admin/registration-form",
+        json={"field_key": "tax_id", "label": "Dup", "field_type": "text"},
+        headers=headers,
+    )
+    assert duplicate.status_code == 409
+
+    listing = client.get("/api/v1/admin/registration-form", headers=headers)
+    assert listing.status_code == 200
+    assert any(f["field_key"] == "tax_id" for f in listing.json())
+
+    update = client.put(
+        f"/api/v1/admin/registration-form/{field_id}",
+        json={"label": "GST/Tax ID", "required": True},
+        headers=headers,
+    )
+    assert update.status_code == 200
+    assert update.json()["label"] == "GST/Tax ID"
+    assert update.json()["required"] is True
+
+    # New field should now show up on the public endpoint too.
+    public_after = client.get("/api/v1/public/registration-form")
+    assert any(f["field_key"] == "tax_id" for f in public_after.json())
+
+    deactivate = client.put(
+        f"/api/v1/admin/registration-form/{field_id}", json={"active": False}, headers=headers
+    )
+    assert deactivate.status_code == 200
+    assert deactivate.json()["active"] is False
+
+    public_after_deactivate = client.get("/api/v1/public/registration-form")
+    assert not any(f["field_key"] == "tax_id" for f in public_after_deactivate.json())

@@ -12,6 +12,7 @@ import { useAuth } from "../context/AuthContext";
 const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
   { label: "Dashboard", path: "/admin", enabled: true },
   { label: "Plans", path: "/admin/plans", enabled: true },
+  { label: "Registration form", path: "/admin/registration-form", enabled: true },
   { label: "Customers", path: "/admin/customers", enabled: true },
   { label: "Subscriptions", path: "/admin/subscriptions", enabled: true },
   { label: "Payments", path: "/admin/payments", enabled: true },

@@ -63,6 +63,7 @@ def me(current: AdminUser = Depends(get_current_admin)):
 from app.api.v1.admin_audit import router as admin_audit_router
 from app.api.v1.admin_customers import router as admin_customers_router
 from app.api.v1.admin_dashboard import router as admin_dashboard_router
+from app.api.v1.admin_forms import router as admin_forms_router
 from app.api.v1.admin_invoices import router as admin_invoices_router
 from app.api.v1.admin_notifications import router as admin_notifications_router
 from app.api.v1.admin_payments import router as admin_payments_router
@@ -72,6 +73,7 @@ from app.api.v1.admin_webhooks import router as admin_webhooks_router
 
 router.include_router(admin_dashboard_router)
 router.include_router(admin_plans_router)
+router.include_router(admin_forms_router)
 router.include_router(admin_customers_router)
 router.include_router(admin_subscriptions_router)
 router.include_router(admin_payments_router)

@@ -14,15 +14,16 @@
  *      subscribe -> pay -> active loop is actually exercisable end to
  *      end from the browser.
  *
- * registration_data is sent as {} - the dynamic registration-form
- * renderer (spec section 8) isn't built yet, see
- * docs/implementation-status.md.
+ * registration_data is collected via DynamicRegistrationForm (spec
+ * section 8), driven by whatever active RegistrationFormField rows the
+ * admin has configured for this application - no hardcoded field set.
  */
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { identify, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import type { MockCallbackResult, SubscribeResponse } from "../../api/types";
@@ -42,8 +43,11 @@ export function SubscribePage() {
   const [debugOtpCode, setDebugOtpCode] = useState<string | null>(null);
   const [subscribeResult, setSubscribeResult] = useState<SubscribeResponse | null>(null);
   const [callbackResult, setCallbackResult] = useState<MockCallbackResult | null>(null);
+  const [registrationValues, setRegistrationValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+
+  const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields();
 
   if (!planCode) {
     return <p>No plan selected.</p>;
@@ -55,7 +59,7 @@ export function SubscribePage() {
     try {
       const result = await subscribe(
         planCode!,
-        token ? {} : { email, mobile, registration_data: {} },
+        token ? { registration_data: registrationValues } : { email, mobile, registration_data: registrationValues },
         token,
       );
       setSubscribeResult(result);
@@ -120,12 +124,20 @@ export function SubscribePage() {
     <section>
       <h1>Subscribe to {planCode}</h1>
       <ErrorBanner error={error} />
+      <ErrorBanner error={registrationFieldsError} />
 
       {step === "form" && (
         <>
           {customerToken ? (
             <div className="card">
               <p>You're signed in - subscribe using your existing account.</p>
+              {registrationFields && (
+                <DynamicRegistrationForm
+                  fields={registrationFields}
+                  values={registrationValues}
+                  onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                />
+              )}
               <button className="button button-primary" disabled={busy} onClick={() => doSubscribe(customerToken)}>
                 {busy ? "Subscribing..." : "Subscribe with my account"}
               </button>
@@ -152,6 +164,13 @@ export function SubscribePage() {
                   placeholder="9XXXXXXXXX"
                 />
               </label>
+              {registrationFields && (
+                <DynamicRegistrationForm
+                  fields={registrationFields}
+                  values={registrationValues}
+                  onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                />
+              )}
               <button className="button button-primary" type="submit" disabled={busy}>
                 {busy ? "Please wait..." : "Continue"}
               </button>

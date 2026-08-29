@@ -42,6 +42,8 @@ from app.core.enums import PaymentType
 from app.core.exceptions import ConflictingCustomerIdentity, OtpVerificationRequired, PlanNotFound, Unauthorized
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
+from app.forms.models import RegistrationFormField
+from app.forms.schemas import RegistrationFormFieldOut
 from app.notifications.email import service as email_service
 from app.customers.schemas import (
     CustomerOut,
@@ -86,6 +88,21 @@ def get_plan(plan_code: str, db: Session = Depends(get_db), application: Applica
     if plan is None:
         raise PlanNotFound(f"No active plan '{plan_code}'")
     return plan
+
+
+@router.get("/registration-form", response_model=list[RegistrationFormFieldOut])
+def get_registration_form(db: Session = Depends(get_db), application: Application = Depends(get_application)):
+    """Spec section 8: the dynamic form renderer's data source - active
+    fields only, in display order. Frontend renders one input per row and
+    submits the collected values as SubscribeRequest.registration_data,
+    keyed by field_key."""
+    fields = (
+        db.query(RegistrationFormField)
+        .filter(RegistrationFormField.application_id == application.id, RegistrationFormField.active.is_(True))
+        .order_by(RegistrationFormField.display_order)
+        .all()
+    )
+    return fields
 
 
 @router.post("/identify", response_model=IdentifyResponse)

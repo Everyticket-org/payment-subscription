@@ -361,3 +361,44 @@ export interface AuditLogOut {
   ip_address?: string | null;
   created_at: string;
 }
+
+
+// --- Registration form fields (spec sections 8, 18, 51) ---
+
+export interface RegistrationFormFieldOut {
+  field_key: string;
+  label: string;
+  field_type: string;
+  required: boolean;
+  validation_rules?: Record<string, unknown> | null;
+  placeholder?: string | null;
+  help_text?: string | null;
+  options?: string[] | null;
+  display_order: number;
+}
+
+export interface RegistrationFormFieldAdminOut extends RegistrationFormFieldOut {
+  id: number;
+  active: boolean;
+}
+
+export interface RegistrationFormFieldCreateInput {
+  field_key: string;
+  label: string;
+  field_type: string;
+  required?: boolean;
+  placeholder?: string;
+  help_text?: string;
+  options?: string[];
+  display_order?: number;
+}
+
+export interface RegistrationFormFieldUpdateInput {
+  label?: string;
+  required?: boolean;
+  placeholder?: string;
+  help_text?: string;
+  options?: string[];
+  display_order?: number;
+  active?: boolean;
+}

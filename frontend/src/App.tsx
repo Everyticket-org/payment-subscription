@@ -10,6 +10,7 @@ import { PortalPage } from "./pages/customer/PortalPage";
 import { AdminLoginPage } from "./pages/admin/AdminLoginPage";
 import { AdminDashboardPage } from "./pages/admin/AdminDashboardPage";
 import { AdminPlansPage } from "./pages/admin/AdminPlansPage";
+import { AdminRegistrationFormPage } from "./pages/admin/AdminRegistrationFormPage";
 import { AdminCustomersPage } from "./pages/admin/AdminCustomersPage";
 import { AdminCustomerDetailPage } from "./pages/admin/AdminCustomerDetailPage";
 import { AdminSubscriptionsPage } from "./pages/admin/AdminSubscriptionsPage";
@@ -54,6 +55,7 @@ function App() {
         >
           <Route index element={<AdminDashboardPage />} />
           <Route path="plans" element={<AdminPlansPage />} />
+          <Route path="registration-form" element={<AdminRegistrationFormPage />} />
           <Route path="customers" element={<AdminCustomersPage />} />
           <Route path="customers/:customerId" element={<AdminCustomerDetailPage />} />
           <Route path="subscriptions" element={<AdminSubscriptionsPage />} />
