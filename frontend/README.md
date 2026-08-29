@@ -6,11 +6,13 @@ upgrade/downgrade/renew/cancel) + an Everyticket SSO landing page, and a full ad
 login (password + MFA), a real dashboard, CRUD/read-only screens for plans, customers,
 subscriptions, payments, invoices, webhook logs, notification templates/logs, audit logs, and
 registration-form fields (plus a "Generate test SSO link" action on the customer detail page),
-and a Testing/Developer Tools page (test payment simulation, test subscription events, a live
+a Testing/Developer Tools page (test payment simulation, test subscription events, a live
 webhook sender, a webhook failure/retry simulator, test email sending, OTP/MFA bypass toggles,
 and a test-data generator + cleanup) with a "TEST MODE" badge shown in the admin topbar whenever
-the backend has it on. See `docs/implementation-status.md` at the repo root for what's built vs.
-still spec.
+the backend has it on, and a GST/tax configuration panel on the Invoices page plus PDF
+download/email-resend actions on the invoice detail page (also downloadable from the customer
+portal's own invoice list). See `docs/implementation-status.md` at the repo root for what's
+built vs. still spec.
 
 ## Local development
 

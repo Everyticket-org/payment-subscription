@@ -717,6 +717,75 @@ past the cooldown window, same "force the DB row" technique
 
 Verified: 74 total tests, 73 passing (same pre-existing `/ready` gap).
 
+## Increment 12 (2026-08-29): invoice PDF generation, download, email delivery, real GST/tax calculation
+
+Closes spec section 45 - the last genuinely-missing invoice capability
+(row/line-item generation has existed since increment 1; PDF, download,
+email, and real tax math did not).
+
+**Tax config**: new `app/core/settings_service.py` (generic get/set over
+the previously-unused `system_settings` table) backs
+`app/invoices/tax.py`'s `TaxConfigOut{gst_rate_percent, seller_gstin,
+tax_label}`, defaulting to 0%/no seller GSTIN - the same "configurable,
+default DISABLED" pattern spec section 42 already uses for
+proration/refunds, so every invoice generated before an admin sets a
+rate keeps its old `tax_amount == 0` behavior unchanged. Admin-editable
+via `GET`/`PUT /api/v1/admin/invoices/tax-config` (PUT gated on a new
+`INVOICES_MANAGE` permission; GET reuses the existing `INVOICES_VIEW`).
+
+**Real tax math + GST number**: `generate_invoice()` now computes
+`tax_amount = round(amount * rate / 100, 2)` and `total_amount = amount +
+tax_amount` from that config, and sets `Invoice.gst_number` from the
+*customer's own* GSTIN - looked up from `CustomerRegistrationData`'s
+existing "gstin" dynamic-form field (spec section 18, seeded since
+increment 1) - rather than leaving it permanently null. The *seller's*
+own GSTIN is business-level config (`TaxConfigOut.seller_gstin`), printed
+directly on the PDF rather than duplicated onto every invoice row.
+
+**PDF rendering**: `app/invoices/pdf.py` builds a branded (#d50355/
+#f1e2de), professional-looking invoice via reportlab's platypus layer -
+seller/bill-to/invoice-details header block, a line-items table, and a
+subtotal/tax/total breakdown - reusing the same reportlab dependency
+already pinned in requirements.txt. `Invoice.pdf_path` (existing column,
+previously unused) caches the rendered bytes to disk on first use
+(`INVOICE_PDF_STORAGE_DIR`, default `var/invoices/`, gitignored) so a
+view/download/email never re-renders an already-generated invoice.
+
+**Endpoints**: `GET /api/v1/admin/invoices/{id}/pdf` and
+`POST /api/v1/admin/invoices/{id}/send-email` (the latter
+`INVOICES_MANAGE`-gated, audit-logged); `GET
+/api/v1/customer/invoices/{id}/pdf`, ownership-checked against the
+authenticated customer (404, not 403, for someone else's invoice - same
+information-hiding convention as every other customer-scoped lookup in
+this app).
+
+**Automatic invoice email**: extended the email infrastructure with
+attachment support (`smtp_provider.send(..., attachments=[(filename,
+bytes, subtype)])`, threaded through `email_service.send_templated_email`)
+and a new `invoice_generated` template (seeded), so a successful payment
+now emails the invoice PDF automatically - on top of, not instead of, the
+existing `payment_success` email - via `payments/service.py`'s existing
+post-commit best-effort email block (a PDF-render or send failure here
+can never surface as an error on an already-successful payment; caught
+and logged, same as every other email in this app).
+
+**Frontend**: admin Invoices page gained a "Tax / GST configuration"
+panel (rate/seller-GSTIN/label, save round-trips through the new admin
+endpoint); the invoice detail page gained "Download PDF" and "Resend
+invoice email" actions; the customer portal's invoice table gained a
+"Download PDF" action per row. Binary downloads needed a small addition
+to the frontend API client (`downloadFile()` in `client.ts`) since a
+plain `<a href>` can't carry this app's Bearer token - it fetches the PDF
+as a blob itself and hands the browser a short-lived object URL.
+
+Verified: 9 new tests (tax math with/without a configured rate, the
+customer-GSTIN lookup, the PDF disk-cache round trip including
+re-rendering after the cached file goes missing, the tax-config
+permission gate, admin+customer PDF download including a 404 for another
+customer's invoice, and the email-resend round trip via a faked SMTP) -
+83 total tests, 82 passing (same pre-existing `/ready` gap), 57-module
+clean frontend build.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -765,8 +834,10 @@ called out in the relevant module's docstring too:
   (see above) - real SMTP delivery for OTP/payment-success/payment-failed/
   subscription-cancelled/renewal-reminder, always logged to
   NotificationLog, plus an admin template-edit + send-log UI (increment 7).
-- **Invoices**: row + line item generation works; no PDF rendering,
-  download, or email delivery yet. Tax is always 0 (no GST rate config).
+- **Invoices** (section 45): **built as of increment 12** (see above) -
+  real GST/tax calculation from an admin-configurable rate, PDF
+  generation (cached to disk), admin+customer download, and automatic
+  plus on-demand email delivery with the PDF attached.
 - **Background jobs** (Celery/Redis, section 59): **built as of
   increment 5** (see above) - `celery_app.py`'s `beat_schedule` now runs
   webhook dispatch (60s), subscription expiry (5m), and renewal reminders
@@ -866,8 +937,6 @@ now, not the core:
 
 Remaining open items, roughly in spec order:
 
-- **Invoice PDF generation, download, and email delivery**, plus real
-  GST/tax calculation (`tax_amount` is always 0 today).
 - **System / gateway / integration configuration** admin screens (spec
   section 51's remaining config modules: Payment Gateway Configuration,
   Everyticket Integration Configuration, Notification Configuration,
