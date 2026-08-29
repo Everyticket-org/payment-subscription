@@ -21,17 +21,19 @@ working test link), and a full admin Testing/Developer Tools module
 (test payment simulation, test subscription events, a live webhook
 sender, a webhook failure/retry simulator, test email sending, test SSO,
 OTP/MFA bypass toggles, and a test-data generator + cleanup - all
-TEST_MODE- and permission-gated) - all backed by a real Postgres schema
-and a 71-test automated suite (`pytest tests/ -v`), plus hand-verified
-via curl against real Postgres. A React frontend covers the public
-subscribe flow (dynamic registration form; mock simulate buttons or a
-real PayU checkout redirect, depending on the application's configured
-gateway), customer OTP login + portal + SSO landing page, and the full
-admin console (standard sidebar-panel shell, every module a real page,
-plus a "TEST MODE" badge shown whenever the backend has it on) - see
-`frontend/README.md`. Still not built: invoice PDF generation, OTP resend
-cooldown / plan auto-routing on repurchase, and the remaining system/
-gateway/integration configuration admin screens.
+TEST_MODE- and permission-gated) - an authenticated existing customer calling /subscribe for a
+different plan is now auto-routed to an upgrade/downgrade against their
+existing subscription instead of a flat refusal, and OTP resend requests
+are rate-limited - all backed by a real Postgres schema and a 74-test
+automated suite (`pytest tests/ -v`), plus hand-verified via curl against
+real Postgres. A React frontend covers the public subscribe flow
+(dynamic registration form; mock simulate buttons or a real PayU
+checkout redirect, depending on the application's configured gateway),
+customer OTP login + portal + SSO landing page, and the full admin
+console (standard sidebar-panel shell, every module a real page, plus a
+"TEST MODE" badge shown whenever the backend has it on) - see
+`frontend/README.md`. Still not built: invoice PDF generation and the
+remaining system/gateway/integration configuration admin screens.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.

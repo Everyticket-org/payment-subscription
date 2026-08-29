@@ -658,6 +658,65 @@ shared by every test in the run). Full suite: 71 total, 70 passing (same
 pre-existing `/ready` gap); frontend `npm run build` clean in the
 isolated scratch copy, 57 modules.
 
+## Increment 11 (2026-08-29): OTP resend cooldown + plan auto-routing on /subscribe
+
+Closes the last two items from spec sections 9, 11, 22 that were still
+open after increment 10.
+
+**OTP resend cooldown** (section 11): `OTP_RESEND_COOLDOWN_SECONDS`
+existed since increment 1 but nothing read it - a client could hammer
+`/identify` and flood the customer's inbox with OTP codes. New
+`otp_service.assert_resend_allowed()`, called from `/public/identify`
+before issuing another IDENTIFY-purpose `OtpSession`: looks up the most
+recent session for the exact email+mobile pair and refuses (429
+`OTP_RATE_LIMITED`) if one was created too recently. No new endpoint -
+`/identify` is already the only call site that issues an IDENTIFY
+session, so calling it again already *is* "resend" from the frontend's
+perspective.
+
+**Plan auto-routing** (sections 9, 22): an authenticated existing
+customer calling `POST /subscribe` used to get a flat
+`CUSTOMER_ALREADY_SUBSCRIBED` for any plan, forcing them to separately
+discover the dedicated upgrade/downgrade endpoints. Now the existing
+ACTIVE subscription's plan is compared against the requested one:
+
+- SAME plan: refused via `assert_transition_allowed()`'s own `from ==
+  to` check (409 `INVALID_PLAN_TRANSITION`) - no duplicate subscription
+  or payment created.
+- HIGHER/LOWER plan: silently routed to an upgrade/downgrade against the
+  *existing* subscription (the same `payment_type`/`apply_plan_change()`
+  path the dedicated `/customer/subscriptions/{id}/upgrade|downgrade`
+  endpoints already use) - no second `Subscription` row; the plan only
+  actually changes once the resulting payment succeeds.
+- EXPIRED/CANCELLED/no existing subscription: unchanged - falls through
+  to `create_pending_subscription()` exactly as before (repurchase,
+  reusing the same `customer_id`, spec section 41 - this case was
+  already correct, since `get_active_subscription()` only ever returns
+  ACTIVE rows).
+
+No frontend changes were needed: `SubscribePage` already renders
+whatever `SubscribeResponse` comes back generically, so an existing
+signed-in customer picking a different plan is now routed correctly for
+free. One known minor UX gap: the dynamic registration form is still
+shown to a signed-in customer even when their action will auto-route to
+an upgrade/downgrade (where `registration_data` doesn't apply and is
+silently discarded, never attached to the wrong subscription) - cosmetic
+only, not a correctness issue, left for a future frontend pass.
+
+Also fixed a pre-existing mislabeled test:
+`test_end_to_end.py`'s `test_returning_customer_same_plan_rejected_after_otp`
+actually exercised a basic-\>professional *upgrade* attempt (which the
+old flat behavior happened to also reject, masking the mislabeling) -
+split into a genuine same-plan test plus a new
+`test_returning_customer_higher_plan_auto_routes_to_upgrade` that drives
+the whole thing through to an actual plan change via the mock payment
+callback. Added 2 new OTP-resend-cooldown tests (rate-limited
+immediately after / allowed once the DB row's `created_at` is forced
+past the cooldown window, same "force the DB row" technique
+`tests/test_sso.py`'s expiry test already used).
+
+Verified: 74 total tests, 73 passing (same pre-existing `/ready` gap).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -665,15 +724,12 @@ called out in the relevant module's docstring too:
 
 - **Duplicate customer detection / OTP verification** (sections 9-11):
   **done as of increment 2** (see above) for the core exact/conflict/none
-  match cases and OTP-gated identity reveal. Still missing: real
-  SMS/email OTP delivery (plaintext code is only ever returned in the API
-  response, and only in TEST_MODE - see increment 2 notes), OTP resend
-  with cooldown enforcement (the `OTP_RESEND_COOLDOWN_SECONDS` setting
-  exists but nothing reads it yet), and SAME/HIGHER/LOWER/EXPIRED plan
-  auto-routing on `/subscribe` for an existing active subscriber (today
-  that path still just refuses with `CUSTOMER_ALREADY_SUBSCRIBED` -
-  upgrade/downgrade/renew have to be called explicitly via the customer
-  portal endpoints instead).
+  match cases and OTP-gated identity reveal; **real email OTP delivery
+  done as of increment 6**; **OTP resend cooldown enforcement and
+  SAME/HIGHER/LOWER/EXPIRED plan auto-routing on `/subscribe` done as of
+  increment 11** (see above). Still missing: real SMS delivery (email
+  only today) and CANCELLED-subscriber repurchase is exercised via the
+  same code path as EXPIRED but has no dedicated test.
 - **Upgrade / downgrade / cancellation / renewal** (sections 38-43):
   **done as of increment 2** (see above) as customer-portal endpoints.
   **Expiry** (subscriptions past `expires_at` auto-transitioning to
@@ -802,18 +858,14 @@ now, not the core:
 6. ~~PayU adapter~~ - done (increment 4). Still needs Vishal's real test
    credentials in his own `backend/.env` to exercise against PayU's
    actual sandbox.
-7. ~~Admin portal API surface~~ - done (increment 7), except the
-   Testing/simulation module specifically (spec section 54) - that's the
-   next concrete piece of scope.
-8. ~~React frontend~~ - done (increments 3, 7, 8, 9), including the
-   dynamic registration-form renderer and the SSO consume page.
+7. ~~Admin portal API surface~~ - done (increment 7), including the
+   Testing/Developer Tools module (increment 10).
+8. ~~React frontend~~ - done (increments 3, 7, 8, 9, 10), including the
+   dynamic registration-form renderer, the SSO consume page, and the
+   Testing Tools admin page.
 
 Remaining open items, roughly in spec order:
 
-- **OTP resend cooldown** (`OTP_RESEND_COOLDOWN_SECONDS` exists, nothing
-  reads it) and **SAME/HIGHER/LOWER/EXPIRED plan auto-routing** on
-  `/subscribe` for an existing active subscriber (today that path just
-  refuses with `CUSTOMER_ALREADY_SUBSCRIBED`).
 - **Invoice PDF generation, download, and email delivery**, plus real
   GST/tax calculation (`tax_amount` is always 0 today).
 - **System / gateway / integration configuration** admin screens (spec
