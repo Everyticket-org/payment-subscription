@@ -23,6 +23,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { identify, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import type { MockCallbackResult, SubscribeResponse } from "../../api/types";
 
@@ -202,18 +203,7 @@ export function SubscribePage() {
             <dt>Status</dt>
             <dd>{subscribeResult.payment.status}</dd>
           </dl>
-          <p className="hint hint-dev">
-            No real payment gateway is wired up yet (PayU adapter is still on the roadmap) - this simulates
-            the gateway callback the same way a real webhook would arrive.
-          </p>
-          <div className="button-row">
-            <button className="button button-primary" disabled={busy} onClick={() => handleSimulate("SUCCESS")}>
-              Simulate payment success
-            </button>
-            <button className="button button-secondary" disabled={busy} onClick={() => handleSimulate("FAILED")}>
-              Simulate payment failure
-            </button>
-          </div>
+          <PaymentCheckout payment={subscribeResult.payment} busy={busy} onSimulate={handleSimulate} />
         </div>
       )}
 

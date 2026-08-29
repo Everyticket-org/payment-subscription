@@ -41,6 +41,25 @@ export interface PortalSubscriptionOut extends SubscriptionOut {
   currency: string;
 }
 
+export interface PayUCheckoutFields {
+  key: string;
+  txnid: string;
+  amount: string;
+  productinfo: string;
+  firstname: string;
+  email: string;
+  phone: string;
+  surl: string;
+  furl: string;
+  hash: string;
+}
+
+export interface PaymentCheckout {
+  action_url: string;
+  method: string;
+  fields: PayUCheckoutFields;
+}
+
 export interface PaymentTransactionOut {
   transaction_id: string;
   gateway: string;
@@ -48,6 +67,10 @@ export interface PaymentTransactionOut {
   currency: string;
   status: string;
   failure_reason?: string | null;
+  /** Present only for a PENDING PayU payment - the hosted-checkout form
+   * the browser must POST to PayU's own page. Absent for the mock
+   * gateway, which stays a same-page "simulate" button. */
+  checkout?: PaymentCheckout | null;
 }
 
 export interface InvoiceOut {

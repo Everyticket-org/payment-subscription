@@ -13,7 +13,7 @@ import { useAuth } from "../../context/AuthContext";
 import type { AdminUserOut } from "../../api/types";
 
 export function AdminDashboardPage() {
-  const { adminToken, setAdminToken } = useAuth();
+  const { adminToken } = useAuth();
   const [me, setMe] = useState<AdminUserOut | null>(null);
   const [error, setError] = useState<unknown>(null);
 
@@ -24,12 +24,7 @@ export function AdminDashboardPage() {
 
   return (
     <section>
-      <div className="page-header-row">
-        <h1>Admin</h1>
-        <button className="button button-secondary" onClick={() => setAdminToken(null)}>
-          Sign out
-        </button>
-      </div>
+      <h1>Dashboard</h1>
 
       <ErrorBanner error={error} />
 

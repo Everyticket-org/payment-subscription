@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { listPlans, cancelSubscription, downgradeSubscription, getCustomerPortal, renewSubscription, simulateMockCallback, upgradeSubscription } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import type { CustomerPortalOut, MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
@@ -162,14 +163,7 @@ export function PortalPage() {
             <dt>Transaction</dt>
             <dd>{pendingPayment.payment.transaction_id}</dd>
           </dl>
-          <div className="button-row">
-            <button className="button button-primary" disabled={busy} onClick={() => handleSimulate("SUCCESS")}>
-              Simulate payment success
-            </button>
-            <button className="button button-secondary" disabled={busy} onClick={() => handleSimulate("FAILED")}>
-              Simulate payment failure
-            </button>
-          </div>
+          <PaymentCheckout payment={pendingPayment.payment} busy={busy} onSimulate={handleSimulate} />
         </div>
       )}
 

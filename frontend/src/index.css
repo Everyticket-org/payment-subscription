@@ -1,21 +1,36 @@
 :root {
-  --text: #4b5563;
-  --text-h: #0f172a;
-  --bg: #f8fafc;
+  /* Brand palette (spec follow-up: replace the generic slate/violet
+     placeholder theme with the product's actual brand colors) - a deep
+     magenta/rose primary accent over a warm cream page ground, instead
+     of white. Every other rule below reads these tokens rather than a
+     literal color, so this block is the single place the brand lives. */
+  --text: #5a4642;
+  --text-h: #2a1512;
+  --bg: #f1e2de;
   --surface: #ffffff;
-  --border: #e2e8f0;
-  --accent: #6d28d9;
-  --accent-hover: #5b21b6;
-  --accent-bg: rgba(109, 40, 217, 0.08);
-  --danger: #b91c1c;
-  --danger-bg: rgba(185, 28, 28, 0.08);
-  --danger-hover: #991b1b;
-  --code-bg: #f1f5f9;
+  --surface-alt: #faf3f1;
+  --border: #e3cec8;
+  --accent: #d50355;
+  --accent-hover: #a8033f;
+  --accent-bg: rgba(213, 3, 85, 0.08);
+  --danger: #b3261e;
+  --danger-bg: rgba(179, 38, 30, 0.08);
+  --danger-hover: #8f1e18;
+  --code-bg: #f4e9e6;
+  --shadow-sm: 0 1px 2px rgba(42, 21, 18, 0.06);
+  --shadow-md: 0 4px 16px rgba(42, 21, 18, 0.08);
 
-  --sans: system-ui, "Segoe UI", Roboto, sans-serif;
+  /* Admin console gets its own dark-sidebar convention (see .admin-*
+     rules) independent of the light/dark tokens above - it always uses
+     these, regardless of the visitor's OS color scheme. */
+  --admin-sidebar-bg: #2a0f1c;
+  --admin-sidebar-text: #e9d6de;
+  --admin-sidebar-border: #431a2e;
+
+  --sans: "Segoe UI", system-ui, Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
-  font: 16px/1.5 var(--sans);
+  font: 16px/1.55 var(--sans);
   color-scheme: light dark;
   color: var(--text);
   background: var(--bg);
@@ -27,18 +42,21 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --text: #cbd5e1;
-    --text-h: #f8fafc;
-    --bg: #0f1115;
-    --surface: #171a21;
-    --border: #2b2f3a;
-    --accent: #a78bfa;
-    --accent-hover: #c4b5fd;
-    --accent-bg: rgba(167, 139, 250, 0.14);
+    --text: #e3d0cc;
+    --text-h: #f7ece8;
+    --bg: #1c1214;
+    --surface: #2a1b1d;
+    --surface-alt: #241719;
+    --border: #3d2a2c;
+    --accent: #ff4d85;
+    --accent-hover: #ff7aa3;
+    --accent-bg: rgba(255, 77, 133, 0.16);
     --danger: #f87171;
     --danger-bg: rgba(248, 113, 113, 0.12);
     --danger-hover: #fca5a5;
-    --code-bg: #1e2129;
+    --code-bg: #241719;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
   }
 }
 
@@ -51,10 +69,12 @@ body {
 }
 
 h1,
-h2 {
+h2,
+h3 {
   color: var(--text-h);
-  font-weight: 600;
+  font-weight: 700;
   margin: 0 0 16px;
+  letter-spacing: -0.01em;
 }
 
 h1 {
@@ -63,6 +83,10 @@ h1 {
 
 h2 {
   font-size: 18px;
+}
+
+h3 {
+  font-size: 15px;
 }
 
 p {
@@ -82,38 +106,54 @@ code {
   color: var(--text-h);
 }
 
+/* ---------- Public site shell ---------- */
+
 .app-shell {
   min-height: 100svh;
   display: flex;
   flex-direction: column;
-  max-width: 960px;
-  margin: 0 auto;
 }
 
 .app-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 20px;
-  border-bottom: 1px solid var(--border);
+  padding: 16px 32px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 
 .app-header .brand {
-  font-weight: 700;
+  font-weight: 800;
   color: var(--text-h);
   text-decoration: none;
   font-size: 17px;
+  letter-spacing: -0.01em;
+}
+
+.app-header .brand::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  background: var(--accent);
+  margin-right: 8px;
 }
 
 .app-header nav {
   display: flex;
-  gap: 20px;
+  gap: 24px;
 }
 
 .app-header nav a {
   color: var(--text);
   text-decoration: none;
   font-size: 14px;
+  font-weight: 600;
 }
 
 .app-header nav a:hover {
@@ -122,26 +162,33 @@ code {
 
 .app-main {
   flex: 1;
-  padding: 24px 20px 48px;
+  padding: 32px 32px 56px;
+  max-width: 960px;
+  width: 100%;
+  margin: 0 auto;
 }
 
 .app-footer {
-  padding: 16px 20px;
+  padding: 16px 32px;
   border-top: 1px solid var(--border);
   font-size: 13px;
   color: var(--text);
   opacity: 0.7;
+  text-align: center;
 }
 
 .lede {
   max-width: 60ch;
 }
 
+/* ---------- Cards / layout primitives ---------- */
+
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  padding: 22px 24px;
   margin-bottom: 20px;
   max-width: 480px;
 }
@@ -169,14 +216,14 @@ label {
   gap: 6px;
   font-size: 14px;
   color: var(--text-h);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 input,
 select {
   font: inherit;
-  padding: 9px 11px;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text-h);
@@ -193,14 +240,15 @@ select:focus {
   align-items: center;
   justify-content: center;
   font: inherit;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 14px;
-  padding: 9px 16px;
-  border-radius: 6px;
+  padding: 10px 18px;
+  border-radius: 8px;
   border: 1px solid transparent;
   cursor: pointer;
   text-decoration: none;
   width: fit-content;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .button:disabled {
@@ -211,6 +259,7 @@ select:focus {
 .button-primary {
   background: var(--accent);
   color: #fff;
+  box-shadow: var(--shadow-sm);
 }
 
 .button-primary:hover:not(:disabled) {
@@ -252,8 +301,9 @@ select:focus {
 
 .hint-dev {
   background: var(--accent-bg);
-  border-radius: 6px;
-  padding: 8px 10px;
+  border-radius: 8px;
+  padding: 9px 12px;
+  opacity: 1;
 }
 
 .banner {
@@ -280,32 +330,42 @@ select:focus {
   white-space: nowrap;
 }
 
+/* ---------- Plans ---------- */
+
 .plan-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 18px;
 }
 
 .plan-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 20px;
+  border-top: 3px solid var(--accent);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  padding: 22px;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.plan-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
 }
 
 .plan-price {
-  font-size: 22px;
-  font-weight: 700;
-  color: var(--text-h);
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--accent);
   margin: 0;
 }
 
 .plan-interval {
   font-size: 13px;
-  font-weight: 400;
+  font-weight: 500;
   color: var(--text);
 }
 
@@ -314,10 +374,12 @@ select:focus {
   flex: 1;
 }
 
+/* ---------- Data display ---------- */
+
 .summary-list {
   display: grid;
   grid-template-columns: auto 1fr;
-  gap: 4px 16px;
+  gap: 6px 16px;
   margin: 0 0 12px;
   font-size: 14px;
 }
@@ -330,7 +392,7 @@ select:focus {
 .summary-list dd {
   margin: 0;
   color: var(--text-h);
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .portal-actions {
@@ -356,16 +418,141 @@ select:focus {
 .data-table th,
 .data-table td {
   text-align: left;
-  padding: 8px 6px;
+  padding: 10px 8px;
   border-bottom: 1px solid var(--border);
 }
 
-.data-table th {
+.data-table thead th {
+  background: var(--surface-alt);
   color: var(--text);
-  font-weight: 500;
-  opacity: 0.75;
+  font-weight: 700;
+  opacity: 0.85;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.data-table tbody tr:hover {
+  background: var(--surface-alt);
 }
 
 .data-table td {
   color: var(--text-h);
+}
+
+/* ---------- Admin console shell ---------- */
+/* Standard admin-panel convention: fixed dark sidebar + light content
+   area, independent of the public site's chrome (see AdminLayout.tsx). */
+
+.admin-shell {
+  min-height: 100svh;
+  display: flex;
+}
+
+.admin-sidebar {
+  width: 232px;
+  flex-shrink: 0;
+  background: var(--admin-sidebar-bg);
+  color: var(--admin-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px;
+  gap: 4px;
+}
+
+.admin-brand {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 800;
+  font-size: 16px;
+  padding: 8px 10px 20px;
+  letter-spacing: -0.01em;
+}
+
+.admin-brand span {
+  color: var(--accent);
+}
+
+.admin-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.admin-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  color: var(--admin-sidebar-text);
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.admin-nav-link:hover {
+  background: var(--admin-sidebar-border);
+  opacity: 1;
+}
+
+.admin-nav-link.active {
+  background: var(--accent);
+  color: #fff;
+  opacity: 1;
+}
+
+.admin-nav-link.disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.admin-nav-link.disabled:hover {
+  background: none;
+}
+
+.admin-nav-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  background: var(--admin-sidebar-border);
+  padding: 2px 6px;
+  border-radius: 999px;
+}
+
+.admin-nav-exit {
+  border-top: 1px solid var(--admin-sidebar-border);
+  margin-top: 8px;
+  padding-top: 16px;
+}
+
+.admin-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg);
+}
+
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 32px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.admin-topbar-title {
+  font-weight: 700;
+  color: var(--text-h);
+  font-size: 15px;
+}
+
+.admin-content {
+  padding: 28px 32px 56px;
 }
