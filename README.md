@@ -6,16 +6,18 @@ integration, admin/customer portals). Everyticket itself - ticketing,
 booking, POS, etc. - is a separate application and is out of scope here.
 
 **Current status:** Phase 1 foundation, a working new-subscription ->
-mock-payment -> active -> invoice flow, admin login + MFA, duplicate
-customer detection + OTP verification, and customer-portal
+payment -> active -> invoice flow (mock gateway AND a real PayU hosted-
+checkout integration, hash-verified both ways), admin login + MFA,
+duplicate customer detection + OTP verification, and customer-portal
 upgrade/downgrade/renew/cancel - all backed by a real Postgres schema and
-an 18-test automated suite (`pytest tests/ -v`), plus hand-verified via
-curl against real Postgres. A React frontend now covers the public
-subscribe flow, customer OTP login + portal, and admin login + a minimal
-dashboard - see `frontend/README.md` - verified end-to-end against the
-real backend with Playwright. Still not built: admin CRUD API/UI, PayU,
-Everyticket webhooks, SSO, email, background jobs, the dynamic
-registration-form renderer.
+a 23-test automated suite (`pytest tests/ -v`), plus hand-verified via
+curl against real Postgres. A React frontend covers the public subscribe
+flow (mock simulate buttons or a real PayU checkout redirect, depending
+on the application's configured gateway), customer OTP login + portal,
+and admin login + a dashboard behind a standard admin-panel shell - see
+`frontend/README.md`. Still not built: admin CRUD API/UI (the admin
+console shell exists, the data screens don't yet), Everyticket webhooks,
+SSO, email, background jobs, the dynamic registration-form renderer.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.

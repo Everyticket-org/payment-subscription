@@ -298,6 +298,92 @@ before Vishal even hit it)**
   relying on `docker compose up` for the frontend, run it once and
   confirm the container serves the app the same way.
 
+## Increment 4 (2026-08-29): real PayU gateway, brand redesign, admin console shell
+
+Built per Vishal's request to complete remaining scope, apply the brand
+palette, and test the complete PayU flow end to end with his own test
+credentials.
+
+**PayU gateway adapter (spec section 25)** - `app/payments/gateways/payu/gateway.py`
+implements the same `PaymentGateway` interface the mock adapter does:
+`create_payment()` builds and hashes the exact hosted-checkout form fields
+per PayU's own documented request-hash formula (verified against
+docs.payu.in, not guessed); `process_webhook()` verifies the reverse-hash
+on the surl/furl redirect callback before trusting anything in it (spec
+section 28's tamper-detection requirement). New
+`POST /api/v1/payment/payu/callback/{success,failure}` routes are PayU's
+actual redirect target - a form-encoded browser POST, not a JSON webhook -
+and 302-redirect the browser on to the frontend's new `/payment/return`
+route with the verified outcome. `create_payment_transaction()` now
+passes plan name / a derived firstname / customer email+mobile into
+gateway metadata, since PayU (unlike mock) needs real customer/product
+details; firstname is derived from the email's local part since this app
+still has no name field to collect (see the dynamic-registration-form gap
+below). Verified with 5 new unit tests
+(`tests/test_payu_gateway.py`) checking the request hash matches PayU's
+documented formula byte-for-byte and the reverse hash accepts a validly
+signed response while rejecting a tampered one, plus a full run of the
+existing suite (22/23 - the one failure, `test_health_and_ready_endpoints`,
+needs a real reachable Postgres for `/ready` and is a pre-existing
+environment gap, not a regression).
+
+Switching an application to actually use PayU is a one-line SQL update
+against `applications.default_gateway` (`DEFAULT_PAYMENT_GATEWAY` in
+settings is currently unused) - see `.env.example`'s expanded PayU
+section for the exact command. **Not yet exercised against PayU's real
+sandbox** - that needs Vishal's own test merchant key/salt in his local
+`backend/.env`, added directly there rather than through chat.
+
+**Frontend: real PayU checkout UI** - a new shared `PaymentCheckout`
+component (`frontend/src/components/PaymentCheckout.tsx`) replaces the
+mock-only "simulate payment" buttons whenever a payment carries hosted-
+checkout fields (only set for a PENDING PayU payment): it builds a hidden
+form and POSTs the browser to PayU's page, where the customer completes
+payment with PayU's own published test cards. `PaymentReturnPage`
+(`/payment/return`) is where PayU's redirect lands after the backend has
+already verified the outcome server-side - it only ever displays what the
+backend decided, never re-derives success/failure itself. The mock
+gateway's existing UI is untouched.
+
+**Brand redesign** - `frontend/src/index.css` replaced the placeholder
+slate/violet/white theme with the actual brand palette (`#d50355` primary
+accent, `#f1e2de` page background instead of white) across every page,
+plus general polish (card shadows, hover states, a branded plan-card
+accent border).
+
+**Admin console shell** - new `AdminLayout` component gives `/admin` its
+own standard admin-panel chrome (dark sidebar nav, topbar, content area),
+completely separate from the public site's header/footer now (previously
+admin pages shared the public Layout). Only "Dashboard" is wired to a
+real page - Plans/Customers/Subscriptions/Payments/Invoices/Webhook
+logs/Audit logs are listed in the sidebar and marked "soon" rather than
+hidden, since the admin CRUD API those need doesn't exist yet (see below)
+- this is chrome ready to receive that follow-up work, not a claim it's
+built.
+
+**Workflow correction found this increment**: main.py/config.py's CORS
+middleware, described as added in increment 3, had only ever been applied
+to and verified against the cloud sandbox's copy of the backend - it never
+actually reached Vishal's real `backend/app/main.py`/`config.py` on his
+machine, which is why he hit a real CORS error running the frontend
+against it. Diagnosed via his own curl/browser network-tab evidence (200
+OK with zero `access-control-allow-origin` header), then applied directly
+to and verified against his actual files. Going forward, backend edits in
+this repo are made and verified directly on the real device files (a
+scratch Linux venv installed outside the repo, see below) rather than in
+a separate cloud copy that then needs syncing - this class of bug can't
+recur if there's only ever one copy of the source being edited.
+
+**New verification workflow**: this increment's backend changes were
+verified by installing a throwaway Python venv (`~/linux-venv`, outside
+this repo entirely) and running the real `pytest tests/` straight against
+the actual repo files - not a separate cloud copy. The frontend build was
+verified with `npm run build` against an isolated scratch copy of the
+frontend source in a separate directory, specifically to avoid running
+`npm install` against the real `node_modules` here, which is Vishal's
+native Windows install (Linux-built native binaries, e.g. esbuild, would
+have broken his own `npm run dev`/`npm run build` afterward).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -335,8 +421,7 @@ called out in the relevant module's docstring too:
   service/API layer yet - the OTP flow built in increment 2 is scoped to
   the duplicate-detection use case inside `/subscribe`, not a standalone
   customer login.
-- **PayU gateway adapter** (section 25): interface + mock adapter are
-  ready to receive it; PayU-specific code not written.
+- **PayU gateway adapter** (section 25): **built as of increment 4** (see above) - real hosted-checkout integration with hash-verified callback, plus the frontend checkout redirect flow. Not yet exercised against PayU's real sandbox (needs Vishal's test credentials in his local `.env`); no server-to-server status-polling fallback (`get_payment_status()` intentionally not implemented - the surl/furl callback is authoritative for V1, per PayU's own guidance).
 - **Everyticket integration adapter + outbound webhooks** (sections
   30-37): webhook_events/webhook_deliveries tables exist; nothing
   dispatches to them yet - `PaymentService` has an explicit comment
