@@ -235,6 +235,49 @@ def expire_subscription(db: Session, *, subscription: Subscription) -> Subscript
     return subscription
 
 
+def expire_due_subscriptions(db: Session) -> int:
+    """Sweep entry point for the Celery beat task (app/subscriptions/tasks.py,
+    spec section 40) - unlike expire_subscription() above (which the
+    caller commits), this owns its own commits since nothing else is
+    driving the same transaction. Also queues a subscription.expired
+    webhook event per expired subscription (spec sections 19, 31),
+    same DB-only queue_event() pattern PaymentService uses. Returns how
+    many subscriptions were expired."""
+    from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+
+    now = datetime.now(timezone.utc)
+    due = (
+        db.query(Subscription)
+        .filter(
+            Subscription.status == SubscriptionStatus.ACTIVE.value,
+            Subscription.expires_at.isnot(None),
+            Subscription.expires_at <= now,
+        )
+        .all()
+    )
+    expired_count = 0
+    for subscription in due:
+        expire_subscription(db, subscription=subscription)
+        application = db.get(Application, subscription.application_id)
+        if application is not None:
+            webhook_service.queue_event(
+                db,
+                application=application,
+                event_type="subscription.expired",
+                entity_type="subscription",
+                entity_id=subscription.subscription_id,
+                payload={
+                    "subscription_id": subscription.subscription_id,
+                    "customer_id": subscription.customer.customer_id,
+                    "plan_code": subscription.plan.plan_code,
+                    "status": subscription.status,
+                },
+            )
+        db.commit()
+        expired_count += 1
+    return expired_count
+
+
 def cancel_subscription(db: Session, *, subscription: Subscription, cancelled_by: str, reason: str | None) -> Subscription:
     """Immediate cancellation (spec section 43): no refund, no future renewal."""
     now = datetime.now(timezone.utc)

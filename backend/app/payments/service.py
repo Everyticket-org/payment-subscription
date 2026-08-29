@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
+from app.applications.models import Application
 from app.audit import service as audit_service
 from app.core.enums import PaymentStatus, PaymentType, SubscriptionEventType
 from app.core.exceptions import PaymentTransactionNotFound
@@ -30,6 +31,7 @@ from app.payments.schemas import PaymentTransactionOut
 from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
+from app.webhooks import service as webhook_service
 
 _TERMINAL_STATUSES = {PaymentStatus.SUCCESS.value, PaymentStatus.FAILED.value, PaymentStatus.CANCELLED.value}
 
@@ -156,11 +158,36 @@ def process_gateway_result(
             entity_id=transaction.transaction_id,
             new_value={"status": transaction.status, "subscription_id": subscription.subscription_id},
         )
-        # NOTE: this is where subscription.activated/upgraded/downgraded/
-        # renewed should be queued as an outbound Everyticket webhook +
-        # confirmation email (spec sections 19, 31, 33, 49). Both are
-        # follow-up work - see docs/implementation-status.md - so nothing
-        # is dispatched yet.
+
+        # Outbound Everyticket webhook (spec sections 19, 31, 33): a pure
+        # DB write here (see app/webhooks/service.py's module docstring
+        # for why) - the actual HTTP delivery happens out-of-band via the
+        # Celery beat sweep in app/webhooks/tasks.py, never synchronously
+        # inside this transaction (spec section 58).
+        webhook_event_type = {
+            PaymentType.UPGRADE.value: "subscription.upgraded",
+            PaymentType.DOWNGRADE.value: "subscription.downgraded",
+            PaymentType.RENEWAL.value: "subscription.renewed",
+        }.get(transaction.payment_type, "subscription.activated")
+        application = db.get(Application, subscription.application_id)
+        if application is not None:
+            webhook_service.queue_event(
+                db,
+                application=application,
+                event_type=webhook_event_type,
+                entity_type="subscription",
+                entity_id=subscription.subscription_id,
+                payload={
+                    "subscription_id": subscription.subscription_id,
+                    "customer_id": subscription.customer.customer_id,
+                    "plan_code": subscription.plan.plan_code,
+                    "status": subscription.status,
+                    "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+                    "transaction_id": transaction.transaction_id,
+                },
+            )
+        # Confirmation email (spec section 49): queued the same way once
+        # the email service exists - see docs/implementation-status.md.
     elif result.status == PaymentStatus.FAILED.value:
         subscription_service.mark_payment_failed(db, subscription=subscription)
         audit_service.record(
