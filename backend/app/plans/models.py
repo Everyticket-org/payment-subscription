@@ -1,5 +1,5 @@
 """Plans, plan features, plan transitions (spec sections 14, 15, 16)."""
-from sqlalchemy import Boolean, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, TimestampMixin
@@ -17,7 +17,11 @@ class Plan(Base, TimestampMixin):
 
     plan_code: Mapped[str] = mapped_column(String(50), nullable=False, index=True)  # BASIC, PROFESSIONAL, ...
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    # Text, not String(2000): holds sanitized rich-text HTML (bold/italic/
+    # bullet+numbered lists - see app.plans.sanitize) rather than plain
+    # text as of the plan-description rich text editor, so a generous
+    # unbounded column is worth it over the old fixed cap.
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
     price: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), default="INR", nullable=False)
     billing_interval: Mapped[str] = mapped_column(String(20), default="month", nullable=False)  # month | year

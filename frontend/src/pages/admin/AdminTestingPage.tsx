@@ -24,6 +24,7 @@ import {
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type {
   TestDataCleanupOut,
   TestDataGeneratedOut,
@@ -51,6 +52,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 
 export function AdminTestingPage() {
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
@@ -91,14 +93,16 @@ export function AdminTestingPage() {
     getTestModeStatus(adminToken).then(setStatus).catch(setError);
   }, [adminToken]);
 
-  async function run<T>(fn: () => Promise<T>, onResult: (r: T) => void) {
+  async function run<T>(fn: () => Promise<T>, onResult: (r: T) => void, successMessage?: string) {
     if (!adminToken) return;
     setBusy(true);
     setError(null);
     try {
       onResult(await fn());
+      toast.success(successMessage ?? "Done");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -134,6 +138,7 @@ export function AdminTestingPage() {
                 run(
                   () => setOtpMfaBypass({ allow_otp_bypass: !status.allow_otp_bypass }, adminToken!),
                   setStatus,
+                  status.allow_otp_bypass ? "OTP bypass disabled" : "OTP bypass enabled",
                 )
               }
             >
@@ -146,6 +151,7 @@ export function AdminTestingPage() {
                 run(
                   () => setOtpMfaBypass({ allow_admin_mfa_bypass: !status.allow_admin_mfa_bypass }, adminToken!),
                   setStatus,
+                  status.allow_admin_mfa_bypass ? "MFA bypass disabled" : "MFA bypass enabled",
                 )
               }
             >
@@ -186,6 +192,7 @@ export function AdminTestingPage() {
               run(
                 () => testPayment({ customer_id: payCustomerId, plan_code: payPlanCode, scenario: payScenario }, adminToken!),
                 setPayResult,
+                "Test payment simulated",
               )
             }
           >
@@ -234,6 +241,7 @@ export function AdminTestingPage() {
                     adminToken!,
                   ),
                 setEventResult,
+                "Test event sent",
               )
             }
           >
@@ -266,7 +274,7 @@ export function AdminTestingPage() {
                   throw new Error("Body is not valid JSON");
                 }
                 return testWebhookSend({ payload: parsed }, adminToken!);
-              }, setWebhookResult)
+              }, setWebhookResult, "Test webhook sent")
             }
           >
             Send test webhook
@@ -304,7 +312,7 @@ export function AdminTestingPage() {
           <button
             className="button button-primary"
             disabled={busy}
-            onClick={() => run(() => testWebhookFailureSimulate(failureCode, adminToken!), setFailureResult)}
+            onClick={() => run(() => testWebhookFailureSimulate(failureCode, adminToken!), setFailureResult, "Failure simulated")}
           >
             Simulate failure
           </button>
@@ -336,7 +344,7 @@ export function AdminTestingPage() {
           <button
             className="button button-primary"
             disabled={busy || !emailTo}
-            onClick={() => run(() => testEmail({ template_code: emailTemplate, to: emailTo }, adminToken!), setEmailResult)}
+            onClick={() => run(() => testEmail({ template_code: emailTemplate, to: emailTo }, adminToken!), setEmailResult, "Test email sent")}
           >
             Send test email
           </button>
@@ -359,10 +367,10 @@ export function AdminTestingPage() {
 
       <Section title="Test data generator">
         <div className="button-row">
-          <button className="button button-primary" disabled={busy} onClick={() => run(() => generateTestData(adminToken!), setGenerated)}>
+          <button className="button button-primary" disabled={busy} onClick={() => run(() => generateTestData(adminToken!), setGenerated, "Test data generated")}>
             Generate test data set
           </button>
-          <button className="button button-danger" disabled={busy} onClick={() => run(() => cleanupTestData(adminToken!), setCleanup)}>
+          <button className="button button-danger" disabled={busy} onClick={() => run(() => cleanupTestData(adminToken!), setCleanup, "Test data cleaned up")}>
             Clean up all TEST- data
           </button>
         </div>

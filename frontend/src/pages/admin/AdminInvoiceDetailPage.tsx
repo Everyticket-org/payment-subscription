@@ -5,11 +5,13 @@ import { Link, useParams } from "react-router-dom";
 import { adminDownloadInvoicePdf, adminGetInvoice, adminSendInvoiceEmail } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { InvoiceAdminOut } from "../../api/types";
 
 export function AdminInvoiceDetailPage() {
   const { invoiceId = "" } = useParams();
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [invoice, setInvoice] = useState<InvoiceAdminOut | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [downloading, setDownloading] = useState(false);
@@ -29,6 +31,7 @@ export function AdminInvoiceDetailPage() {
       await adminDownloadInvoicePdf(invoiceId, adminToken);
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setDownloading(false);
     }
@@ -42,8 +45,14 @@ export function AdminInvoiceDetailPage() {
     try {
       const result = await adminSendInvoiceEmail(invoiceId, adminToken);
       setEmailResult(result.sent ? `Sent to ${result.to}.` : "Could not send - check notification logs.");
+      if (result.sent) {
+        toast.success(`Invoice emailed to ${result.to}`);
+      } else {
+        toast.error("Could not send invoice email - check notification logs");
+      }
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSending(false);
     }

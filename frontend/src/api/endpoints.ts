@@ -146,6 +146,12 @@ export const adminCreatePlan = (body: PlanCreateInput, token: string) =>
 export const adminUpdatePlan = (planCode: string, body: PlanUpdateInput, token: string) =>
   api.put<PlanAdminOut>(`/api/v1/admin/plans/${planCode}`, body, token);
 
+/** Bulk reorder (spec section 51): must list every one of this
+ * application's plan codes in the desired order - the backend sets
+ * display_order to each code's index and rejects a partial list. */
+export const adminReorderPlans = (planCodes: string[], token: string) =>
+  api.put<PlanAdminOut[]>("/api/v1/admin/plans/reorder", { plan_codes: planCodes }, token);
+
 export const adminAddPlanFeature = (
   planCode: string,
   body: { feature_key: string; feature_label: string; feature_value?: string; display_order?: number },

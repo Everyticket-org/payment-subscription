@@ -26,6 +26,7 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { MockCallbackResult, SubscribeResponse } from "../../api/types";
 
 type Step = "form" | "otp" | "payment" | "done";
@@ -34,6 +35,7 @@ export function SubscribePage() {
   const { planCode } = useParams<{ planCode: string }>();
   const { customerToken, setCustomerToken } = useAuth();
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [step, setStep] = useState<Step>("form");
   const [email, setEmail] = useState("");
@@ -75,9 +77,11 @@ export function SubscribePage() {
           setStep("otp");
         } catch (identifyErr) {
           setError(identifyErr);
+          toast.error(identifyErr);
         }
       } else {
         setError(err);
+        toast.error(err);
       }
     } finally {
       setBusy(false);
@@ -100,6 +104,7 @@ export function SubscribePage() {
       await doSubscribe(result.access_token);
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -113,8 +118,12 @@ export function SubscribePage() {
       const result = await simulateMockCallback(subscribeResult.payment.transaction_id, scenario);
       setCallbackResult(result);
       setStep("done");
+      if (result.subscription.status === "ACTIVE") {
+        toast.success("Subscription activated");
+      }
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { listPlans } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { sanitizeHtml } from "../../utils/sanitizeHtml";
 import type { Plan } from "../../api/types";
 
 export function PlansPage() {
@@ -39,7 +40,14 @@ export function PlansPage() {
                 {plan.billing_frequency > 1 ? "s" : ""}
               </span>
             </p>
-            {plan.description && <p className="plan-description">{plan.description}</p>}
+            {plan.description && (
+              // Description is rich-text HTML (spec section 51: bullet-point
+              // editor). The server-side sanitizer (app/plans/sanitize.py)
+              // is the real trust boundary; sanitizeHtml() is a second,
+              // independent allowlist pass run here since this page renders
+              // unescaped markup on an unauthenticated route.
+              <div className="plan-description" dangerouslySetInnerHTML={{ __html: sanitizeHtml(plan.description) }} />
+            )}
             <Link to={`/subscribe/${plan.plan_code}`} className="button button-primary">
               Subscribe
             </Link>

@@ -11,6 +11,7 @@ import { customerDownloadInvoicePdf, listPlans, cancelSubscription, downgradeSub
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { CustomerPortalOut, MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 function formatDate(iso: string | null): string {
@@ -20,6 +21,7 @@ function formatDate(iso: string | null): string {
 
 export function PortalPage() {
   const { customerToken, setCustomerToken } = useAuth();
+  const toast = useToast();
   const [portal, setPortal] = useState<CustomerPortalOut | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [targetPlan, setTargetPlan] = useState<string>("");
@@ -62,8 +64,10 @@ export function PortalPage() {
       const result = await mutate(portal.active_subscription.subscription_id, targetPlan, customerToken);
       setPendingPayment(result);
       setLastCallback(null);
+      toast.info("Complete payment to apply the plan change");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -77,8 +81,10 @@ export function PortalPage() {
       const result = await renewSubscription(portal.active_subscription.subscription_id, customerToken);
       setPendingPayment(result);
       setLastCallback(null);
+      toast.info("Complete payment to renew");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -92,9 +98,11 @@ export function PortalPage() {
       await cancelSubscription(portal.active_subscription.subscription_id, cancelReason || undefined, customerToken);
       setConfirmingCancel(false);
       setCancelReason("");
+      toast.success("Subscription cancelled");
       await refresh();
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -108,9 +116,15 @@ export function PortalPage() {
       const result = await simulateMockCallback(pendingPayment.payment.transaction_id, scenario);
       setLastCallback(result);
       setPendingPayment(null);
+      if (result.subscription.status === "ACTIVE") {
+        toast.success("Payment succeeded - subscription updated");
+      } else {
+        toast.error("Payment failed - subscription unchanged");
+      }
       await refresh();
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }

@@ -7,12 +7,14 @@ import { adminGetInvoiceTaxConfig, adminListInvoices, adminUpdateInvoiceTaxConfi
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { InvoiceAdminOut, PageOut, TaxConfigOut } from "../../api/types";
 
 const LIMIT = 20;
 
 function TaxConfigPanel() {
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [config, setConfig] = useState<TaxConfigOut | null>(null);
   const [rate, setRate] = useState("0");
   const [gstin, setGstin] = useState("");
@@ -44,8 +46,10 @@ function TaxConfigPanel() {
       );
       setConfig(updated);
       setSavedAt(Date.now());
+      toast.success("Tax configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }

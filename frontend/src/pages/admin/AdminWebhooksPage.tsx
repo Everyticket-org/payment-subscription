@@ -7,10 +7,12 @@ import { adminListWebhookDeliveries, adminListWebhookEvents, adminRetryWebhookDe
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
 
 export function AdminWebhooksPage() {
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [events, setEvents] = useState<WebhookEventOut[] | null>(null);
   const [deliveries, setDeliveries] = useState<WebhookDeliveryOut[] | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -33,9 +35,11 @@ export function AdminWebhooksPage() {
     setRetryingId(deliveryId);
     try {
       await adminRetryWebhookDelivery(deliveryId, adminToken);
+      toast.success("Delivery re-queued");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setRetryingId(null);
     }

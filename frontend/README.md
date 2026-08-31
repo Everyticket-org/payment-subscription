@@ -5,16 +5,20 @@ per-application registration form; mock simulate buttons or a real PayU checkout
 depending on the application's configured gateway), customer OTP login + portal (view
 subscription incl. its provisioning status, upgrade/downgrade/renew/cancel) + an Everyticket SSO
 landing page, and a full admin console: login (password + MFA), a real dashboard, CRUD/read-only
-screens for plans, customers, subscriptions, payments, invoices, webhook logs, notification
-templates/logs, audit logs, and registration-form fields (plus a "Generate test SSO link" action
-on the customer detail page), a Configuration page (Payment Gateway, Everyticket Integration,
-Notification, Subscription Rules, and Security config - each screen backed by real enforcement,
-not just storage), a Testing/Developer Tools page (test payment simulation, test subscription
-events, a live webhook sender, a webhook failure/retry simulator, test email sending, OTP/MFA
-bypass toggles, and a test-data generator + cleanup) with a "TEST MODE" badge shown in the admin
-topbar whenever the backend has it on, and a GST/tax configuration panel on the Invoices page
-plus PDF download/email-resend actions on the invoice detail page (also downloadable from the
-customer portal's own invoice list). See `docs/implementation-status.md` at the repo root for
+screens for plans (popup add/edit with a rich-text bullet-point description editor, plus
+drag-and-drop-or-arrow-button reordering that's reflected on the public plan listing), customers,
+subscriptions, payments, invoices, webhook logs, notification templates/logs, audit logs, and
+registration-form fields (plus a "Generate test SSO link" action on the customer detail page), a
+Configuration page (Payment Gateway, Everyticket Integration, Notification, Subscription Rules,
+and Security config - each screen backed by real enforcement, not just storage), a
+Testing/Developer Tools page (test payment simulation, test subscription events, a live webhook
+sender, a webhook failure/retry simulator, test email sending, OTP/MFA bypass toggles, and a
+test-data generator + cleanup) with a "TEST MODE" badge shown in the admin topbar whenever the
+backend has it on, and a GST/tax configuration panel on the Invoices page plus PDF
+download/email-resend actions on the invoice detail page (also downloadable from the customer
+portal's own invoice list). Every mutating action across the admin console and the customer
+portal/subscribe flow now shows a toast notification (`src/context/ToastContext.tsx`) alongside
+its existing inline feedback. See `docs/implementation-status.md` at the repo root for
 what's built vs. still spec.
 
 ## Local development

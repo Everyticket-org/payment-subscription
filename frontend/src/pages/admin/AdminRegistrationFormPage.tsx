@@ -13,12 +13,14 @@ import {
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { RegistrationFormFieldAdminOut } from "../../api/types";
 
 const FIELD_TYPES = ["text", "email", "phone", "number", "dropdown", "radio", "checkbox", "textarea", "date", "url", "file"];
 
 export function AdminRegistrationFormPage() {
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [fields, setFields] = useState<RegistrationFormFieldAdminOut[] | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -53,9 +55,11 @@ export function AdminRegistrationFormPage() {
         adminToken,
       );
       setShowCreate(false);
+      toast.success("Field added");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     }
   }
 
@@ -63,9 +67,11 @@ export function AdminRegistrationFormPage() {
     if (!adminToken) return;
     try {
       await adminUpdateRegistrationFormField(field.id, { active: !field.active }, adminToken);
+      toast.success(field.active ? "Field deactivated" : "Field activated");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     }
   }
 
@@ -73,9 +79,11 @@ export function AdminRegistrationFormPage() {
     if (!adminToken) return;
     try {
       await adminUpdateRegistrationFormField(field.id, { required: !field.required }, adminToken);
+      toast.success("Field updated");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     }
   }
 

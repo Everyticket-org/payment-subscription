@@ -67,7 +67,11 @@ class PlanAdminOut(BaseModel):
 class PlanCreate(BaseModel):
     plan_code: str = Field(min_length=1, max_length=50)
     name: str = Field(min_length=1, max_length=255)
-    description: str | None = Field(default=None, max_length=2000)
+    # Rich-text HTML from the admin description editor (bold/italic/bullet
+    # +numbered lists) - sanitized server-side to a strict tag allowlist
+    # before storage, see app.plans.sanitize.sanitize_description(). The
+    # generous cap is just an abuse guard, not a real content limit.
+    description: str | None = Field(default=None, max_length=20000)
     price: float = Field(gt=0)
     currency: str = Field(default="INR", max_length=10)
     billing_interval: str = Field(default="month", pattern="^(month|year)$")
@@ -80,13 +84,22 @@ class PlanUpdate(BaseModel):
     is immutable once created (it's part of the public /subscribe/{code}
     URL and may already be referenced by live subscriptions/payments)."""
     name: str | None = Field(default=None, min_length=1, max_length=255)
-    description: str | None = Field(default=None, max_length=2000)
+    description: str | None = Field(default=None, max_length=20000)
     price: float | None = Field(default=None, gt=0)
     currency: str | None = Field(default=None, max_length=10)
     billing_interval: str | None = Field(default=None, pattern="^(month|year)$")
     billing_frequency: int | None = Field(default=None, ge=1)
     active: bool | None = None
     display_order: int | None = None
+
+
+class PlanReorderRequest(BaseModel):
+    """Bulk reorder (spec section 51's Plans admin module): the full list
+    of this application's plan codes in the desired display order -
+    display_order is then set to each code's index in the list. One audit
+    log entry for the whole reorder, rather than N individual PLAN_UPDATED
+    entries from N separate PUTs."""
+    plan_codes: list[str] = Field(min_length=1)
 
 
 class PlanTransitionOut(BaseModel):

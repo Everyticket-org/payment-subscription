@@ -4,10 +4,12 @@ import { adminListNotificationLogs, adminListNotificationTemplates, adminUpdateN
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { NotificationLogOut, NotificationTemplateOut } from "../../api/types";
 
 export function AdminNotificationsPage() {
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [templates, setTemplates] = useState<NotificationTemplateOut[] | null>(null);
   const [logs, setLogs] = useState<NotificationLogOut[] | null>(null);
   const [editingCode, setEditingCode] = useState<string | null>(null);
@@ -82,9 +84,11 @@ export function AdminNotificationsPage() {
                   adminToken,
                 );
                 setEditingCode(null);
+                toast.success("Template saved");
                 reload();
               } catch (err) {
                 setError(err);
+                toast.error(err);
               }
             }}
           >

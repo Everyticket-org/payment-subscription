@@ -38,15 +38,22 @@ success:false body) sets the subscription's provisioning_status to
 FAILED, retries automatically on the same webhook backoff schedule, and
 emails the customer once - all without ever touching the
 payment/subscription's own status (spec section 30) - all backed by a
-real Postgres schema and a 97-test automated suite (`pytest tests/ -v`),
-plus hand-verified via curl against real Postgres. A React frontend
+real Postgres schema and a 105-test automated suite (`pytest tests/ -v`),
+plus hand-verified via curl against real Postgres. Plan descriptions are
+now rich text (a bullet-point-capable editor, sanitized server-side with
+a `bleach` allowlist and rendered formatted on the public plan listing),
+plans support drag-and-drop-or-arrow-button reordering that's persisted
+and reflected on that same public listing, and every admin/customer
+mutating action across the app now surfaces a toast notification in
+addition to its existing inline error/success feedback. A React frontend
 covers the public subscribe flow (dynamic registration form; mock
 simulate buttons or a real PayU checkout redirect, depending on the
 application's configured gateway), customer OTP login + portal + SSO
 landing page, and the full admin console (standard sidebar-panel shell,
 every module a real page including a Configuration screen for all five
-config groups, plus a "TEST MODE" badge shown whenever the backend has it
-on) - see `frontend/README.md`.
+config groups, a popup-based Plans editor with the rich-text description
+and reordering above, plus a "TEST MODE" badge shown whenever the backend
+has it on) - see `frontend/README.md`.
 See **[docs/implementation-status.md](docs/implementation-status.md)**
 for the exact done/not-done breakdown and suggested next steps - read that
 before assuming any given feature works.

@@ -26,6 +26,7 @@ import {
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type {
   ApplicationConfigOut,
   ApplicationGeneralOut,
@@ -58,6 +59,7 @@ function SaveButton({ saving, savedAt }: { saving: boolean; savedAt: number | nu
 }
 
 function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; token: string }) {
+  const toast = useToast();
   const [name, setName] = useState(initial.name);
   const [url, setUrl] = useState(initial.application_url);
   const [supportEmail, setSupportEmail] = useState(initial.support_email ?? "");
@@ -86,8 +88,10 @@ function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; to
         token,
       );
       setSavedAt(Date.now());
+      toast.success("System configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }
@@ -139,6 +143,7 @@ function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; to
 }
 
 function IntegrationSection({ initial, token }: { initial: ApplicationIntegrationOut; token: string }) {
+  const toast = useToast();
   const [apiUrl, setApiUrl] = useState(initial.api_url ?? "");
   const [webhookUrl, setWebhookUrl] = useState(initial.webhook_url ?? "");
   const [webhookSecret, setWebhookSecret] = useState("");
@@ -168,8 +173,10 @@ function IntegrationSection({ initial, token }: { initial: ApplicationIntegratio
       setWebhookSecret("");
       setSsoSecret("");
       setSavedAt(Date.now());
+      toast.success("Integration configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }
@@ -212,6 +219,7 @@ function IntegrationSection({ initial, token }: { initial: ApplicationIntegratio
 }
 
 function PaymentSection({ initial, token }: { initial: ApplicationPaymentOut; token: string }) {
+  const toast = useToast();
   const [defaultGateway, setDefaultGateway] = useState(initial.default_gateway);
   const [gatewayMode, setGatewayMode] = useState(initial.gateway_mode);
   const [saving, setSaving] = useState(false);
@@ -224,8 +232,10 @@ function PaymentSection({ initial, token }: { initial: ApplicationPaymentOut; to
     try {
       await adminUpdatePaymentConfig({ default_gateway: defaultGateway, gateway_mode: gatewayMode }, token);
       setSavedAt(Date.now());
+      toast.success("Payment gateway configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }
@@ -266,6 +276,7 @@ function PaymentSection({ initial, token }: { initial: ApplicationPaymentOut; to
 }
 
 function NotificationSection({ initial, token }: { initial: ApplicationNotificationOut; token: string }) {
+  const toast = useToast();
   const [senderName, setSenderName] = useState(initial.email_sender_name ?? "");
   const [senderAddress, setSenderAddress] = useState(initial.email_sender_address ?? "");
   const [replyTo, setReplyTo] = useState(initial.email_reply_to ?? "");
@@ -287,8 +298,10 @@ function NotificationSection({ initial, token }: { initial: ApplicationNotificat
         token,
       );
       setSavedAt(Date.now());
+      toast.success("Notification configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }
@@ -327,6 +340,7 @@ function NotificationSection({ initial, token }: { initial: ApplicationNotificat
 }
 
 function SubscriptionRulesSection({ initial, token }: { initial: ApplicationSubscriptionRulesOut; token: string }) {
+  const toast = useToast();
   const [allowUpgrade, setAllowUpgrade] = useState(initial.allow_upgrade);
   const [allowDowngrade, setAllowDowngrade] = useState(initial.allow_downgrade);
   const [allowCancellation, setAllowCancellation] = useState(initial.allow_cancellation);
@@ -352,8 +366,10 @@ function SubscriptionRulesSection({ initial, token }: { initial: ApplicationSubs
         token,
       );
       setSavedAt(Date.now());
+      toast.success("Subscription rules saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }
@@ -400,6 +416,7 @@ function SubscriptionRulesSection({ initial, token }: { initial: ApplicationSubs
 }
 
 function SecuritySection({ initial, token }: { initial: SecurityConfigOut; token: string }) {
+  const toast = useToast();
   const [otpLength, setOtpLength] = useState(String(initial.otp_length));
   const [otpExpiry, setOtpExpiry] = useState(String(initial.otp_expiry_seconds));
   const [otpMaxAttempts, setOtpMaxAttempts] = useState(String(initial.otp_max_attempts));
@@ -422,8 +439,10 @@ function SecuritySection({ initial, token }: { initial: SecurityConfigOut; token
         token,
       );
       setSavedAt(Date.now());
+      toast.success("Security configuration saved");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setSaving(false);
     }

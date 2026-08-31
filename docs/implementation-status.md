@@ -968,6 +968,94 @@ no frontend changes needed (the admin subscription/customer detail pages
 already render `provisioning_status` and the Everyticket mapping fields -
 they were just never fed anything but `NOT_STARTED`/`null` before).
 
+## Increment 15 (2026-08-31): toast notifications, Plans Management popup + rich-text description + reordering
+
+Vishal's request after using the admin panel for a while: a general toast
+notification system for "any updates" across the app, plus three specific
+Plans Management asks (spec sections 14-16, 51) - add/edit plans as a
+popup instead of an inline form, a rich-text (bullet-point) editor for the
+plan description that renders formatted on the public plan listing, and
+plan reordering that's reflected in the same order on the public listing.
+`Plan.display_order` and the ordered-by-it queries already existed from
+increment 1 - only a bulk reorder endpoint and the UI were missing.
+
+**Backend**: `Plan.description` widened from `String(2000)` to `Text`
+(migration `a4f7c9e2b6d1`, downgrade lossy-truncates back to 2000 chars)
+since a bullet-point-formatted description is now HTML, not plain text.
+New `app/plans/sanitize.py` - a `bleach`-based server-side allowlist
+(`p`, `br`, `strong`/`b`, `em`/`i`, `u`, `ul`/`ol`/`li`, zero attributes)
+that both `create_plan()` and `update_plan()` run the incoming
+description through before it ever reaches the database; this is the
+real trust boundary, since the public plan listing renders the stored
+HTML unescaped. New `PUT /api/v1/admin/plans/reorder` (registered ahead
+of the dynamic `/{plan_code}` route, same lesson as increment 12's tax-
+config endpoint) takes the full ordered list of this application's plan
+codes, rejects a partial or unknown-code list (404), sets
+`display_order` to each code's index, writes one `PLANS_REORDERED` audit
+log entry, and returns the reordered list - `GET /public/plans` and
+`GET /admin/plans` already ordered by `display_order`, so nothing else
+needed to change for the public listing to pick up the new order.
+
+**Frontend infrastructure** (all in-house, no new UI-kit dependency -
+matches this codebase's dependency-light approach throughout):
+`ToastContext` (`useToast()` returning `success`/`error`/`info`, 4.5s
+auto-dismiss, manual close) is now mounted at the app root, above
+`AuthProvider`, so it's available on every admin and customer page.
+`Modal` is a reusable popup (Escape/click-outside to close) now used for
+the Plans add/edit form instead of the old inline expanding panel.
+`RichTextEditor` is a minimal bold/italic/bullet-list/numbered-list
+editor built on `contentEditable` + `document.execCommand` (deliberately
+not a WYSIWYG library) with a hidden `<input>` kept in sync, matching
+this codebase's uncontrolled-form (`defaultValue` + `FormData`)
+convention exactly so no submit handler needed special-casing. A second,
+independent client-side allowlist sanitizer (`utils/sanitizeHtml.ts`,
+`DOMParser`-based, no dependency) mirrors the backend's allowlist as
+defense-in-depth before the public listing page renders a description
+with `dangerouslySetInnerHTML`.
+
+**Plans Management UI** (`AdminPlansPage.tsx`, fully rewritten): the
+plans table now supports both native HTML5 drag-and-drop and up/down
+arrow buttons for reordering (arrows for precision/accessibility,
+drag for speed) - both paths call the same `persistOrder()`, which hits
+the new reorder endpoint, toasts the result, and rolls back to the
+server's real order on failure. "New plan" and each row's "Edit" open a
+`Modal`-based form with `RichTextEditor` for the description; plan
+Features management was split out into its own toggleable panel
+(previously combined with the edit form) so editing a plan's fields and
+managing its features are two separate, clearer actions. The public
+`PlansPage.tsx` now renders `plan.description` through `sanitizeHtml()` +
+`dangerouslySetInnerHTML` (a `<div>`, not a `<p>`, since the sanitized
+HTML can itself contain block-level `<ul>`/`<ol>`) instead of the old
+plain-text paragraph, which would otherwise have shown raw `<ul><li>`
+tags as literal text once descriptions became rich text.
+
+**Toasts wired app-wide**: every admin page with a mutating action now
+calls `toast.success(...)` alongside its existing success path and
+`toast.error(err)` alongside its existing `setError(err)` (the toast is
+transient feedback, the existing inline `ErrorBanner` stays as the
+persistent detail) - System/Gateway/Integration/Notification/Security
+configuration saves, customer suspend/activate/generate-SSO-link, the
+invoice tax-config save and per-invoice email resend, webhook delivery
+retry, notification template save, registration-form field create/
+activate/deactivate/toggle-required, and every action on the Testing/
+Developer Tools page (all funnel through one `run()` helper there, so a
+single change covered test payment, test subscription events, test
+webhook send, the failure simulator, test email, OTP/MFA bypass
+toggles, and the test-data generator/cleanup). On the customer-facing
+side, `PortalPage.tsx` (upgrade/downgrade/renew/cancel/payment-simulate)
+and `SubscribePage.tsx` (identify/OTP-verify/payment-simulate failures)
+got the same treatment.
+
+Verified: 8 new backend tests (`tests/test_plan_description_and_reorder.py`
+- sanitizer allowlist behavior, create/update sanitize on the way in,
+reorder changes `display_order` and is reflected in `GET /public/plans`
+order, reorder rejects an incomplete or unknown-code list, reorder
+requires `PLANS_MANAGE`) - 105 total tests, 104 passing (same
+pre-existing `/ready`-needs-Postgres gap). Frontend: `npm run build`
+(strict `tsc -b` + `vite build`) passes clean in an isolated scratch
+copy after every file transferred to Vishal's machine, no new npm
+dependency added anywhere in this increment.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
@@ -1136,11 +1224,16 @@ Remaining open items:
   path ("PayU adapter exists" is satisfied - PayU's own test credentials
   haven't been exercised end-to-end yet, which needs Vishal's own
   credentials in his local `backend/.env`, never pasted into chat).
-- Docs/README refresh: **done as of increment 14** (this pass) - `README.md`,
+- Docs/README refresh: **done as of increment 15** (this pass) - `README.md`,
   `frontend/README.md`, and this file are all now current through
-  increment 14.
-- Everything above is unit-tested (97 tests) against SQLite; no end-to-end
+  increment 15.
+- Everything above is unit-tested (105 tests) against SQLite; no end-to-end
   manual pass against a real Postgres + real PayU sandbox + a real
   Everyticket-shaped webhook receiver has been done in this environment -
   that's the natural next step once Vishal is ready to test, per his own
   standing instruction to test everything at the end.
+- Toast notifications (increment 15) and the Plans Management popup/
+  rich-text/reorder UI are unit-verified (backend tests) and build-
+  verified (frontend `tsc -b` + `vite build`), but - like everything
+  else in this list - not yet clicked through by hand; worth a pass once
+  Vishal is testing end to end.

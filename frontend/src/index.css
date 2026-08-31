@@ -16,6 +16,8 @@
   --danger: #b3261e;
   --danger-bg: rgba(179, 38, 30, 0.08);
   --danger-hover: #8f1e18;
+  --success: #1e7d3c;
+  --success-bg: rgba(30, 125, 60, 0.1);
   --code-bg: #f4e9e6;
   --shadow-sm: 0 1px 2px rgba(42, 21, 18, 0.06);
   --shadow-md: 0 4px 16px rgba(42, 21, 18, 0.08);
@@ -54,6 +56,8 @@
     --danger: #f87171;
     --danger-bg: rgba(248, 113, 113, 0.12);
     --danger-hover: #fca5a5;
+    --success: #4ade80;
+    --success-bg: rgba(74, 222, 128, 0.14);
     --code-bg: #241719;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.35);
@@ -717,4 +721,234 @@ textarea {
   background: var(--surface);
   color: var(--text-h);
   resize: vertical;
+}
+
+/* ---------- Toasts ---------- */
+
+.toast-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 360px;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 12px 14px;
+  font-size: 14px;
+  animation: toast-in 0.18s ease-out;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-success {
+  border-left-color: var(--success);
+}
+
+.toast-error {
+  border-left-color: var(--danger);
+}
+
+.toast-message {
+  flex: 1;
+  color: var(--text-h);
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  color: var(--text);
+  opacity: 0.6;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0;
+}
+
+.toast-close:hover {
+  opacity: 1;
+}
+
+/* ---------- Modal ---------- */
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 8, 10, 0.45);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 16px;
+  z-index: 900;
+  overflow-y: auto;
+}
+
+.modal-panel {
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 480px;
+  max-height: calc(100vh - 80px);
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-panel-wide {
+  max-width: 680px;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+
+.modal-close:hover {
+  color: var(--accent);
+}
+
+.modal-body {
+  padding: 20px 22px;
+  overflow-y: auto;
+}
+
+/* ---------- Rich text editor ---------- */
+
+.rte {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.rte-toolbar {
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.rte-button {
+  border: 1px solid transparent;
+  background: none;
+  color: var(--text-h);
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.rte-button:hover {
+  background: var(--accent-bg);
+  border-color: var(--border);
+}
+
+.rte-content {
+  min-height: 110px;
+  padding: 10px 12px;
+  color: var(--text-h);
+  outline: none;
+}
+
+.rte-content:empty::before {
+  content: attr(data-placeholder);
+  color: var(--text);
+  opacity: 0.5;
+}
+
+.rte-content ul,
+.rte-content ol {
+  margin: 6px 0;
+  padding-left: 24px;
+}
+
+.plan-description ul,
+.plan-description ol {
+  margin: 6px 0;
+  padding-left: 22px;
+  text-align: left;
+}
+
+/* ---------- Drag-to-reorder ---------- */
+
+.reorder-row {
+  cursor: grab;
+}
+
+.reorder-row.dragging {
+  opacity: 0.5;
+}
+
+.reorder-handle {
+  color: var(--text);
+  opacity: 0.5;
+  font-size: 14px;
+  padding-right: 6px;
+  user-select: none;
+}
+
+.reorder-buttons {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 8px;
+}
+
+.reorder-buttons button {
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-h);
+  border-radius: 6px;
+  width: 24px;
+  height: 24px;
+  line-height: 1;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.reorder-buttons button:hover:not(:disabled) {
+  background: var(--accent-bg);
+}
+
+.reorder-buttons button:disabled {
+  opacity: 0.3;
+  cursor: default;
 }

@@ -17,12 +17,14 @@ from app.auth.deps import require_permission
 from app.auth.models import AdminUser
 from app.core.exceptions import AppError
 from app.plans.models import Plan, PlanFeature, PlanTransition
+from app.plans.sanitize import sanitize_description
 from app.plans.schemas import (
     PlanAdminOut,
     PlanCreate,
     PlanFeatureAdminOut,
     PlanFeatureCreate,
     PlanFeatureUpdate,
+    PlanReorderRequest,
     PlanTransitionCreate,
     PlanTransitionOut,
     PlanUpdate,
@@ -101,7 +103,7 @@ def create_plan(
         application_id=application.id,
         plan_code=body.plan_code.upper(),
         name=body.name,
-        description=body.description,
+        description=sanitize_description(body.description),
         price=body.price,
         currency=body.currency,
         billing_interval=body.billing_interval,
@@ -124,6 +126,62 @@ def create_plan(
     db.commit()
     db.refresh(plan)
     return PlanAdminOut.model_validate(plan)
+
+
+@router.put("/reorder", response_model=list[PlanAdminOut])
+def reorder_plans(
+    body: PlanReorderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+    admin: AdminUser = Depends(require_permission("PLANS_MANAGE")),
+):
+    """Registered before /{plan_code} (same reason as /transitions below)
+    so "reorder" is never matched as a plan_code path param. Sets
+    display_order = index in the given list for every plan named - the
+    request must name every one of this application's plans (not just a
+    changed subset) so a stale/partial client can't silently strand some
+    plans at their old display_order relative to the rest."""
+    plans_by_code = {
+        p.plan_code: p
+        for p in db.query(Plan).filter(Plan.application_id == application.id).all()
+    }
+    requested_codes = [code.upper() for code in body.plan_codes]
+
+    unknown = [code for code in requested_codes if code not in plans_by_code]
+    if unknown:
+        raise PlanNotFoundError(f"Unknown plan code(s): {', '.join(unknown)}")
+    if set(requested_codes) != set(plans_by_code.keys()):
+        missing = set(plans_by_code.keys()) - set(requested_codes)
+        raise PlanNotFoundError(
+            f"Reorder must include every plan for this application - missing: {', '.join(sorted(missing))}"
+        )
+
+    old_value = {code: plan.display_order for code, plan in plans_by_code.items()}
+    for index, code in enumerate(requested_codes):
+        plans_by_code[code].display_order = index
+        db.add(plans_by_code[code])
+    db.flush()
+
+    audit_service.record(
+        db,
+        actor=admin.email,
+        action="PLANS_REORDERED",
+        entity_type="plan",
+        entity_id=application.code,
+        old_value=old_value,
+        new_value={code: index for index, code in enumerate(requested_codes)},
+        ip_address=_client_ip(request),
+    )
+    db.commit()
+
+    plans = (
+        db.query(Plan)
+        .filter(Plan.application_id == application.id)
+        .order_by(Plan.display_order)
+        .all()
+    )
+    return [PlanAdminOut.model_validate(p) for p in plans]
 
 
 @router.get("/transitions", response_model=list[PlanTransitionOut])
@@ -244,6 +302,8 @@ def update_plan(
     old_value = PlanAdminOut.model_validate(plan).model_dump(exclude={"features"})
 
     updates = body.model_dump(exclude_unset=True)
+    if "description" in updates:
+        updates["description"] = sanitize_description(updates["description"])
     for field, value in updates.items():
         setattr(plan, field, value)
     db.add(plan)

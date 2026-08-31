@@ -15,11 +15,13 @@ import {
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import type { CustomerAdminDetailOut, SsoLinkOut } from "../../api/types";
 
 export function AdminCustomerDetailPage() {
   const { customerId = "" } = useParams();
   const { adminToken } = useAuth();
+  const toast = useToast();
   const [detail, setDetail] = useState<CustomerAdminDetailOut | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -37,9 +39,11 @@ export function AdminCustomerDetailPage() {
     setBusy(true);
     try {
       await adminSuspendCustomer(customerId, undefined, adminToken);
+      toast.success("Customer suspended");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -50,9 +54,11 @@ export function AdminCustomerDetailPage() {
     setBusy(true);
     try {
       await adminActivateCustomer(customerId, adminToken);
+      toast.success("Customer activated");
       reload();
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
@@ -66,8 +72,10 @@ export function AdminCustomerDetailPage() {
     try {
       const result = await adminGenerateSsoLink(customerId, adminToken);
       setSsoLink(result);
+      toast.success("SSO test link generated");
     } catch (err) {
       setError(err);
+      toast.error(err);
     } finally {
       setBusy(false);
     }
