@@ -15,6 +15,7 @@ gates shared with every other TEST_MODE-only admin action.
 """
 from app.core.config import get_settings
 from app.customers import service as customer_service
+from app.customers.models import Customer, CustomerRegistrationData
 from app.notifications.email.providers.smtp import provider as smtp_provider
 
 from tests.test_admin_api import _admin_headers, _new_active_subscription
@@ -266,6 +267,27 @@ def test_test_data_generator_and_cleanup_round_trip(client, seeded_db):
     )
     assert customer_lookup.json()["total"] == 1
 
+    # Registration-data sample values (2026-09: previously the generator
+    # left this customer's registration data empty, so a generated
+    # customer never demonstrated the customer-portal "Account" card's
+    # registration-details section or the admin customer-detail page's
+    # equivalent) - one row, keyed by whatever active form fields are
+    # seeded (app/core/seed.py), non-empty values for every non-file field.
+    # Captured as a plain int rather than kept as a live ORM object -
+    # cleanup below deletes this row out from under the session via a
+    # bulk delete(synchronize_session=False), which would leave a
+    # still-attached db_customer object expired and raise
+    # ObjectDeletedError on next attribute access.
+    db_customer_id = seeded_db.query(Customer.id).filter(Customer.customer_id == body["customer_id"]).scalar()
+    reg_rows = (
+        seeded_db.query(CustomerRegistrationData)
+        .filter(CustomerRegistrationData.customer_id == db_customer_id)
+        .all()
+    )
+    assert len(reg_rows) == 1
+    assert reg_rows[0].data  # non-empty
+    assert all(v for v in reg_rows[0].data.values())
+
     cleanup = client.post("/api/v1/admin/testing/data/cleanup", headers=headers)
     assert cleanup.status_code == 200, cleanup.text
     cleanup_body = cleanup.json()
@@ -277,3 +299,12 @@ def test_test_data_generator_and_cleanup_round_trip(client, seeded_db):
         "/api/v1/admin/customers", params={"q": body["customer_id"]}, headers=headers
     )
     assert after_cleanup.json()["total"] == 0
+
+    # The registration-data row for this now-deleted customer must not be
+    # left behind as an orphan.
+    assert (
+        seeded_db.query(CustomerRegistrationData)
+        .filter(CustomerRegistrationData.customer_id == db_customer_id)
+        .count()
+        == 0
+    )

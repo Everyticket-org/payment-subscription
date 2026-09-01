@@ -1343,3 +1343,43 @@ the new `PlanFeaturesModal`, which follows the exact same pattern - not a
 new class of issue). Not yet clicked through by hand in a real browser -
 same standing note as increment 15, Vishal is testing everything at the
 end.
+
+## 2026-09-01 (follow-up): registration data missing from customer portal's Account card
+
+Vishal reported the "Account" card's registration-details section (added
+in the 2026-09 UI/UX rework above) wasn't showing museum name / other
+dynamic-form values for a test customer. Two real gaps found and fixed:
+
+- `GET /customer/me` (`app/api/v1/customer.py`) filtered
+  `CustomerRegistrationData` by both `customer_id` AND `application_id`,
+  while the admin customer-detail endpoint's equivalent, already-working
+  query (`admin_customers.py`) filters by `customer_id` alone. Since V1
+  only has one `Application` row this shouldn't normally diverge, but
+  there's no reason for the portal query to be stricter than the proven
+  admin one and risk silently hiding a real submission - aligned it to
+  match. New regression test
+  (`tests/test_end_to_end.py::test_customer_portal_shows_registration_data_and_combined_table_fields`)
+  drives a real subscribe with museum_name/contact_person/gstin/address,
+  logs in, and asserts `GET /customer/me` actually returns them, plus the
+  combined table's correlation fields (billing_interval/billing_frequency,
+  payment.subscription_ref, invoice.subscription_ref/transaction_id) -
+  none of these were ever asserted on before, only exercised implicitly.
+- The likelier real-world cause: the admin Testing/Developer Tools **TEST
+  DATA GENERATOR** never created a `CustomerRegistrationData` row at all -
+  a customer generated that way (the fast way to get a full
+  customer/subscription/payment/invoice chain to test UI against) always
+  had empty registration data, which would look identical to the bug
+  above from the customer portal's perspective. Fixed: `generate_test_data()`
+  now also creates one registration-data row with a type-appropriate
+  sample value (`_sample_registration_value()`) for every active
+  `RegistrationFormField` on the application - whatever fields the admin
+  has actually configured, not hardcoded to this app's own seeded
+  museum_name/contact_person/gstin/address set. `cleanup_test_data()`
+  deletes it back out (`CustomerRegistrationData.customer_id.in_(...)`,
+  before the subscription/customer deletes) so a repeated generate/
+  cleanup cycle can never leave an orphaned row. Extended
+  `test_test_data_generator_and_cleanup_round_trip` to assert the row
+  exists after generate (non-empty values) and is gone after cleanup.
+
+Verified: 106 total tests (up from 105), 105 passing (same pre-existing
+`/ready` gap).

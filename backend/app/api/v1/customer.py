@@ -112,9 +112,14 @@ def get_portal(
     invoices = (
         db.query(Invoice).filter(Invoice.customer_id == customer.id).order_by(Invoice.created_at.desc()).all()
     )
+    # Filtered by customer_id only - same as the admin customer-detail
+    # endpoint's equivalent query (app/api/v1/admin_customers.py). V1 only
+    # ever has one Application row, but there's no reason for this one
+    # query to be stricter than the admin one and risk silently hiding a
+    # real submission if application_id ever drifted (e.g. a reseed).
     registration_data = (
         db.query(CustomerRegistrationData)
-        .filter(CustomerRegistrationData.customer_id == customer.id, CustomerRegistrationData.application_id == application.id)
+        .filter(CustomerRegistrationData.customer_id == customer.id)
         .order_by(CustomerRegistrationData.created_at.desc())
         .all()
     )

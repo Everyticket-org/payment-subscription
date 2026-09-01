@@ -53,7 +53,8 @@ from app.core.config import get_settings
 from app.core.enums import PaymentType, SubscriptionEventType
 from app.core.exceptions import CustomerNotFound, PlanNotFound, SubscriptionNotFound
 from app.customers import service as customer_service
-from app.customers.models import Customer
+from app.customers.models import Customer, CustomerRegistrationData
+from app.forms.models import RegistrationFormField
 from app.invoices.models import Invoice, InvoiceItem
 from app.notifications.email import service as email_service
 from app.notifications.models import NotificationLog
@@ -91,6 +92,35 @@ def _client_ip(request: Request) -> str | None:
 
 def _short_suffix() -> str:
     return secrets.token_hex(4).upper()
+
+
+def _sample_registration_value(field: RegistrationFormField, suffix: str) -> str | None:
+    """One plausible sample value per field_type, so the generated test
+    customer's registration data actually renders something recognizable
+    wherever it's shown (admin customer detail, customer portal "Account"
+    card) instead of being blank - whatever fields the admin has
+    configured for this application, not a hardcoded museum_name/etc.
+    field set, since those are just this app's own seed data (spec
+    section 18 fields are fully admin-configurable). `file` fields are
+    skipped - there's no upload storage to fake a value for (see
+    DynamicRegistrationForm.tsx's own note on this)."""
+    if field.field_type == "file":
+        return None
+    if field.field_type in ("dropdown", "radio") and field.options:
+        return str(field.options[0])
+    if field.field_type == "checkbox":
+        return "true"
+    if field.field_type == "email":
+        return f"test-{suffix.lower()}@{_TEST_EMAIL_DOMAIN}"
+    if field.field_type == "phone":
+        return f"9{secrets.randbelow(10**9):09d}"
+    if field.field_type == "number":
+        return "1"
+    if field.field_type == "date":
+        return datetime.now(timezone.utc).date().isoformat()
+    if field.field_type == "url":
+        return "https://example.com"
+    return f"Sample {field.label} {suffix}"
 
 
 # --- TEST PAYMENT ---------------------------------------------------------
@@ -523,10 +553,13 @@ def generate_test_data(
     linked chain - test plan, test customer, test subscription (ACTIVE,
     via the same simulate_mock_callback() path TEST PAYMENT above uses,
     so it also generates a real invoice and queues a real webhook event
-    if a destination is configured) - plus an Everyticket mapping row.
-    Every generated row is clearly marked TEST (plan_code prefixed
-    "TEST-", customer email on the "@test.invalid" domain) so /data/cleanup
-    below can find exactly these rows and nothing else."""
+    if a destination is configured), a registration-data submission for
+    every active dynamic form field (spec section 18 - so the generated
+    customer looks like a real signup wherever registration data is
+    shown, not a blank one), plus an Everyticket mapping row. Every
+    generated row is clearly marked TEST (plan_code prefixed "TEST-",
+    customer email on the "@test.invalid" domain) so /data/cleanup below
+    can find exactly these rows and nothing else."""
     suffix = _short_suffix()
     plan = Plan(
         application_id=application.id,
@@ -553,6 +586,27 @@ def generate_test_data(
     db.flush()
 
     subscription = subscription_service.create_pending_subscription(db, customer=customer, application=application, plan=plan)
+
+    active_fields = (
+        db.query(RegistrationFormField)
+        .filter(RegistrationFormField.application_id == application.id, RegistrationFormField.active.is_(True))
+        .all()
+    )
+    sample_data = {
+        f.field_key: value
+        for f in active_fields
+        if (value := _sample_registration_value(f, suffix)) is not None
+    }
+    if sample_data:
+        db.add(
+            CustomerRegistrationData(
+                customer_id=customer.id,
+                application_id=application.id,
+                subscription_id=subscription.id,
+                data=sample_data,
+            )
+        )
+
     payment = payment_service.create_payment_transaction(
         db, customer=customer, subscription=subscription, plan=plan, payment_type=PaymentType.NEW.value, gateway_code="mock"
     )
@@ -599,6 +653,9 @@ def cleanup_test_data(
 
     test_customers = db.query(Customer).filter(Customer.email.like(f"%@{_TEST_EMAIL_DOMAIN}")).all()
     customer_ids = [c.id for c in test_customers]
+
+    if customer_ids:
+        db.query(CustomerRegistrationData).filter(CustomerRegistrationData.customer_id.in_(customer_ids)).delete(synchronize_session=False)
 
     subscriptions = db.query(Subscription).filter(Subscription.plan_id.in_(plan_ids)).all() if plan_ids else []
     sub_ids = [s.id for s in subscriptions]

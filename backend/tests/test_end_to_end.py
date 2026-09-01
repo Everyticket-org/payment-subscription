@@ -67,6 +67,71 @@ def test_new_subscription_mock_payment_success_activates_and_invoices(client, se
     assert float(invoice.total_amount) == float(payment.amount)
 
 
+def test_customer_portal_shows_registration_data_and_combined_table_fields(client, seeded_db):
+    """Regression test for a real gap: GET /customer/me's registration_data
+    (added for the customer-portal "Account" card, 2026-09) and the
+    combined subscriptions+payments+invoices table's correlation fields
+    were never actually asserted anywhere - only exercised implicitly via
+    a subscribe call that happened to pass registration_data. Drives the
+    exact same museum_name/contact_person/gstin/address fields
+    test_new_subscription_mock_payment_success_activates_and_invoices
+    above submits, then logs in as that customer (OTP bypass, same
+    pattern _customer_token() helpers elsewhere in this suite use) and
+    checks the portal actually surfaces them."""
+    resp = client.post(
+        "/api/v1/public/plans/professional/subscribe",
+        json={
+            "email": "portal-reg@museum.example",
+            "mobile": "9876500001",
+            "registration_data": {
+                "museum_name": "National Gallery",
+                "contact_person": "Asha Rao",
+                "gstin": "29ABCDE1234F1Z5",
+                "address": "Bengaluru",
+            },
+        },
+    )
+    transaction_id = resp.json()["payment"]["transaction_id"]
+    subscription_id = resp.json()["subscription"]["subscription_id"]
+    client.post("/api/v1/payment/mock/callback", json={"transaction_id": transaction_id, "scenario": "SUCCESS"})
+
+    identify = client.post(
+        "/api/v1/public/identify", json={"email": "portal-reg@museum.example", "mobile": "9876500001"}
+    )
+    otp_session_id = identify.json()["otp_session_id"]
+    verify = client.post(
+        "/api/v1/public/otp/verify", json={"otp_session_id": otp_session_id, "code": "BYPASS"}
+    )
+    token = verify.json()["access_token"]
+
+    portal = client.get("/api/v1/customer/me", headers={"Authorization": f"Bearer {token}"})
+    assert portal.status_code == 200, portal.text
+    body = portal.json()
+
+    # registration_data: the customer's own dynamic-form submission is
+    # now visible in the "Account" card.
+    assert len(body["registration_data"]) == 1
+    assert body["registration_data"][0]["data"]["museum_name"] == "National Gallery"
+    assert body["registration_data"][0]["data"]["contact_person"] == "Asha Rao"
+    assert body["registration_data"][0]["data"]["gstin"] == "29ABCDE1234F1Z5"
+    assert body["registration_data"][0]["data"]["address"] == "Bengaluru"
+
+    # Combined table correlation fields: billing cycle on the subscription,
+    # subscription_ref on the payment, subscription_ref/transaction_id on
+    # the invoice, all pointing at the same subscription_id.
+    sub = body["active_subscription"]
+    assert sub["subscription_id"] == subscription_id
+    assert sub["billing_interval"] == "month"
+    assert sub["billing_frequency"] == 1
+
+    payment = next(p for p in body["payments"] if p["transaction_id"] == transaction_id)
+    assert payment["subscription_ref"] == subscription_id
+    assert payment["created_at"] is not None
+
+    invoice = next(inv for inv in body["invoices"] if inv["subscription_ref"] == subscription_id)
+    assert invoice["transaction_id"] == transaction_id
+
+
 def test_duplicate_success_callback_is_idempotent(client, seeded_db):
     resp = client.post(
         "/api/v1/public/plans/basic/subscribe",
