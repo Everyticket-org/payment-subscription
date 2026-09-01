@@ -1,20 +1,30 @@
 /**
- * Admin Plans / Plan Features / Plan Transitions (spec sections 14-16, 51).
+ * Admin Plans / Plan Features (spec sections 14-15, 51).
  * Add/Edit plan is a popup (Modal) with a rich-text description editor
  * (bold/italic/bullet+numbered lists); the plans table supports both
  * drag-and-drop and up/down-button reordering, persisted via
  * PUT /admin/plans/reorder and reflected in the same order on the public
- * plan listing page. Feature management and the transitions allow-list
- * stay as their own panels below the table, unchanged in shape.
+ * plan listing page. Active/Inactive is toggled directly from the grid
+ * (a click on the status badge, same pattern as the registration-form
+ * page's toggleActive) rather than inside the edit form.
+ *
+ * Feature management is now its own popup (Modal), opened via the
+ * "Features" button per row, instead of an inline panel below the table -
+ * per Vishal's admin-panel request (2026-09).
+ *
+ * The Plan Transitions allow-list UI has been removed per the same
+ * request ("Plan transitions are not required for now as we are giving
+ * dropdown to user for change plan") - the backend PlanTransition
+ * model/admin endpoints still exist untouched, they're just not surfaced
+ * here any more. See app/subscriptions/service.py's
+ * assert_transition_allowed() for the price-based logic that replaced the
+ * allow-list requirement.
  */
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   adminAddPlanFeature,
   adminCreatePlan,
-  adminCreatePlanTransition,
   adminDeletePlanFeature,
-  adminDeletePlanTransition,
-  adminListPlanTransitions,
   adminListPlans,
   adminReorderPlans,
   adminUpdatePlan,
@@ -26,7 +36,7 @@ import { RichTextEditor } from "../../components/RichTextEditor";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { PlanAdminOut, PlanTransitionOut } from "../../api/types";
+import type { PlanAdminOut } from "../../api/types";
 
 type FormState = { mode: "create" } | { mode: "edit"; plan: PlanAdminOut } | null;
 
@@ -41,22 +51,21 @@ export function AdminPlansPage() {
   const { adminToken } = useAuth();
   const toast = useToast();
   const [plans, setPlans] = useState<PlanAdminOut[] | null>(null);
-  const [transitions, setTransitions] = useState<PlanTransitionOut[] | null>(null);
-  const [selectedCode, setSelectedCode] = useState<string | null>(null);
+  const [featuresCode, setFeaturesCode] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [formState, setFormState] = useState<FormState>(null);
   const [draggedCode, setDraggedCode] = useState<string | null>(null);
   const [reordering, setReordering] = useState(false);
+  const [togglingCode, setTogglingCode] = useState<string | null>(null);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
     adminListPlans(adminToken).then(setPlans).catch(setError);
-    adminListPlanTransitions(adminToken).then(setTransitions).catch(setError);
   }, [adminToken]);
 
   useEffect(reload, [reload]);
 
-  const selectedPlan = plans?.find((p) => p.plan_code === selectedCode) ?? null;
+  const featuresPlan = plans?.find((p) => p.plan_code === featuresCode) ?? null;
 
   async function persistOrder(orderedCodes: string[]) {
     if (!adminToken) return;
@@ -95,6 +104,20 @@ export function AdminPlansPage() {
     persistOrder(movePlanCode(codes, from, to));
   }
 
+  async function toggleActive(plan: PlanAdminOut) {
+    if (!adminToken) return;
+    setTogglingCode(plan.plan_code);
+    try {
+      await adminUpdatePlan(plan.plan_code, { active: !plan.active }, adminToken);
+      toast.success(plan.active ? `${plan.name} deactivated` : `${plan.name} activated`);
+      reload();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setTogglingCode(null);
+    }
+  }
+
   return (
     <section>
       <div className="page-header-row" style={{ maxWidth: "none" }}>
@@ -107,7 +130,7 @@ export function AdminPlansPage() {
       <ErrorBanner error={error} />
 
       <div className="admin-panel">
-        <p className="hint">Drag a row (or use the arrows) to reorder - the public plan listing page shows plans in this same order.</p>
+        <p className="hint">Drag a row (or use the arrows) to reorder - the public plan listing page shows plans in this same order. Click the status badge to activate/deactivate a plan.</p>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -147,7 +170,15 @@ export function AdminPlansPage() {
                     {plan.billing_frequency > 1 ? "s" : ""}
                   </td>
                   <td>
-                    <StatusBadge value={plan.active ? "ACTIVE" : "INACTIVE"} />
+                    <button
+                      className="button button-secondary"
+                      style={{ padding: 0, border: "none", background: "none" }}
+                      disabled={togglingCode === plan.plan_code}
+                      title={plan.active ? "Click to deactivate" : "Click to activate"}
+                      onClick={() => toggleActive(plan)}
+                    >
+                      <StatusBadge value={plan.active ? "ACTIVE" : "INACTIVE"} />
+                    </button>
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <div className="reorder-buttons">
@@ -176,9 +207,9 @@ export function AdminPlansPage() {
                     <button
                       className="button button-secondary"
                       style={{ marginLeft: 8 }}
-                      onClick={() => setSelectedCode(plan.plan_code === selectedCode ? null : plan.plan_code)}
+                      onClick={() => setFeaturesCode(plan.plan_code)}
                     >
-                      {plan.plan_code === selectedCode ? "Hide features" : "Features"}
+                      Features
                     </button>
                   </td>
                 </tr>
@@ -189,108 +220,6 @@ export function AdminPlansPage() {
         {plans === null && !error && <p>Loading plans...</p>}
       </div>
 
-      {selectedPlan && <PlanFeaturesPanel plan={selectedPlan} onChanged={reload} />}
-
-      <div className="admin-panel">
-        <h2>Plan transitions</h2>
-        <p className="hint">Explicit upgrade/downgrade allow-list (spec section 16) - absence of a row means the transition is blocked.</p>
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>From</th>
-                <th>To</th>
-                <th>Type</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {transitions?.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.from_plan_code}</td>
-                  <td>{t.to_plan_code}</td>
-                  <td>{t.transition_type}</td>
-                  <td>
-                    <button
-                      className="button button-danger"
-                      onClick={async () => {
-                        if (!adminToken) return;
-                        try {
-                          await adminDeletePlanTransition(t.id, adminToken);
-                          toast.success("Transition removed");
-                          reload();
-                        } catch (err) {
-                          toast.error(err);
-                        }
-                      }}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {plans && plans.length >= 2 && (
-          <form
-            className="inline-form"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              if (!adminToken) return;
-              const form = new FormData(e.currentTarget);
-              try {
-                await adminCreatePlanTransition(
-                  {
-                    from_plan_code: String(form.get("from_plan_code")),
-                    to_plan_code: String(form.get("to_plan_code")),
-                    transition_type: form.get("transition_type") as "UPGRADE" | "DOWNGRADE",
-                  },
-                  adminToken,
-                );
-                (e.target as HTMLFormElement).reset();
-                toast.success("Transition added");
-                reload();
-              } catch (err) {
-                toast.error(err);
-              }
-            }}
-          >
-            <label>
-              From
-              <select name="from_plan_code" required>
-                {plans.map((p) => (
-                  <option key={p.plan_code} value={p.plan_code}>
-                    {p.plan_code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              To
-              <select name="to_plan_code" required>
-                {plans.map((p) => (
-                  <option key={p.plan_code} value={p.plan_code}>
-                    {p.plan_code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Type
-              <select name="transition_type" required>
-                <option value="UPGRADE">UPGRADE</option>
-                <option value="DOWNGRADE">DOWNGRADE</option>
-              </select>
-            </label>
-            <button className="button button-secondary" type="submit">
-              Add transition
-            </button>
-          </form>
-        )}
-      </div>
-
       <PlanFormModal
         state={formState}
         onClose={() => setFormState(null)}
@@ -299,6 +228,8 @@ export function AdminPlansPage() {
           reload();
         }}
       />
+
+      <PlanFeaturesModal plan={featuresPlan} onClose={() => setFeaturesCode(null)} onChanged={reload} />
     </section>
   );
 }
@@ -345,7 +276,6 @@ function PlanFormModal({
             price: Number(form.get("price")),
             billing_interval: (form.get("billing_interval") as "month" | "year") || "month",
             billing_frequency: Number(form.get("billing_frequency") || 1),
-            active: form.get("active") === "on",
           },
           adminToken,
         );
@@ -408,13 +338,12 @@ function PlanFormModal({
             Every N intervals
             <input name="billing_frequency" type="number" min="1" defaultValue={plan?.billing_frequency ?? 1} />
           </label>
-          {isEdit && (
-            <label>
-              <span>Active</span>
-              <input name="active" type="checkbox" defaultChecked={plan?.active} style={{ width: 18, height: 18 }} />
-            </label>
-          )}
         </div>
+        {isEdit && (
+          <p className="hint">
+            Active/Inactive is set from the plans grid now - close this and click the status badge on {plan!.name}'s row.
+          </p>
+        )}
         <label>
           Description
           <RichTextEditor key={editorKey} name="description" defaultValue={plan?.description} placeholder="What makes this plan worth it? Use bullet points to list what's included." />
@@ -427,14 +356,27 @@ function PlanFormModal({
   );
 }
 
-function PlanFeaturesPanel({ plan, onChanged }: { plan: PlanAdminOut; onChanged: () => void }) {
+function PlanFeaturesModal({
+  plan,
+  onClose,
+  onChanged,
+}: {
+  plan: PlanAdminOut | null;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
   const { adminToken } = useAuth();
   const toast = useToast();
   const [error, setError] = useState<unknown>(null);
 
+  useEffect(() => {
+    setError(null);
+  }, [plan]);
+
+  if (!plan) return null;
+
   return (
-    <div className="admin-panel">
-      <h2>{plan.name} - features</h2>
+    <Modal open title={`${plan.name} - features`} onClose={onClose} wide>
       <ErrorBanner error={error} />
       <div className="table-wrap">
         <table className="data-table">
@@ -544,6 +486,6 @@ function PlanFeaturesPanel({ plan, onChanged }: { plan: PlanAdminOut; onChanged:
           Add feature
         </button>
       </form>
-    </div>
+    </Modal>
   );
 }

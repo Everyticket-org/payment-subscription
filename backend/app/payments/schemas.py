@@ -18,6 +18,18 @@ class PaymentTransactionOut(BaseModel):
     # constructing the base object from the PaymentTransaction row (see
     # app/api/v1/public.py and customer.py). None for the mock gateway.
     checkout: dict | None = None
+    # created_at populates automatically via model_validate(transaction)
+    # (it's a real TimestampMixin column) wherever this schema is already
+    # built from an ORM row. subscription_ref does NOT auto-populate -
+    # PaymentTransaction.subscription_id is the internal integer FK, not
+    # the public "SUB-xxxx" string, so it's deliberately a differently-
+    # named field the caller must set explicitly (see
+    # app/api/v1/customer.py's get_portal) to avoid ever leaking or
+    # mis-typing the internal id. Both are optional/None everywhere except
+    # the customer-portal combined table that actually needs them (added
+    # for the admin-panel request, 2026-09).
+    created_at: datetime | None = None
+    subscription_ref: str | None = None
 
 
 class MockCallbackRequest(BaseModel):

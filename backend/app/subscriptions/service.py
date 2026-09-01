@@ -19,7 +19,6 @@ from app.core.ids import new_subscription_id
 from app.core.time import ensure_aware
 from app.customers.models import Customer
 from app.plans.models import Plan
-from app.plans.models import PlanTransition
 from app.subscriptions.models import Subscription, SubscriptionHistory
 
 
@@ -132,22 +131,22 @@ def mark_payment_failed(db: Session, *, subscription: Subscription) -> Subscript
 
 
 def assert_transition_allowed(db: Session, *, from_plan: Plan, to_plan: Plan) -> str:
-    """Spec section 16: transitions are an explicit allow-list. Returns the
-    transition_type ('UPGRADE'/'DOWNGRADE') on success, raises
-    InvalidPlanTransition otherwise."""
+    """Spec section 16 originally required every plan-to-plan transition to
+    be an explicit admin-configured allow-list entry (the PlanTransition
+    table/admin CRUD still exist, unused by this function now). Per
+    Vishal's own request (admin panel changes, 2026-09: "Plan transitions
+    are not required for now as we are giving dropdown to user for
+    change plan") this now auto-determines UPGRADE vs DOWNGRADE purely
+    from the two plans' prices, so any plan can be switched to any other
+    plan without an admin having to pre-configure every pair - matching
+    the customer portal's own dropdown, which already offers every other
+    active plan as a target. `db` is kept in the signature only for
+    interface stability (both call sites already have a session in
+    scope); nothing here queries it any more.
+    """
     if from_plan.id == to_plan.id:
         raise InvalidPlanTransition(f"{to_plan.plan_code} is already the current plan")
-
-    transition = (
-        db.query(PlanTransition)
-        .filter(PlanTransition.from_plan_id == from_plan.id, PlanTransition.to_plan_id == to_plan.id)
-        .first()
-    )
-    if transition is None:
-        raise InvalidPlanTransition(
-            f"Transition from {from_plan.plan_code} to {to_plan.plan_code} is not configured/allowed"
-        )
-    return transition.transition_type
+    return "UPGRADE" if to_plan.price > from_plan.price else "DOWNGRADE"
 
 
 def apply_plan_change(

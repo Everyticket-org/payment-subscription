@@ -18,16 +18,16 @@
  * section 8), driven by whatever active RegistrationFormField rows the
  * admin has configured for this application - no hardcoded field set.
  */
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { identify, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
+import { identify, listPlans, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { MockCallbackResult, SubscribeResponse } from "../../api/types";
+import type { MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 type Step = "form" | "otp" | "payment" | "done";
 
@@ -48,8 +48,20 @@ export function SubscribePage() {
   const [registrationValues, setRegistrationValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [otherPlans, setOtherPlans] = useState<Plan[]>([]);
 
   const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields();
+
+  useEffect(() => {
+    // Side panel on this page (spec section 51: "professional, not MVP")
+    // so someone mid-subscribe can see/switch to another plan without
+    // losing their place - a fetch failure here is non-critical (the
+    // panel just stays empty), so it's swallowed rather than surfaced
+    // via the page's main ErrorBanner.
+    listPlans()
+      .then((all) => setOtherPlans(all.filter((p) => p.plan_code !== planCode)))
+      .catch(() => {});
+  }, [planCode]);
 
   if (!planCode) {
     return <p>No plan selected.</p>;
@@ -135,6 +147,8 @@ export function SubscribePage() {
       <ErrorBanner error={error} />
       <ErrorBanner error={registrationFieldsError} />
 
+      <div className="subscribe-layout">
+      <div className="subscribe-main">
       {step === "form" && (
         <>
           {customerToken ? (
@@ -265,6 +279,25 @@ export function SubscribePage() {
           )}
         </div>
       )}
+      </div>
+
+      {step !== "done" && otherPlans.length > 0 && (
+        <aside className="subscribe-plans-panel">
+          <h2>Other plans</h2>
+          <p className="hint">Not sure this is the right one? Switch before you pay.</p>
+          <div className="subscribe-plans-row">
+            {otherPlans.map((p) => (
+              <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
+                <span className="plan-mini-name">{p.name}</span>
+                <span className="plan-mini-price">
+                  {p.currency} {p.price.toFixed(2)}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </aside>
+      )}
+      </div>
     </section>
   );
 }

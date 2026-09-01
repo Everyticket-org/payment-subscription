@@ -15,9 +15,9 @@ from app.applications.models import Application
 from app.auth.deps import get_current_customer_id
 from app.core.enums import PaymentType, SubscriptionStatus
 from app.core.exceptions import ActionNotAllowed, AppError, CustomerNotFound, PlanNotFound, SubscriptionNotFound
-from app.customers.models import Customer
+from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.portal_schemas import CustomerPortalOut
-from app.customers.schemas import CustomerOut
+from app.customers.schemas import CustomerOut, RegistrationDataOut
 from app.invoices.models import Invoice
 from app.invoices.schemas import InvoiceOut
 from app.invoices.service import get_or_render_pdf
@@ -49,7 +49,25 @@ def _to_portal_subscription(sub: Subscription) -> PortalSubscriptionOut:
         plan_name=sub.plan.name,
         price=float(sub.plan.price),
         currency=sub.plan.currency,
+        billing_interval=sub.plan.billing_interval,
+        billing_frequency=sub.plan.billing_frequency,
     )
+
+
+def _to_portal_payment(payment: PaymentTransaction) -> PaymentTransactionOut:
+    """Same base shape payment_service.build_payment_out() produces, plus
+    subscription_ref - see PaymentTransactionOut.subscription_ref's own
+    comment for why that field can't just auto-populate from the ORM row."""
+    out = PaymentTransactionOut.model_validate(payment)
+    out.subscription_ref = payment.subscription.subscription_id
+    return out
+
+
+def _to_portal_invoice(invoice: Invoice) -> InvoiceOut:
+    out = InvoiceOut.model_validate(invoice)
+    out.subscription_ref = invoice.subscription.subscription_id
+    out.transaction_id = invoice.payment_transaction.transaction_id
+    return out
 
 
 def _get_customer(db: Session, customer_id: str) -> Customer:
@@ -94,13 +112,20 @@ def get_portal(
     invoices = (
         db.query(Invoice).filter(Invoice.customer_id == customer.id).order_by(Invoice.created_at.desc()).all()
     )
+    registration_data = (
+        db.query(CustomerRegistrationData)
+        .filter(CustomerRegistrationData.customer_id == customer.id, CustomerRegistrationData.application_id == application.id)
+        .order_by(CustomerRegistrationData.created_at.desc())
+        .all()
+    )
 
     return CustomerPortalOut(
         customer=CustomerOut.model_validate(customer),
+        registration_data=[RegistrationDataOut.model_validate(r) for r in registration_data],
         active_subscription=_to_portal_subscription(active) if active else None,
         subscriptions=[_to_portal_subscription(s) for s in subscriptions],
-        payments=[PaymentTransactionOut.model_validate(p) for p in payments],
-        invoices=[InvoiceOut.model_validate(i) for i in invoices],
+        payments=[_to_portal_payment(p) for p in payments],
+        invoices=[_to_portal_invoice(i) for i in invoices],
     )
 
 
@@ -174,9 +199,11 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
     transition_type = subscription_service.assert_transition_allowed(
         db, from_plan=subscription.plan, to_plan=target_plan
     )
-    # assert_transition_allowed already validated the (from, to) pair is
-    # configured; expect_type just picks the right endpoint/payment_type
-    # for a transition that could, in principle, be configured either way.
+    # assert_transition_allowed derives UPGRADE/DOWNGRADE from the two
+    # plans' prices (no admin-configured allow-list required any more -
+    # see that function's own docstring); expect_type is just which
+    # endpoint the caller hit, kept for the allow_upgrade/allow_downgrade
+    # gate above.
     payment_type = PaymentType.UPGRADE.value if transition_type == "UPGRADE" else PaymentType.DOWNGRADE.value
 
     payment = payment_service.create_payment_transaction(

@@ -15,11 +15,17 @@ class SubscriptionOut(BaseModel):
 
 class PortalSubscriptionOut(SubscriptionOut):
     """SubscriptionOut plus the plan snapshot the customer portal needs to
-    render (spec section 46) without a second round trip."""
+    render (spec section 46) without a second round trip.
+    billing_interval/billing_frequency were added for the combined
+    subscriptions+payments+invoices table (admin-panel request, 2026-09)
+    so the portal can show a "Billing Cycle" column (e.g. "Monthly" /
+    "Annual") without a second call to /public/plans."""
     plan_code: str
     plan_name: str
     price: float
     currency: str
+    billing_interval: str
+    billing_frequency: int
 
 
 class SubscribeResponse(BaseModel):

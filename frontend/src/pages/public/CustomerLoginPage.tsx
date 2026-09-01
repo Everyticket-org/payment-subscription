@@ -69,7 +69,7 @@ export function CustomerLoginPage() {
   }
 
   return (
-    <section>
+    <section className="auth-page">
       <h1>Sign in</h1>
       <ErrorBanner error={error} />
 

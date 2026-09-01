@@ -39,6 +39,8 @@ export interface PortalSubscriptionOut extends SubscriptionOut {
   plan_name: string;
   price: number;
   currency: string;
+  billing_interval: string;
+  billing_frequency: number;
 }
 
 export interface PayUCheckoutFields {
@@ -71,6 +73,10 @@ export interface PaymentTransactionOut {
    * the browser must POST to PayU's own page. Absent for the mock
    * gateway, which stays a same-page "simulate" button. */
   checkout?: PaymentCheckout | null;
+  /** Only populated on GET /customer/me's payments list (portal combined
+   * table) - see backend PaymentTransactionOut.subscription_ref/created_at. */
+  created_at?: string | null;
+  subscription_ref?: string | null;
 }
 
 export interface InvoiceOut {
@@ -80,6 +86,10 @@ export interface InvoiceOut {
   tax_amount: number;
   total_amount: number;
   currency: string;
+  /** Only populated on GET /customer/me's invoices list (portal combined
+   * table) - see backend InvoiceOut.subscription_ref/transaction_id. */
+  subscription_ref?: string | null;
+  transaction_id?: string | null;
 }
 
 export interface SubscribeResponse {
@@ -153,6 +163,7 @@ export interface SsoLinkOut {
 
 export interface CustomerPortalOut {
   customer: Customer;
+  registration_data: RegistrationDataOut[];
   active_subscription: PortalSubscriptionOut | null;
   subscriptions: PortalSubscriptionOut[];
   payments: PaymentTransactionOut[];

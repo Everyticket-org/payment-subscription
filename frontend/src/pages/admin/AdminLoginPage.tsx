@@ -58,7 +58,7 @@ export function AdminLoginPage() {
   }
 
   return (
-    <section>
+    <section className="auth-page">
       <h1>Admin sign in</h1>
       <ErrorBanner error={error} />
 

@@ -5,18 +5,69 @@
  * changes (same as a fresh subscribe) - simulated here the same way
  * SubscribePage does, since there's still no real gateway wired up.
  * Cancel is the one immediate, no-payment mutation (spec section 43).
+ *
+ * Layout (frontend request, 2026-09): account identity + registration-
+ * form details share one card, the active subscription (with change-plan
+ * / renew+cancel actions) is its own card, and a single combined table
+ * below replaces the old separate subscription-history / payments /
+ * invoices tables - one row per subscription, correlated with that
+ * subscription's most recent payment (PaymentTransactionOut.subscription_ref)
+ * and, when that payment cleared, the invoice it produced
+ * (InvoiceOut.transaction_id). See backend app/api/v1/customer.py's
+ * get_portal() for where those correlation fields are populated.
  */
-import { useCallback, useEffect, useState } from "react";
-import { customerDownloadInvoicePdf, listPlans, cancelSubscription, downgradeSubscription, getCustomerPortal, renewSubscription, simulateMockCallback, upgradeSubscription } from "../../api/endpoints";
+import { Fragment, useCallback, useEffect, useState } from "react";
+import {
+  customerDownloadInvoicePdf,
+  getRegistrationForm,
+  listPlans,
+  cancelSubscription,
+  downgradeSubscription,
+  getCustomerPortal,
+  renewSubscription,
+  simulateMockCallback,
+  upgradeSubscription,
+} from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
+import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { CustomerPortalOut, MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
+import type {
+  CustomerPortalOut,
+  InvoiceOut,
+  MockCallbackResult,
+  PaymentTransactionOut,
+  Plan,
+  PortalSubscriptionOut,
+  RegistrationFormFieldOut,
+  SubscribeResponse,
+} from "../../api/types";
 
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null | undefined): string {
   if (!iso) return "-";
   return new Date(iso).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatBillingCycle(interval: string, frequency: number): string {
+  if (frequency === 1) {
+    if (interval === "month") return "Monthly";
+    if (interval === "year") return "Annual";
+  }
+  return `Every ${frequency} ${interval}${frequency > 1 ? "s" : ""}`;
+}
+
+function latestPaymentFor(subscriptionId: string, payments: PaymentTransactionOut[]): PaymentTransactionOut | null {
+  const matches = payments.filter((p) => p.subscription_ref === subscriptionId);
+  if (matches.length === 0) return null;
+  // GET /customer/me already orders payments by created_at desc, but sort
+  // defensively rather than assume that ordering survives the filter.
+  return [...matches].sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""))[0];
+}
+
+function invoiceForPayment(payment: PaymentTransactionOut | null, invoices: InvoiceOut[]): InvoiceOut | null {
+  if (!payment) return null;
+  return invoices.find((inv) => inv.transaction_id === payment.transaction_id) ?? null;
 }
 
 export function PortalPage() {
@@ -24,6 +75,7 @@ export function PortalPage() {
   const toast = useToast();
   const [portal, setPortal] = useState<CustomerPortalOut | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [formFields, setFormFields] = useState<RegistrationFormFieldOut[]>([]);
   const [targetPlan, setTargetPlan] = useState<string>("");
   const [cancelReason, setCancelReason] = useState("");
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -35,9 +87,14 @@ export function PortalPage() {
   const refresh = useCallback(async () => {
     if (!customerToken) return;
     try {
-      const [portalData, planList] = await Promise.all([getCustomerPortal(customerToken), listPlans()]);
+      const [portalData, planList, fields] = await Promise.all([
+        getCustomerPortal(customerToken),
+        listPlans(),
+        getRegistrationForm().catch(() => []),
+      ]);
       setPortal(portalData);
       setPlans(planList);
+      setFormFields(fields);
     } catch (err) {
       setError(err);
     }
@@ -140,12 +197,13 @@ export function PortalPage() {
     );
   }
 
-  const { customer, active_subscription, subscriptions, payments, invoices } = portal;
+  const { customer, registration_data, active_subscription, subscriptions, payments, invoices } = portal;
   const otherPlans = plans.filter((p) => p.plan_code !== active_subscription?.plan_code);
+  const fieldLabels = new Map(formFields.map((f) => [f.field_key, f.label]));
 
   return (
-    <section>
-      <div className="page-header-row">
+    <section className="portal-page">
+      <div className="page-header-row page-header-row-wide">
         <h1>My account</h1>
         <button className="button button-secondary" onClick={signOut}>
           Sign out
@@ -154,20 +212,113 @@ export function PortalPage() {
 
       <ErrorBanner error={error} />
 
-      <div className="card">
-        <h2>Customer</h2>
-        <dl className="summary-list">
-          <dt>Customer ID</dt>
-          <dd>{customer.customer_id}</dd>
-          <dt>Email</dt>
-          <dd>{customer.email ?? "-"}</dd>
-          <dt>Mobile</dt>
-          <dd>{customer.mobile ?? "-"}</dd>
-        </dl>
+      <div className="detail-grid">
+        <div className="card card-wide">
+          <h2>Account</h2>
+          <dl className="summary-list">
+            <dt>Customer ID</dt>
+            <dd>{customer.customer_id}</dd>
+            <dt>Email</dt>
+            <dd>{customer.email ?? "-"}</dd>
+            <dt>Mobile</dt>
+            <dd>{customer.mobile ?? "-"}</dd>
+          </dl>
+          {registration_data.length > 0 && (
+            <>
+              <h3>Registration details</h3>
+              <dl className="summary-list">
+                {registration_data.flatMap((entry) =>
+                  Object.entries(entry.data).map(([key, value]) => (
+                    <Fragment key={`${entry.created_at}-${key}`}>
+                      <dt>{fieldLabels.get(key) ?? key}</dt>
+                      <dd>{String(value ?? "-")}</dd>
+                    </Fragment>
+                  )),
+                )}
+              </dl>
+            </>
+          )}
+        </div>
+
+        <div className="card card-wide">
+          <h2>Active subscription</h2>
+          {active_subscription ? (
+            <>
+              <dl className="summary-list">
+                <dt>Plan</dt>
+                <dd>{active_subscription.plan_name}</dd>
+                <dt>Status</dt>
+                <dd>
+                  <StatusBadge value={active_subscription.status} />
+                </dd>
+                <dt>Price</dt>
+                <dd>
+                  {active_subscription.currency} {active_subscription.price.toFixed(2)} - {formatBillingCycle(active_subscription.billing_interval, active_subscription.billing_frequency)}
+                </dd>
+                <dt>Renews / expires</dt>
+                <dd>{formatDate(active_subscription.expires_at)}</dd>
+              </dl>
+
+              <div className="portal-actions">
+                <div className="portal-action-group">
+                  <label>
+                    Change plan
+                    <select value={targetPlan} onChange={(e) => setTargetPlan(e.target.value)}>
+                      <option value="">Select a plan...</option>
+                      {otherPlans.map((p) => (
+                        <option key={p.plan_code} value={p.plan_code}>
+                          {p.name} - {p.currency} {p.price.toFixed(2)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button className="button button-primary" disabled={busy || !targetPlan} onClick={handlePlanChange}>
+                    Switch plan
+                  </button>
+                </div>
+
+                <div className="portal-actions-cols">
+                  <div className="portal-action-col">
+                    <h3>Renew</h3>
+                    <button className="button button-secondary" disabled={busy} onClick={handleRenew}>
+                      Renew now
+                    </button>
+                  </div>
+                  <div className="portal-action-col">
+                    <h3>Cancel</h3>
+                    {!confirmingCancel ? (
+                      <button className="button button-danger" disabled={busy} onClick={() => setConfirmingCancel(true)}>
+                        Cancel subscription
+                      </button>
+                    ) : (
+                      <div className="portal-action-group">
+                        <label>
+                          Reason (optional)
+                          <input type="text" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
+                        </label>
+                        <p className="hint">Cancellation is immediate - no refund, no future renewal.</p>
+                        <div className="button-row">
+                          <button className="button button-danger" disabled={busy} onClick={handleCancel}>
+                            Confirm cancellation
+                          </button>
+                          <button className="button button-secondary" disabled={busy} onClick={() => setConfirmingCancel(false)}>
+                            Never mind
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p>No active subscription right now.</p>
+          )}
+        </div>
       </div>
 
       {pendingPayment && (
-        <div className="card">
+        <div className="card card-wide">
           <h2>Complete payment to apply this change</h2>
           <dl className="summary-list">
             <dt>Amount</dt>
@@ -182,7 +333,7 @@ export function PortalPage() {
       )}
 
       {!pendingPayment && lastCallback && (
-        <div className="card">
+        <div className="card card-wide">
           <p>
             {lastCallback.subscription.status === "ACTIVE"
               ? "Payment succeeded and your subscription is up to date."
@@ -191,152 +342,60 @@ export function PortalPage() {
         </div>
       )}
 
-      <div className="card">
-        <h2>Active subscription</h2>
-        {active_subscription ? (
-          <>
-            <dl className="summary-list">
-              <dt>Plan</dt>
-              <dd>{active_subscription.plan_name}</dd>
-              <dt>Status</dt>
-              <dd>{active_subscription.status}</dd>
-              <dt>Price</dt>
-              <dd>
-                {active_subscription.currency} {active_subscription.price.toFixed(2)}
-              </dd>
-              <dt>Renews / expires</dt>
-              <dd>{formatDate(active_subscription.expires_at)}</dd>
-            </dl>
-
-            <div className="portal-actions">
-              <div className="portal-action-group">
-                <label>
-                  Change plan
-                  <select value={targetPlan} onChange={(e) => setTargetPlan(e.target.value)}>
-                    <option value="">Select a plan...</option>
-                    {otherPlans.map((p) => (
-                      <option key={p.plan_code} value={p.plan_code}>
-                        {p.name} - {p.currency} {p.price.toFixed(2)}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button className="button button-primary" disabled={busy || !targetPlan} onClick={handlePlanChange}>
-                  Switch plan
-                </button>
-              </div>
-
-              <button className="button button-secondary" disabled={busy} onClick={handleRenew}>
-                Renew now
-              </button>
-
-              {!confirmingCancel ? (
-                <button className="button button-danger" disabled={busy} onClick={() => setConfirmingCancel(true)}>
-                  Cancel subscription
-                </button>
-              ) : (
-                <div className="portal-action-group">
-                  <label>
-                    Reason (optional)
-                    <input type="text" value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
-                  </label>
-                  <p className="hint">Cancellation is immediate - no refund, no future renewal.</p>
-                  <div className="button-row">
-                    <button className="button button-danger" disabled={busy} onClick={handleCancel}>
-                      Confirm cancellation
-                    </button>
-                    <button className="button button-secondary" disabled={busy} onClick={() => setConfirmingCancel(false)}>
-                      Never mind
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          </>
-        ) : (
-          <p>No active subscription right now.</p>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Subscription history</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Plan</th>
-              <th>Status</th>
-              <th>Expires</th>
-            </tr>
-          </thead>
-          <tbody>
-            {subscriptions.map((s) => (
-              <tr key={s.subscription_id}>
-                <td>{s.plan_name}</td>
-                <td>{s.status}</td>
-                <td>{formatDate(s.expires_at)}</td>
+      <div className="card card-wide">
+        <h2>Subscriptions, payments &amp; invoices</h2>
+        <div className="table-wrap">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Plan</th>
+                <th>Billing cycle</th>
+                <th className="numeric">Amount</th>
+                <th>Last payment</th>
+                <th>Invoice</th>
+                <th>Next billing</th>
+                <th>Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="card">
-        <h2>Payments</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Transaction</th>
-              <th>Amount</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {payments.map((p) => (
-              <tr key={p.transaction_id}>
-                <td>{p.transaction_id}</td>
-                <td>
-                  {p.currency} {p.amount.toFixed(2)}
-                </td>
-                <td>{p.status}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="card">
-        <h2>Invoices</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Invoice</th>
-              <th>Date</th>
-              <th>Total</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {invoices.map((inv) => (
-              <tr key={inv.invoice_id}>
-                <td>{inv.invoice_id}</td>
-                <td>{inv.invoice_date}</td>
-                <td>
-                  {inv.currency} {inv.total_amount.toFixed(2)}
-                </td>
-                <td>
-                  <button
-                    className="button button-secondary"
-                    onClick={() => {
-                      if (customerToken) void customerDownloadInvoicePdf(inv.invoice_id, customerToken);
-                    }}
-                  >
-                    Download PDF
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {subscriptions.map((s: PortalSubscriptionOut) => {
+                const payment = latestPaymentFor(s.subscription_id, payments);
+                const invoice = invoiceForPayment(payment, invoices);
+                return (
+                  <tr key={s.subscription_id}>
+                    <td>{s.plan_name}</td>
+                    <td>{formatBillingCycle(s.billing_interval, s.billing_frequency)}</td>
+                    <td className="numeric">
+                      {s.currency} {s.price.toFixed(2)}
+                    </td>
+                    <td>
+                      {payment ? `${payment.status === "SUCCESS" ? "Paid" : payment.status.replace(/_/g, " ")} - ${formatDate(payment.created_at)}` : "-"}
+                    </td>
+                    <td>
+                      {invoice ? (
+                        <button
+                          className="button button-secondary"
+                          onClick={() => {
+                            if (customerToken) void customerDownloadInvoicePdf(invoice.invoice_id, customerToken);
+                          }}
+                        >
+                          {invoice.invoice_id}
+                        </button>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td>{formatDate(s.expires_at)}</td>
+                    <td>
+                      <StatusBadge value={s.status} />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {subscriptions.length === 0 && <p className="hint">No subscriptions yet.</p>}
       </div>
     </section>
   );

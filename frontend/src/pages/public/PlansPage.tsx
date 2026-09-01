@@ -18,10 +18,6 @@ export function PlansPage() {
   return (
     <section>
       <h1>Choose a plan</h1>
-      <p className="lede">
-        New here? Pick a plan below to subscribe. Already have an account?{" "}
-        <Link to="/login">Sign in</Link> to manage your subscription instead.
-      </p>
 
       <ErrorBanner error={error} />
 
@@ -54,6 +50,10 @@ export function PlansPage() {
           </article>
         ))}
       </div>
+
+      <p className="plans-footnote">
+        Already have an account? <Link to="/login">Sign in</Link> to manage your subscription instead.
+      </p>
     </section>
   );
 }

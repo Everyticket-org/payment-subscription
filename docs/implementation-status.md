@@ -179,8 +179,12 @@ real Postgres instance (see Testing section above for the exact flow).
 
 **Subscription lifecycle: upgrade / downgrade / renew / cancel (spec
 sections 16, 38-43)**
-- `app/subscriptions/service.py`: `assert_transition_allowed()` (checks
-  the `plan_transitions` allow-list), `apply_plan_change()` (immediate
+- `app/subscriptions/service.py`: `assert_transition_allowed()` (as of
+  2026-09, derives UPGRADE/DOWNGRADE purely from the two plans' prices -
+  see the "2026-09: UI/UX rework" section near the end of this file; the
+  `plan_transitions` allow-list it used to require is no longer
+  consulted, though the table/admin CRUD endpoints still exist),
+  `apply_plan_change()` (immediate
   plan swap + fresh billing period on payment SUCCESS, no proration - the
   new plan was already paid for in full), `renew_subscription()`
   (extends `expires_at` from the later of now/current expiry, so
@@ -1237,3 +1241,105 @@ Remaining open items:
   verified (frontend `tsc -b` + `vite build`), but - like everything
   else in this list - not yet clicked through by hand; worth a pass once
   Vishal is testing end to end.
+
+## 2026-09: UI/UX rework (public header/nav, admin panel, customer portal)
+
+Two batches of UI/UX feedback from Vishal, applied on top of increment 15's
+functionality - no new spec features, but one deliberate backend spec
+deviation (see below).
+
+**Public site**
+- Header: replaced the text wordmark with the real Everyticket logo
+  (`frontend/src/assets/logo.svg`, saved locally by Vishal rather than
+  fetched at build/runtime - this environment cannot reach `everyticket.in`
+  over the network), dark background + white/dim-white text (fixed
+  regardless of OS color scheme, same convention as the admin sidebar).
+  Admin link removed from the public nav (still reachable directly at
+  `/admin/login`); "Sign in" relabeled "My Subscriptions".
+- Login pages (customer + admin) and the subscribe page's step content no
+  longer render pinned to the left edge of the wide content column -
+  `.auth-page` centers a login card; `.subscribe-layout` puts the active
+  step on the left and a horizontally-scrolling "other plans" panel on the
+  right (`SubscribePage.tsx`).
+- Plans page: the plan grid now comes immediately after the `<h1>`, with a
+  "Already have an account? Sign in" footnote at the bottom instead of an
+  intro paragraph above the grid.
+
+**Admin panel**
+- Sidebar brand is the same local logo as the public header.
+- The flat 12-item nav list is now 5 collapsible categories (Catalog,
+  Customers, Billing, Communications, System) plus a standalone Dashboard
+  link - whichever category holds the current route starts expanded.
+- Plans grid: Active/Inactive is now a clickable badge in the grid itself
+  (`toggleActive()`, same `PATCH .../active` pattern
+  `AdminRegistrationFormPage.tsx` already used) instead of a checkbox
+  inside the edit form.
+- Plan features are now a popup (`PlanFeaturesModal`, reusing the existing
+  `Modal` component) opened via a "Features" button per row, instead of an
+  inline panel that pushed the rest of the page down.
+- The Plan Transitions allow-list section (table + add-transition form)
+  has been removed from `AdminPlansPage.tsx` entirely, per Vishal's own
+  request: "Plan transitions are not required for now as we are giving
+  dropdown to user for change plan." The backend `PlanTransition` model
+  and its admin CRUD endpoints (`admin_plans.py`) are untouched and still
+  work if called directly - only this frontend section is gone.
+  **Spec deviation**: `assert_transition_allowed()` in
+  `app/subscriptions/service.py` no longer requires an admin-configured
+  allow-list row for a transition to be permitted (spec section 16's
+  original requirement) - it now derives UPGRADE vs. DOWNGRADE purely
+  from comparing the two plans' prices, so any plan can be switched to
+  any other. This was necessary: hiding the allow-list UI without this
+  change would have made every plan-change attempt through the customer
+  portal's dropdown fail with 409 `INVALID_PLAN_TRANSITION` the moment an
+  admin hadn't pre-configured that exact pair.
+
+**Customer portal (`PortalPage.tsx`)**
+- No longer pinned to the left edge - customer identity and the plan-
+  change/renew/cancel actions are now full-width cards (`.card-wide`)
+  laid out via `.detail-grid`, matching the admin panel's own card
+  conventions instead of the 480px-capped default `.card`.
+- Customer identity and the customer's own registration-form submission
+  are now one card ("Account") instead of registration data having no
+  place in the portal at all. `CustomerPortalOut.registration_data` is a
+  new field (`app/customers/portal_schemas.py`), sourced the same way
+  `CustomerAdminDetailOut.registration_data` already was for the admin
+  customer-detail page; field labels come from a `GET
+  /public/registration-form` call the page now also makes.
+- Renew and Cancel are laid out as two columns under "Change plan"
+  (`.portal-actions-cols`) instead of stacked full-width buttons.
+- The old three separate tables (Subscription history / Payments /
+  Invoices) are now one combined table - one row per subscription,
+  columns Plan / Billing Cycle / Amount / Last Payment / Invoice / Next
+  Billing / Status. Building this needed two additive, non-breaking
+  schema changes:
+  - `PortalSubscriptionOut` gained `billing_interval`/`billing_frequency`
+    (already on `Plan`, just not previously propagated to the portal's
+    per-subscription view) to render "Monthly"/"Annual".
+  - `PaymentTransactionOut` gained `subscription_ref`/`created_at`, and
+    `InvoiceOut` gained `subscription_ref`/`transaction_id` - all four
+    default to `None` and are only ever populated by
+    `app/api/v1/customer.py`'s `_to_portal_payment()`/`_to_portal_invoice()`
+    helpers for this one endpoint, so every other caller of these two
+    schemas (the subscribe/upgrade/downgrade/renew flows, the mock
+    callback response) is unaffected. `subscription_ref` is deliberately
+    NOT named `subscription_id` on either schema, since that name is
+    already the *internal integer FK* on both the `PaymentTransaction`
+    and `Invoice` ORM models - reusing it would have let
+    `model_validate()` silently coerce the wrong (internal, numeric)
+    value into what looks like the public "SUB-xxxx" id.
+  - The frontend correlates a subscription to its most recent payment via
+    `subscription_ref`, and that payment to its invoice via
+    `transaction_id` - an invoice only exists once its payment cleared,
+    which is what "Invoice: number/Download, if payment confirmed" needed
+    without a separate "confirmed" flag.
+
+**Verification**: backend - `pytest tests/` re-run against the real
+committed code after every schema/service change (104 passed, 1
+pre-existing/unrelated `/ready` failure, same as before this pass).
+Frontend - `tsc -b && vite build` and `oxlint` both clean (oxlint's 8
+warnings are pre-existing `react/set-state-in-effect` style warnings
+already present in `PlanFormModal` before this pass, now also present in
+the new `PlanFeaturesModal`, which follows the exact same pattern - not a
+new class of issue). Not yet clicked through by hand in a real browser -
+same standing note as increment 15, Vishal is testing everything at the
+end.

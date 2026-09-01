@@ -12,6 +12,14 @@ class InvoiceOut(BaseModel):
     tax_amount: float
     total_amount: float
     currency: str
+    # Same deliberate pattern as PaymentTransactionOut.subscription_ref
+    # (see that field's comment): Invoice.subscription_id is the internal
+    # integer FK, not the public string, so these two are set explicitly
+    # by the caller rather than auto-populated by model_validate(). Added
+    # for the customer-portal combined subscriptions+payments+invoices
+    # table (admin-panel request, 2026-09).
+    subscription_ref: str | None = None
+    transaction_id: str | None = None
 
 
 class InvoiceItemOut(BaseModel):

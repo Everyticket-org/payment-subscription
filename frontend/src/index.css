@@ -29,6 +29,13 @@
   --admin-sidebar-text: #e9d6de;
   --admin-sidebar-border: #431a2e;
 
+  /* Public site header: always dark, same fixed-regardless-of-OS-theme
+     convention as the admin sidebar above, so the brand mark reads the
+     same for every visitor. */
+  --header-bg: #1a0d11;
+  --header-text: #f7ece8;
+  --header-text-dim: #e9d6de;
+
   --sans: "Segoe UI", system-ui, Roboto, sans-serif;
   --mono: ui-monospace, Consolas, monospace;
 
@@ -122,8 +129,8 @@ code {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 32px;
-  background: var(--surface);
+  padding: 14px 32px;
+  background: var(--header-bg);
   box-shadow: var(--shadow-sm);
   position: sticky;
   top: 0;
@@ -131,21 +138,15 @@ code {
 }
 
 .app-header .brand {
-  font-weight: 800;
-  color: var(--text-h);
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
-  font-size: 17px;
-  letter-spacing: -0.01em;
 }
 
-.app-header .brand::before {
-  content: "";
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 3px;
-  background: var(--accent);
-  margin-right: 8px;
+.app-header .brand-logo {
+  display: block;
+  height: 30px;
+  width: auto;
 }
 
 .app-header nav {
@@ -154,14 +155,14 @@ code {
 }
 
 .app-header nav a {
-  color: var(--text);
+  color: var(--header-text-dim);
   text-decoration: none;
   font-size: 14px;
   font-weight: 600;
 }
 
 .app-header nav a:hover {
-  color: var(--accent);
+  color: var(--header-text);
 }
 
 .app-main {
@@ -183,6 +184,33 @@ code {
 
 .lede {
   max-width: 60ch;
+}
+
+/* A standalone login form (customer or admin) looks stranded pinned to
+   the left edge of the wide content column - center it and its card
+   instead, keeping the card's own contents (labels/inputs) left-aligned. */
+.auth-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+
+.auth-page .banner {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.auth-page .card {
+  width: 100%;
+  text-align: left;
+}
+
+.plans-footnote {
+  margin-top: 28px;
+  font-size: 13px;
+  text-align: center;
+  opacity: 0.75;
 }
 
 /* ---------- Cards / layout primitives ---------- */
@@ -378,6 +406,79 @@ select:focus {
   flex: 1;
 }
 
+/* ---------- Subscribe page: form + "other plans" side panel ---------- */
+
+.subscribe-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 480px) 1fr;
+  gap: 32px;
+  align-items: start;
+}
+
+.subscribe-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+@media (max-width: 860px) {
+  .subscribe-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.subscribe-plans-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-sm);
+  padding: 20px;
+  min-width: 0;
+}
+
+.subscribe-plans-panel h2 {
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+
+.subscribe-plans-row {
+  display: flex;
+  gap: 12px;
+  overflow-x: auto;
+  padding: 4px 2px 8px;
+}
+
+.plan-mini-card {
+  flex: 0 0 160px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--accent);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-decoration: none;
+  color: var(--text-h);
+  transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.plan-mini-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+
+.plan-mini-name {
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.plan-mini-price {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--accent);
+}
+
 /* ---------- Data display ---------- */
 
 .summary-list {
@@ -411,6 +512,36 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Renew / Cancel side-by-side (frontend request, 2026-09) - "Change plan"
+   stays a full-width group above these two columns. */
+.portal-actions-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.portal-action-col h3 {
+  margin-bottom: 8px;
+}
+
+@media (max-width: 640px) {
+  .portal-actions-cols {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* "My account" page: the default .card/.page-header-row cap at 480px,
+   which looked stranded pinned to the left of the wide content column for
+   a page with this much real content - these widen it back out
+   (frontend request, 2026-09). */
+.page-header-row-wide {
+  max-width: none;
+}
+
+.card-wide {
+  max-width: none;
 }
 
 .data-table {
@@ -465,16 +596,16 @@ select:focus {
 }
 
 .admin-brand {
-  color: #fff;
+  display: inline-flex;
+  align-items: center;
   text-decoration: none;
-  font-weight: 800;
-  font-size: 16px;
   padding: 8px 10px 20px;
-  letter-spacing: -0.01em;
 }
 
-.admin-brand span {
-  color: var(--accent);
+.admin-brand-logo {
+  display: block;
+  height: 26px;
+  width: auto;
 }
 
 .admin-nav {
@@ -526,6 +657,63 @@ select:focus {
   background: var(--admin-sidebar-border);
   padding: 2px 6px;
   border-radius: 999px;
+}
+
+/* Categorized nav: each group is a collapsible section (previously one
+   flat 12-item list) - the group header looks like a nav link but is a
+   <button> that toggles a submenu of the real links. */
+.admin-nav-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-nav-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--admin-sidebar-text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+  cursor: pointer;
+  text-align: left;
+}
+
+.admin-nav-group-header:hover {
+  background: var(--admin-sidebar-border);
+  opacity: 1;
+}
+
+.admin-nav-caret {
+  display: inline-block;
+  font-size: 11px;
+  transition: transform 0.15s ease;
+  transform: rotate(-90deg);
+}
+
+.admin-nav-caret.open {
+  transform: rotate(0deg);
+}
+
+.admin-nav-submenu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+}
+
+.admin-nav-sublink {
+  font-size: 13px;
 }
 
 .admin-nav-exit {

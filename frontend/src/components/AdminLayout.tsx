@@ -11,26 +11,73 @@ import { useEffect, useState } from "react";
 import { Link, Outlet, useLocation } from "react-router-dom";
 import { getTestModeStatus } from "../api/endpoints";
 import { useAuth } from "../context/AuthContext";
+import logoUrl from "../assets/logo.svg";
 
-const NAV_ITEMS: Array<{ label: string; path: string; enabled: boolean }> = [
-  { label: "Dashboard", path: "/admin", enabled: true },
-  { label: "Plans", path: "/admin/plans", enabled: true },
-  { label: "Registration form", path: "/admin/registration-form", enabled: true },
-  { label: "Customers", path: "/admin/customers", enabled: true },
-  { label: "Subscriptions", path: "/admin/subscriptions", enabled: true },
-  { label: "Payments", path: "/admin/payments", enabled: true },
-  { label: "Invoices", path: "/admin/invoices", enabled: true },
-  { label: "Webhook logs", path: "/admin/webhooks", enabled: true },
-  { label: "Notifications", path: "/admin/notifications", enabled: true },
-  { label: "Audit logs", path: "/admin/audit", enabled: true },
-  { label: "Testing tools", path: "/admin/testing", enabled: true },
-  { label: "Configuration", path: "/admin/config", enabled: true },
+type NavItem = { label: string; path: string };
+type NavGroup = { label: string; items: NavItem[] };
+
+const DASHBOARD: NavItem = { label: "Dashboard", path: "/admin" };
+
+// Grouped into categories + submenus (previously one flat 12-item list) -
+// each group's items share a real functional area rather than just
+// following router-registration order.
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: "Catalog",
+    items: [
+      { label: "Plans", path: "/admin/plans" },
+      { label: "Registration form", path: "/admin/registration-form" },
+    ],
+  },
+  {
+    label: "Customers",
+    items: [
+      { label: "Customers", path: "/admin/customers" },
+      { label: "Subscriptions", path: "/admin/subscriptions" },
+    ],
+  },
+  {
+    label: "Billing",
+    items: [
+      { label: "Payments", path: "/admin/payments" },
+      { label: "Invoices", path: "/admin/invoices" },
+    ],
+  },
+  {
+    label: "Communications",
+    items: [
+      { label: "Notifications", path: "/admin/notifications" },
+      { label: "Webhook logs", path: "/admin/webhooks" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { label: "Audit logs", path: "/admin/audit" },
+      { label: "Testing tools", path: "/admin/testing" },
+      { label: "Configuration", path: "/admin/config" },
+    ],
+  },
 ];
+
+function isActivePath(pathname: string, itemPath: string): boolean {
+  return itemPath === "/admin" ? pathname === itemPath : pathname.startsWith(itemPath);
+}
 
 export function AdminLayout() {
   const { adminToken, setAdminToken } = useAuth();
   const location = useLocation();
   const [testMode, setTestMode] = useState(false);
+  // Whichever group holds the current route starts expanded; the rest
+  // start collapsed so the sidebar isn't just the old flat list again.
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      NAV_GROUPS.map((group) => [
+        group.label,
+        group.items.some((item) => isActivePath(location.pathname, item.path)),
+      ]),
+    ),
+  );
 
   useEffect(() => {
     if (!adminToken) return;
@@ -39,34 +86,56 @@ export function AdminLayout() {
       .catch(() => setTestMode(false));
   }, [adminToken]);
 
+  function toggleGroup(label: string) {
+    setOpenGroups((prev) => ({ ...prev, [label]: !prev[label] }));
+  }
+
   return (
     <div className="admin-shell">
       <aside className="admin-sidebar">
         <Link to="/admin" className="admin-brand">
-          Everyticket <span>Admin</span>
+          <img src={logoUrl} alt="Everyticket" className="admin-brand-logo" />
         </Link>
         <nav className="admin-nav">
-          {NAV_ITEMS.map((item) =>
-            item.enabled ? (
-              <Link
-                key={item.path}
-                to={item.path}
-                className={
-                  "admin-nav-link" +
-                  ((item.path === "/admin" ? location.pathname === item.path : location.pathname.startsWith(item.path))
-                    ? " active"
-                    : "")
-                }
-              >
-                {item.label}
-              </Link>
-            ) : (
-              <span key={item.path} className="admin-nav-link disabled" title="Not built yet">
-                {item.label}
-                <span className="admin-nav-badge">soon</span>
-              </span>
-            ),
-          )}
+          <Link
+            to={DASHBOARD.path}
+            className={"admin-nav-link" + (isActivePath(location.pathname, DASHBOARD.path) ? " active" : "")}
+          >
+            {DASHBOARD.label}
+          </Link>
+
+          {NAV_GROUPS.map((group) => {
+            const open = openGroups[group.label] ?? false;
+            return (
+              <div className="admin-nav-group" key={group.label}>
+                <button
+                  type="button"
+                  className="admin-nav-group-header"
+                  onClick={() => toggleGroup(group.label)}
+                  aria-expanded={open}
+                >
+                  <span>{group.label}</span>
+                  <span className={"admin-nav-caret" + (open ? " open" : "")}>&#x25BE;</span>
+                </button>
+                {open && (
+                  <div className="admin-nav-submenu">
+                    {group.items.map((item) => (
+                      <Link
+                        key={item.path}
+                        to={item.path}
+                        className={
+                          "admin-nav-link admin-nav-sublink" +
+                          (isActivePath(location.pathname, item.path) ? " active" : "")
+                        }
+                      >
+                        {item.label}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </nav>
         <Link to="/" className="admin-nav-link admin-nav-exit">
           &larr; Back to public site
