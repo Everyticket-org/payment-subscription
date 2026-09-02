@@ -30,7 +30,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
-    # Both tasks below are cheap, idempotent sweeps over "what's due right
+    # Every task below is a cheap, idempotent sweep over "what's due right
     # now" (see their own modules) - safe to run frequently and safe to
     # run more than once if a beat tick is ever missed or doubled.
     beat_schedule={
@@ -45,6 +45,10 @@ celery_app.conf.update(
         "send-renewal-reminders": {
             "task": "subscriptions.send_renewal_reminders",
             "schedule": 3600.0,  # seconds - once an hour is plenty for a multi-day reminder window
+        },
+        "archive-stale-subscriptions": {
+            "task": "subscriptions.archive_stale",
+            "schedule": 3600.0,  # seconds - archive_after_days is measured in whole days, hourly is plenty
         },
     },
 )

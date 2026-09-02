@@ -1278,6 +1278,116 @@ Postgres instance, same pre-existing constraint as every prior pass).
 Frontend `tsc -b && vite build` clean; `oxlint` 0 errors (same 8 pre-
 existing warnings, none new).
 
+## 2026-09-02 (follow-up 2): configurable PayU redirect/webhook URLs, duplicate sign-out removed, 3 real webhook events documented + a new archive sweep
+
+Vishal's feedback, verbatim: (1) "PayU redirect back to localhost:4200
+which is wrong. instead allow to configure return URL and PayU webhook
+URL", (2) "Remove Signout nearby my account title as already you have
+added in header now", and (3) an admin Configuration ask to document the
+three real Everyticket webhook event types (onboarding, status-inactive-
+on-expiry, delete/archive-after-x-days-non-renewal) with a sample JSON
+payload for each.
+
+**Configurable redirect/webhook URLs** (new migration `7e0230c7e509`,
+adds `applications.return_url`/`payu_webhook_base_url`/`archive_after_days`,
+all nullable): `settings.FRONTEND_URL` (customer-facing browser redirect
+after payment, and the SSO consume link) and `settings.PAYU_SUCCESS_URL`/
+`PAYU_FAILURE_URL` (PayU's own server callback target) were both env-only,
+defaulting to `localhost:4200`/`localhost:8000` - fine for local dev,
+wrong for any real deployment, with no admin override at all. Both now
+follow this app's existing DB-row-overrides-env-fallback pattern:
+`Application.return_url` (admin Configuration > Payment Gateway screen)
+overrides `FRONTEND_URL` in `payment.py`'s `_handle_payu_return` redirect
+and `admin_customers.py`'s SSO consume-link generation; `Application.
+payu_webhook_base_url` overrides `PAYU_SUCCESS_URL`/`PAYU_FAILURE_URL` -
+`app.payments.gateway_config.resolve_payu_webhook_urls()` builds the two
+full callback URLs from it, `PayUGateway` gained `success_url`/
+`failure_url` constructor overrides (same override/fallback pattern
+`merchant_key`/`merchant_salt`/`base_url` already use), and the registry's
+`get_gateway(code, db=..., mode=..., application=...)` resolves both from
+the given `Application` row. `create_payment_transaction()` gained an
+`application` param threaded through from its 4 real call sites
+(`customer.py` x2, `public.py` x2) to make this resolution possible.
+
+**Duplicate sign-out removed**: `PortalPage`'s own "Sign out" button next
+to "My account" is gone (the public header, `Layout.tsx`, already has one
+- added in the previous pass to fix the "stuck with an expired-token error
+and no way to sign out" bug). Having both was redundant now that the
+header's is always present regardless of the page's own loading/error
+state.
+
+**Three real webhook events, documented + one new one**: `app/webhooks/
+payloads.py` (new) holds pure, primitive-typed payload-shaping functions
+- `onboarding_payload`, `expiry_payload`, `archive_payload` - used by BOTH
+the real dispatch code paths AND the admin Configuration screen's
+read-only sample-JSON preview, so the documentation can never quietly
+drift from what's actually sent. Likewise `app.webhooks.service.
+build_wire_body()` (extracted from `_attempt_one`) builds the exact outer
+JSON envelope (`event_id`/`event_type`/`entity_type`/`entity_id`/
+`payload` plus the admin's configured `extra_params` merged in) a real
+delivery sends, and the sample preview calls that same function too.
+
+1. **Onboarding** (`subscription.activated`, fires once on a NEW
+   subscription's first successful payment - never on renew/upgrade/
+   downgrade): payload enriched from bare IDs to the customer's full
+   registration-form answers (`CustomerRegistrationData` for that
+   subscription) plus email/mobile/plan name/currency/price/is_trial/
+   starts_at, so Everyticket can provision the account without a second
+   round-trip. Deliberately no `external_customer_id` - Everyticket's own
+   response to THIS delivery is what assigns one (spec section 32,
+   unchanged).
+2. **Status inactive** (`subscription.expired`, the existing
+   `expire_due_subscriptions` Celery beat sweep, unchanged schedule):
+   payload now also carries `external_customer_id`/`external_instance_id`
+   - the identity Everyticket itself returned back on onboarding - so it
+   can deactivate the right account without looking anything up by our
+   internal customer_id.
+3. **Delete/archive** (`subscription.archived`, brand new): a new
+   `archive_stale_subscriptions()` sweep (mirrors `expire_due_subscriptions`'
+   own shape) flips EXPIRED -> a new `ARCHIVED` status once an EXPIRED
+   subscription has stayed unrenewed for at least the application's
+   admin-configured `archive_after_days` (opt-in per application - None/0
+   disables it, same convention as `webhook_retry_limit`). New Celery task
+   `subscriptions.archive_stale`, beat schedule entry (hourly - the
+   threshold is measured in whole days). Payload carries the same external
+   identity fields as expiry, plus `days_since_expiry`.
+
+Admin Configuration's Everyticket Integration screen gained an
+"Archive/delete after (days)" field and a read-only "Webhook events"
+block rendering all three sample payloads (`EveryticketIntegrationOut.
+webhook_samples`, a `GET /config/application` addition) - registration-
+field keys and plan code/name/price in the onboarding sample are pulled
+from this application's REAL current registration form and an active
+plan when either exists, so the preview reflects actual configuration
+rather than being entirely made up.
+
+Verified: 141 total backend tests, 140 passing (same pre-existing
+`/ready` gap as every prior pass). New: `tests/test_webhook_payloads.py`
+(8 tests - onboarding registration-data enrichment, expiry identity
+fields present/absent, archive sweep disabled-by-default/below-threshold/
+past-threshold-archives-and-queues-once/idempotent-on-a-second-run, and
+`build_wire_body`'s extra_params-never-overrides-envelope-fields
+guarantee), 2 new `tests/test_payu_gateway.py` cases (success/failure URL
+constructor override + env fallback), and 3 new `tests/test_admin_config.py`
+cases (return_url/payu_webhook_base_url round-trip AND real effect on a
+subscribe's PayU checkout surl/furl; archive_after_days round-trip;
+webhook_samples reflect real seeded registration fields + configured
+extra_params/archive_after_days). Caught and fixed one real bug of my
+own along the way: `Plan.price` is a `Decimal` (Numeric(12,2) column) and
+the new onboarding payload passed it straight into a webhook JSON body
+without casting to `float` first - `json.dumps` doesn't know how to
+serialize a `Decimal`, which broke 54 previously-passing tests the first
+time the full suite ran after this pass's payload change (every payment-
+success path queues this event). Fixed by casting to `float` at both call
+sites (the real dispatch path and the admin sample builder); full suite
+re-run clean afterward. Migration verified via `alembic history` (clean
+chain, `7e0230c7e509` is head) and `alembic upgrade ... --sql` (exact DDL
+confirmed) - same pre-existing constraint as every prior pass: this
+environment's device bridge can reach Vishal's files but not his real
+Postgres instance, so he still needs to run `alembic upgrade head` for
+real. Frontend `tsc -b && vite build` clean; `oxlint` 0 errors (same 8
+pre-existing warnings, none new).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

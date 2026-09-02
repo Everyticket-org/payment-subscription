@@ -2,19 +2,23 @@
  * Admin Configuration, restructured 2026-09 (Vishal's explicit 4-section
  * layout) into: Application (name/currency/Live-Test-Mode only),
  * Payment Gateway (gateway dropdown + per-mode PayU credentials shown
- * only when PayU is selected), Everyticket Integration (secret key,
- * webhook URL, custom key/value POST parameters, retry limit, and an
- * escalation email sent once a delivery is exhausted), and Notifications
- * (SMTP transport + sender overrides). "Subscription rules" and
- * "Security" configuration keep their existing backend endpoints and
- * live enforcement, completely unchanged - they're just not rendered on
- * this page for now (see app/applications/config_schemas.py's module
- * docstring on the backend for the full rationale).
+ * only when PayU is selected, plus the Return URL/PayU webhook URL the
+ * payment flow redirects through), Everyticket Integration (secret key,
+ * webhook URL, custom key/value POST parameters, retry limit, an
+ * archive-after-days threshold, a read-only sample-JSON preview of the
+ * three real webhook event types, and an escalation email sent once a
+ * delivery is exhausted), and Notifications (SMTP transport + sender
+ * overrides). "Subscription rules" and "Security" configuration keep
+ * their existing backend endpoints and live enforcement, completely
+ * unchanged - they're just not rendered on this page for now (see
+ * app/applications/config_schemas.py's module docstring on the backend
+ * for the full rationale).
  *
  * Every save here has a REAL effect on the next request, not just
- * storage: default_gateway/PayU credentials change the very next
- * payment, the webhook fields change the next delivery attempt, and the
- * SMTP/sender fields change the next email's transport and From header.
+ * storage: default_gateway/PayU credentials/redirect URLs change the
+ * very next payment, the webhook fields change the next delivery
+ * attempt, and the SMTP/sender fields change the next email's transport
+ * and From header.
  */
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import {
@@ -163,6 +167,8 @@ function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; to
 function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConfigOut; token: string }) {
   const toast = useToast();
   const [defaultGateway, setDefaultGateway] = useState(initial.default_gateway);
+  const [returnUrl, setReturnUrl] = useState(initial.return_url ?? "");
+  const [payuWebhookBaseUrl, setPayuWebhookBaseUrl] = useState(initial.payu_webhook_base_url ?? "");
   const [payuTestKey, setPayuTestKey] = useState("");
   const [payuTestSalt, setPayuTestSalt] = useState("");
   const [payuLiveKey, setPayuLiveKey] = useState("");
@@ -179,6 +185,8 @@ function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConf
       const updated = await adminUpdatePaymentGatewayConfig(
         {
           default_gateway: defaultGateway,
+          return_url: returnUrl || null,
+          payu_webhook_base_url: payuWebhookBaseUrl || null,
           payu_test:
             defaultGateway === "payu" && (payuTestKey || payuTestSalt)
               ? { merchant_key: payuTestKey || undefined, merchant_salt: payuTestSalt || undefined }
@@ -191,6 +199,8 @@ function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConf
         token,
       );
       setStatus(updated);
+      setReturnUrl(updated.return_url ?? "");
+      setPayuWebhookBaseUrl(updated.payu_webhook_base_url ?? "");
       setPayuTestKey("");
       setPayuTestSalt("");
       setPayuLiveKey("");
@@ -229,6 +239,34 @@ function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConf
             </select>
           </label>
         </div>
+
+        <fieldset style={{ marginTop: 12 }}>
+          <legend>Redirect &amp; webhook URLs</legend>
+          <p className="hint">
+            Both fall back to a local-development default (localhost) when left blank - set these for any real
+            deployment.
+          </p>
+          <div className="inline-form">
+            <label>
+              Return URL
+              <input
+                value={returnUrl}
+                onChange={(e) => setReturnUrl(e.target.value)}
+                placeholder="https://subscribe.everyticket.com"
+              />
+              <span className="hint">Where the customer's browser lands after paying (and the SSO consume link).</span>
+            </label>
+            <label>
+              PayU webhook URL
+              <input
+                value={payuWebhookBaseUrl}
+                onChange={(e) => setPayuWebhookBaseUrl(e.target.value)}
+                placeholder="https://api.everyticket.com"
+              />
+              <span className="hint">This backend's own public base URL - PayU calls back to it to confirm payment.</span>
+            </label>
+          </div>
+        </fieldset>
 
         {defaultGateway === "payu" ? (
           <>
@@ -282,6 +320,10 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
   const [retryLimit, setRetryLimit] = useState(initial.retry_limit != null ? String(initial.retry_limit) : "");
   const [escalationEmails, setEscalationEmails] = useState(initial.escalation_emails ?? "");
   const [escalationSubject, setEscalationSubject] = useState(initial.escalation_email_subject ?? "");
+  const [archiveAfterDays, setArchiveAfterDays] = useState(
+    initial.archive_after_days != null ? String(initial.archive_after_days) : "",
+  );
+  const [webhookSamples, setWebhookSamples] = useState(initial.webhook_samples);
   const [editorKey] = useState(() => Date.now());
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
@@ -308,11 +350,13 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
           escalation_emails: escalationEmails || null,
           escalation_email_subject: escalationSubject || null,
           escalation_email_body: escalationBody,
+          archive_after_days: archiveAfterDays ? Number(archiveAfterDays) : null,
         },
         token,
       );
       setSecretKeyIsSet(updated.secret_key_is_set);
       setSecretKey("");
+      setWebhookSamples(updated.webhook_samples);
       setSavedAt(Date.now());
       toast.success("Everyticket integration configuration saved");
     } catch (err) {
@@ -349,10 +393,42 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
               placeholder={`default: ${initial.default_retry_limit}`}
             />
           </label>
+          <label>
+            Archive/delete after (days)
+            <input
+              type="number"
+              min="0"
+              value={archiveAfterDays}
+              onChange={(e) => setArchiveAfterDays(e.target.value)}
+              placeholder="disabled"
+            />
+            <span className="hint">
+              Days an expired subscription can stay unrenewed before the third webhook below fires. Blank disables
+              archiving.
+            </span>
+          </label>
         </div>
 
         <h3 style={{ marginTop: 16 }}>Parameters sent with every webhook call</h3>
         <KeyValueEditor rows={params} onChange={setParams} />
+
+        <h3 style={{ marginTop: 16 }}>Webhook events</h3>
+        <p className="hint">
+          Everyticket's endpoint receives exactly one of these three JSON bodies (plus the parameters above, merged
+          in as extra top-level fields) for the corresponding event. Save first to refresh the samples below with
+          your latest settings.
+        </p>
+        <div className="webhook-sample-list">
+          {webhookSamples.map((sample) => (
+            <div className="webhook-sample" key={sample.event}>
+              <div className="webhook-sample-header">
+                <code>{sample.event}</code>
+                <span className="hint">{sample.trigger}</span>
+              </div>
+              <pre className="webhook-sample-body">{JSON.stringify(sample.payload, null, 2)}</pre>
+            </div>
+          ))}
+        </div>
 
         <h3 style={{ marginTop: 16 }}>If all retries fail</h3>
         <div className="inline-form">

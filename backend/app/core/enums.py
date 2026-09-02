@@ -8,6 +8,12 @@ class SubscriptionStatus(str, enum.Enum):
     PAYMENT_FAILED = "PAYMENT_FAILED"
     CANCELLED = "CANCELLED"
     EXPIRED = "EXPIRED"
+    # Terminal state past EXPIRED: the customer never renewed within the
+    # application's admin-configured archive_after_days window (2026-09
+    # follow-up: "delete/archive when user do not renew for x days"). No
+    # DB-level enum constraint on the `status` column (plain String(20),
+    # see Subscription model), so adding this needed no migration.
+    ARCHIVED = "ARCHIVED"
 
 
 class ProvisioningStatus(str, enum.Enum):
@@ -46,6 +52,7 @@ class SubscriptionEventType(str, enum.Enum):
     CANCELLED = "cancelled"
     EXPIRED = "expired"
     PAYMENT_FAILED = "payment_failed"
+    ARCHIVED = "archived"
 
 
 class WebhookDeliveryStatus(str, enum.Enum):

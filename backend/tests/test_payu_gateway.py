@@ -101,6 +101,42 @@ def test_process_webhook_rejects_tampered_hash_as_failed(payu_settings):
     assert "Hash verification failed" in result.failure_reason
 
 
+def test_create_payment_uses_success_failure_url_overrides_when_given(payu_settings):
+    """2026-09 follow-up: 'PayU redirect back to localhost:4200 which is
+    wrong. instead allow to configure return URL and PayU webhook URL' -
+    success_url/failure_url passed at construction time (the registry
+    resolves these from Application.payu_webhook_base_url when an admin
+    has configured it) override the env-configured PAYU_SUCCESS_URL/
+    PAYU_FAILURE_URL for that instance, exactly like merchant_key/salt/
+    base_url already do."""
+    gateway = PayUGateway(
+        success_url="https://api.everyticket.example.com/api/v1/payment/payu/callback/success",
+        failure_url="https://api.everyticket.example.com/api/v1/payment/payu/callback/failure",
+    )
+    result = gateway.create_payment(
+        transaction_id="TXN-URLOVERRIDE",
+        amount=100.0,
+        currency="INR",
+        metadata={"productinfo": "Basic", "firstname": "Test", "email": "test@example.com", "phone": "9999999999"},
+    )
+    fields = result.raw_response["fields"]
+    assert fields["surl"] == "https://api.everyticket.example.com/api/v1/payment/payu/callback/success"
+    assert fields["furl"] == "https://api.everyticket.example.com/api/v1/payment/payu/callback/failure"
+
+
+def test_create_payment_falls_back_to_env_success_failure_url_when_not_overridden(payu_settings):
+    gateway = PayUGateway()
+    result = gateway.create_payment(
+        transaction_id="TXN-URLDEFAULT",
+        amount=100.0,
+        currency="INR",
+        metadata={"productinfo": "Basic", "firstname": "Test", "email": "test@example.com", "phone": "9999999999"},
+    )
+    fields = result.raw_response["fields"]
+    assert fields["surl"] == "http://localhost:8000/api/v1/payment/payu/callback/success"
+    assert fields["furl"] == "http://localhost:8000/api/v1/payment/payu/callback/failure"
+
+
 def test_process_webhook_maps_payu_failure_status(payu_settings):
     gateway = PayUGateway()
     key, salt = "testkey123", "testsalt456"

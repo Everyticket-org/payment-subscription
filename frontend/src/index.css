@@ -355,6 +355,41 @@ select:focus {
   flex: 1;
 }
 
+.webhook-sample-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 10px 0 16px;
+}
+
+.webhook-sample {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.webhook-sample-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  background: var(--surface-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.webhook-sample-body {
+  margin: 0;
+  padding: 12px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.5;
+  background: var(--code-bg);
+  color: var(--text-h);
+  overflow-x: auto;
+  white-space: pre;
+}
+
 .hint {
   font-size: 13px;
   opacity: 0.75;

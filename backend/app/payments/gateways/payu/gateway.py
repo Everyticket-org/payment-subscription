@@ -48,24 +48,41 @@ class PayUGateway(PaymentGateway):
     code = "payu"
 
     def __init__(
-        self, *, merchant_key: str | None = None, merchant_salt: str | None = None, base_url: str | None = None
+        self,
+        *,
+        merchant_key: str | None = None,
+        merchant_salt: str | None = None,
+        base_url: str | None = None,
+        success_url: str | None = None,
+        failure_url: str | None = None,
     ) -> None:
         self._merchant_key = merchant_key
         self._merchant_salt = merchant_salt
         self._base_url = base_url
+        # success_url/failure_url override settings.PAYU_SUCCESS_URL/
+        # PAYU_FAILURE_URL for this instance only - same override/fallback
+        # pattern as merchant_key/salt/base_url above. Set by the registry
+        # from Application.payu_webhook_base_url (2026-09 follow-up: "PayU
+        # redirect back to localhost:4200 which is wrong. instead allow to
+        # configure return URL and PayU webhook URL") when an admin has
+        # configured one; otherwise falls back to the env vars exactly as
+        # before.
+        self._success_url = success_url
+        self._failure_url = failure_url
 
-    def _resolve(self) -> tuple[str, str, str]:
+    def _resolve(self) -> tuple[str, str, str, str, str]:
         settings = get_settings()
         key = self._merchant_key or settings.PAYU_MERCHANT_KEY
         salt = self._merchant_salt or settings.PAYU_MERCHANT_SALT
         base_url = self._base_url or settings.PAYU_BASE_URL
-        return key, salt, base_url
+        success_url = self._success_url or settings.PAYU_SUCCESS_URL
+        failure_url = self._failure_url or settings.PAYU_FAILURE_URL
+        return key, salt, base_url, success_url, failure_url
 
     def create_payment(
         self, *, transaction_id: str, amount: float, currency: str, metadata: dict[str, Any]
     ) -> GatewayPaymentResult:
-        settings = get_settings()
-        key, salt, base_url = self._resolve()
+        key, salt, base_url, success_url, failure_url = self._resolve()
         if not key or not salt:
             raise PayUConfigurationError(
                 "PAYU_MERCHANT_KEY / PAYU_MERCHANT_SALT are not set - add your PayU test "
@@ -98,8 +115,8 @@ class PayUGateway(PaymentGateway):
             "firstname": firstname,
             "email": email,
             "phone": phone,
-            "surl": settings.PAYU_SUCCESS_URL,
-            "furl": settings.PAYU_FAILURE_URL,
+            "surl": success_url,
+            "furl": failure_url,
             "hash": request_hash,
         }
 
@@ -137,7 +154,7 @@ class PayUGateway(PaymentGateway):
         return True
 
     def process_webhook(self, *, payload: dict[str, Any]) -> GatewayPaymentResult:
-        _key, salt, _base_url = self._resolve()
+        _key, salt, _base_url, _success_url, _failure_url = self._resolve()
         key = str(payload.get("key", ""))
         txnid = str(payload.get("txnid", ""))
         amount = payload.get("amount", "")

@@ -39,3 +39,20 @@ def send_renewal_reminders() -> int:
         return sent
     finally:
         db.close()
+
+
+@celery_app.task(name="subscriptions.archive_stale")
+def archive_stale_subscriptions() -> int:
+    """Runs periodically (see celery_app.py's beat_schedule) and flips
+    every EXPIRED subscription past its application's admin-configured
+    archive_after_days into ARCHIVED, queuing a subscription.archived
+    webhook event for each (2026-09 follow-up: "delete/archive when user
+    do not renew for x days")."""
+    db = SessionLocal()
+    try:
+        archived = subscription_service.archive_stale_subscriptions(db)
+        if archived:
+            logger.info("Archived %d subscriptions past their application's archive_after_days", archived)
+        return archived
+    finally:
+        db.close()

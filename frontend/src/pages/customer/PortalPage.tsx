@@ -108,10 +108,6 @@ export function PortalPage() {
     refresh();
   }, [refresh]);
 
-  function signOut() {
-    setCustomerToken(null);
-  }
-
   // Shared by every mutation below: an expired/invalid token surfacing
   // mid-session (user already has the portal loaded, then a later action
   // 401s) gets the same "clear the token and let RequireCustomer redirect
@@ -196,12 +192,11 @@ export function PortalPage() {
 
   return (
     <section className="portal-page">
-      <div className="page-header-row page-header-row-wide">
-        <h1>My account</h1>
-        <button className="button button-secondary" onClick={signOut}>
-          Sign out
-        </button>
-      </div>
+      {/* Sign out lives in the public-site header now (components/Layout.tsx)
+          - having a second one here too was redundant (frontend request,
+          2026-09: "Remove Signout nearby my account title as already you
+          have added in header now"). */}
+      <h1>My account</h1>
 
       <ErrorBanner error={error} />
 

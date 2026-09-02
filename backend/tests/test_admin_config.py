@@ -162,6 +162,111 @@ def test_update_payment_gateway_config_changes_gateway_for_new_payments_and_stor
         get_settings.cache_clear()
 
 
+def test_update_payment_gateway_config_stores_return_url_and_payu_webhook_base_url_and_used_in_checkout(client, seeded_db, monkeypatch):
+    """2026-09 follow-up: 'PayU redirect back to localhost:4200 which is
+    wrong. instead allow to configure return URL and PayU webhook URL' -
+    both round-trip through the admin API, and payu_webhook_base_url
+    actually changes the surl/furl PayU is told to redirect the
+    customer's browser to on the very next payment."""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("PAYU_MERCHANT_KEY", "envkey")
+    monkeypatch.setenv("PAYU_MERCHANT_SALT", "envsalt")
+    get_settings.cache_clear()
+
+    headers = _admin_headers(client)
+    try:
+        resp = client.put(
+            "/api/v1/admin/config/application/payment-gateway",
+            json={
+                "default_gateway": "payu",
+                "return_url": "https://subscribe.everyticket.example.com",
+                "payu_webhook_base_url": "https://api.everyticket.example.com",
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["return_url"] == "https://subscribe.everyticket.example.com"
+        assert resp.json()["payu_webhook_base_url"] == "https://api.everyticket.example.com"
+
+        refetched = client.get("/api/v1/admin/config/application", headers=headers)
+        assert refetched.json()["payment_gateway"]["return_url"] == "https://subscribe.everyticket.example.com"
+        assert refetched.json()["payment_gateway"]["payu_webhook_base_url"] == "https://api.everyticket.example.com"
+
+        subscribe = client.post(
+            "/api/v1/public/plans/basic/subscribe",
+            json={"email": "payu-urls@example.com", "mobile": "9833300003", "registration_data": {}},
+        )
+        assert subscribe.status_code == 200, subscribe.text
+        checkout_fields = subscribe.json()["payment"]["checkout"]["fields"]
+        assert checkout_fields["surl"] == "https://api.everyticket.example.com/api/v1/payment/payu/callback/success"
+        assert checkout_fields["furl"] == "https://api.everyticket.example.com/api/v1/payment/payu/callback/failure"
+    finally:
+        client.put(
+            "/api/v1/admin/config/application/payment-gateway",
+            json={"default_gateway": "mock", "return_url": None, "payu_webhook_base_url": None},
+            headers=headers,
+        )
+        get_settings.cache_clear()
+
+
+def test_update_integration_config_stores_archive_after_days(client, seeded_db):
+    headers = _admin_headers(client)
+    resp = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "archive_after_days": 45},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archive_after_days"] == 45
+
+    refetched = client.get("/api/v1/admin/config/application", headers=headers)
+    assert refetched.json()["integration"]["archive_after_days"] == 45
+
+    # None disables it again (opt-in, per app.subscriptions.service.archive_stale_subscriptions).
+    cleared = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "archive_after_days": None},
+        headers=headers,
+    )
+    assert cleared.json()["archive_after_days"] is None
+
+
+def test_application_config_webhook_samples_reflect_real_registration_fields_and_configured_extras(client, seeded_db):
+    """2026-09 follow-up: 'Webhook for everyticket app are as below...
+    show JSON with all data passing / show sample JSON with unique
+    information' - the sample payloads use this application's real,
+    already-seeded registration-form field keys (museum_name,
+    contact_person - see app.core.seed) and its configured
+    extra_params/archive_after_days, not hardcoded generic text."""
+    headers = _admin_headers(client)
+
+    client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "extra_params": {"merchant_id": "MERCH-9"}, "archive_after_days": 21},
+        headers=headers,
+    )
+
+    resp = client.get("/api/v1/admin/config/application", headers=headers)
+    samples = {s["event"]: s for s in resp.json()["integration"]["webhook_samples"]}
+    assert set(samples) == {"subscription.activated", "subscription.expired", "subscription.archived"}
+
+    onboarding = samples["subscription.activated"]["payload"]
+    assert onboarding["event_type"] == "subscription.activated"
+    assert onboarding["merchant_id"] == "MERCH-9"  # configured extra_params merged in as a wire-level sibling field
+    assert "museum_name" in onboarding["payload"]["registration_data"]  # real seeded form field, not a placeholder
+
+    archived = samples["subscription.archived"]["payload"]
+    assert archived["payload"]["days_since_expiry"] == 21  # reflects the configured archive_after_days
+
+    # Restore defaults so later tests aren't affected.
+    client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "extra_params": {}, "archive_after_days": None},
+        headers=headers,
+    )
+
+
 def test_update_notification_config_changes_outbound_sender_and_smtp_host(client, seeded_db, monkeypatch):
     _FakeSMTP.sent.clear()
     _FakeSMTP.connected_to.clear()

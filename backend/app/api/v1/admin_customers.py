@@ -213,5 +213,10 @@ def generate_test_sso_link(
     db.commit()
 
     expires_at = _utcnow() + timedelta(seconds=settings.SSO_TOKEN_TTL_SECONDS)
-    consume_url = f"{settings.FRONTEND_URL.rstrip('/')}/sso/consume?token={token}"
+    # return_url (2026-09 follow-up, same fix as the PayU post-payment
+    # redirect: "instead allow to configure return URL") overrides
+    # settings.FRONTEND_URL when the admin has configured this
+    # application's own frontend URL.
+    frontend_url = application.return_url or settings.FRONTEND_URL
+    consume_url = f"{frontend_url.rstrip('/')}/sso/consume?token={token}"
     return SsoLinkOut(sso_token=token, consume_url=consume_url, expires_at=expires_at)

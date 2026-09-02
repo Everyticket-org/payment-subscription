@@ -22,7 +22,7 @@ from app.audit import service as audit_service
 from app.core.enums import PaymentStatus, PaymentType, SubscriptionEventType
 from app.core.exceptions import PaymentTransactionNotFound
 from app.core.ids import new_transaction_id
-from app.customers.models import Customer
+from app.customers.models import Customer, CustomerRegistrationData
 from app.invoices.models import Invoice
 from app.invoices.service import generate_invoice, get_or_render_pdf
 from app.notifications.email import service as email_service
@@ -34,6 +34,7 @@ from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
 from app.webhooks import service as webhook_service
+from app.webhooks.payloads import onboarding_payload
 
 logger = logging.getLogger("subscription")
 
@@ -49,13 +50,16 @@ def create_payment_transaction(
     payment_type: str,
     gateway_code: str = "mock",
     gateway_mode: str = "test",
+    application: Application | None = None,
 ) -> PaymentTransaction:
     # `db`+`gateway_mode` resolve the admin-configured, per-mode PayU
     # credentials (app.payments.gateway_config) when this application has
     # any configured, falling back to env vars otherwise - see
-    # app.payments.gateways.registry.get_gateway's own docstring. Harmless
-    # for the mock gateway, which ignores both.
-    gateway = get_gateway(gateway_code, db=db, mode=gateway_mode)
+    # app.payments.gateways.registry.get_gateway's own docstring. `application`
+    # additionally resolves this application's admin-configured PayU
+    # redirect/webhook URLs (2026-09 follow-up) - harmless to omit or to
+    # pass for the mock gateway, which ignores all of this.
+    gateway = get_gateway(gateway_code, db=db, mode=gateway_mode, application=application)
 
     transaction = PaymentTransaction(
         transaction_id=new_transaction_id(),
@@ -185,27 +189,69 @@ def process_gateway_result(
         # for why) - the actual HTTP delivery happens out-of-band via the
         # Celery beat sweep in app/webhooks/tasks.py, never synchronously
         # inside this transaction (spec section 58).
-        webhook_event_type = {
-            PaymentType.UPGRADE.value: "subscription.upgraded",
-            PaymentType.DOWNGRADE.value: "subscription.downgraded",
-            PaymentType.RENEWAL.value: "subscription.renewed",
-        }.get(transaction.payment_type, "subscription.activated")
+        #
+        # PaymentType.NEW (first-ever activation, "onboarding") gets its
+        # own richer payload - the customer's full registration-form
+        # answers, not just bare identifiers (2026-09 follow-up: "onboarding
+        # ... with more details, show JSON with all data passing") - built
+        # via app.webhooks.payloads.onboarding_payload so the admin
+        # Configuration screen's sample-JSON preview can never drift from
+        # what's actually sent (app.api.v1.admin_config calls the same
+        # function). Upgrade/downgrade/renewal keep the existing, simpler
+        # payload shape - Vishal's numbered list only asked for onboarding/
+        # expiry/archive to be enriched.
         if application is not None:
-            webhook_service.queue_event(
-                db,
-                application=application,
-                event_type=webhook_event_type,
-                entity_type="subscription",
-                entity_id=subscription.subscription_id,
-                payload={
-                    "subscription_id": subscription.subscription_id,
-                    "customer_id": subscription.customer.customer_id,
-                    "plan_code": subscription.plan.plan_code,
-                    "status": subscription.status,
-                    "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
-                    "transaction_id": transaction.transaction_id,
-                },
-            )
+            if transaction.payment_type == PaymentType.NEW.value:
+                registration_entry = (
+                    db.query(CustomerRegistrationData)
+                    .filter(CustomerRegistrationData.subscription_id == subscription.id)
+                    .order_by(CustomerRegistrationData.created_at.desc())
+                    .first()
+                )
+                webhook_service.queue_event(
+                    db,
+                    application=application,
+                    event_type="subscription.activated",
+                    entity_type="subscription",
+                    entity_id=subscription.subscription_id,
+                    payload=onboarding_payload(
+                        subscription_id=subscription.subscription_id,
+                        customer_id=subscription.customer.customer_id,
+                        email=subscription.customer.email,
+                        mobile=subscription.customer.mobile,
+                        plan_code=subscription.plan.plan_code,
+                        plan_name=subscription.plan.name,
+                        currency=subscription.plan.currency,
+                        price=float(subscription.plan.price),
+                        is_trial=subscription.is_trial,
+                        status=subscription.status,
+                        starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                        expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                        transaction_id=transaction.transaction_id,
+                        registration_data=(registration_entry.data if registration_entry else {}),
+                    ),
+                )
+            else:
+                webhook_event_type = {
+                    PaymentType.UPGRADE.value: "subscription.upgraded",
+                    PaymentType.DOWNGRADE.value: "subscription.downgraded",
+                    PaymentType.RENEWAL.value: "subscription.renewed",
+                }[transaction.payment_type]
+                webhook_service.queue_event(
+                    db,
+                    application=application,
+                    event_type=webhook_event_type,
+                    entity_type="subscription",
+                    entity_id=subscription.subscription_id,
+                    payload={
+                        "subscription_id": subscription.subscription_id,
+                        "customer_id": subscription.customer.customer_id,
+                        "plan_code": subscription.plan.plan_code,
+                        "status": subscription.status,
+                        "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
+                        "transaction_id": transaction.transaction_id,
+                    },
+                )
     elif result.status == PaymentStatus.FAILED.value:
         subscription_service.mark_payment_failed(db, subscription=subscription)
         audit_service.record(

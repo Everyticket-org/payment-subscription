@@ -61,9 +61,21 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
     payload = dict(form)
     txnid = payload.get("txnid")
 
+    # Looked up once, up front, and reused below both for return_url (this
+    # redirect) and gateway_mode (the reverse-hash verification further
+    # down) - same Application row either way, no need to query it twice.
+    #
+    # return_url (2026-09 follow-up: "PayU redirect back to localhost:4200
+    # which is wrong. instead allow to configure return URL") overrides
+    # settings.FRONTEND_URL when the admin has configured this application's
+    # own frontend URL - same DB-row-overrides-env-fallback pattern as
+    # everywhere else.
+    application = db.query(Application).filter(Application.code == "EVERYTICKET").first()
+    frontend_url = application.return_url if application and application.return_url else settings.FRONTEND_URL
+
     def _redirect(status: str, **extra: str) -> RedirectResponse:
         params = "&".join([f"status={status}"] + [f"{k}={v}" for k, v in extra.items() if v is not None])
-        return RedirectResponse(url=f"{settings.FRONTEND_URL}/payment/return?{params}", status_code=303)
+        return RedirectResponse(url=f"{frontend_url.rstrip('/')}/payment/return?{params}", status_code=303)
 
     if not txnid:
         logger.warning("PayU callback with no txnid in body: %r", payload)
@@ -79,9 +91,8 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
     # uses the SAME salt create_payment_transaction() used to build the
     # request hash for this transaction - falls back to env vars if
     # nothing is configured, same pattern as everywhere else.
-    application = db.query(Application).filter(Application.code == "EVERYTICKET").first()
     gateway_mode = application.gateway_mode if application is not None else "test"
-    gateway = get_gateway(transaction.gateway, db=db, mode=gateway_mode)
+    gateway = get_gateway(transaction.gateway, db=db, mode=gateway_mode, application=application)
     result = gateway.process_webhook(payload=payload)
     updated_transaction, invoice = payment_service.process_gateway_result(db, transaction=transaction, result=result)
 

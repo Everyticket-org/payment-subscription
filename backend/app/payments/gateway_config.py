@@ -77,3 +77,23 @@ def resolve_payu_credentials(db: Session, *, mode: str) -> dict:
         merchant_salt = mode_cfg.get("merchant_salt") or ""
         base_url = "https://secure.payu.in"
     return {"merchant_key": merchant_key, "merchant_salt": merchant_salt, "base_url": base_url}
+
+
+def resolve_payu_webhook_urls(application) -> dict:
+    """success_url/failure_url PayU's hosted checkout page redirects the
+    customer's browser to once they finish paying - built from
+    Application.payu_webhook_base_url (2026-09 follow-up: "instead allow
+    to configure ... PayU webhook URL") when an admin has configured this
+    application's own publicly-reachable base URL, falling back to the
+    env-configured full URLs (settings.PAYU_SUCCESS_URL/PAYU_FAILURE_URL)
+    otherwise - same override/fallback pattern as everywhere else in this
+    module. One global value regardless of test/live gateway_mode: this
+    is THIS backend's own address, not a PayU-side credential."""
+    settings = get_settings()
+    base_url = (application.payu_webhook_base_url or "").rstrip("/") if application is not None else ""
+    if not base_url:
+        return {"success_url": settings.PAYU_SUCCESS_URL, "failure_url": settings.PAYU_FAILURE_URL}
+    return {
+        "success_url": f"{base_url}/api/v1/payment/payu/callback/success",
+        "failure_url": f"{base_url}/api/v1/payment/payu/callback/failure",
+    }

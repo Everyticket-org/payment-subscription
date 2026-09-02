@@ -13,7 +13,7 @@ from sqlalchemy import and_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.applications.models import Application
+from app.applications.models import Application, CustomerApplicationMapping
 from app.core.enums import ProvisioningStatus, SubscriptionEventType, SubscriptionStatus
 from app.core.exceptions import (
     CustomerAlreadySubscribed,
@@ -297,15 +297,40 @@ def expire_subscription(db: Session, *, subscription: Subscription) -> Subscript
     return subscription
 
 
+def _mapping_identity(db: Session, *, customer_id: int, application_id: int) -> tuple[str | None, str | None]:
+    """(external_customer_id, external_instance_id) Everyticket itself
+    assigned back on this customer's onboarding webhook (spec section
+    32), or (None, None) if onboarding never completed / provisioning
+    never succeeded - the expiry/archive webhooks still fire in that
+    case (Everyticket may still recognize the customer some other way),
+    just without those two fields populated."""
+    mapping = (
+        db.query(CustomerApplicationMapping)
+        .filter(
+            CustomerApplicationMapping.customer_id == customer_id,
+            CustomerApplicationMapping.application_id == application_id,
+        )
+        .first()
+    )
+    if mapping is None:
+        return None, None
+    return mapping.external_customer_id, mapping.external_instance_id
+
+
 def expire_due_subscriptions(db: Session) -> int:
     """Sweep entry point for the Celery beat task (app/subscriptions/tasks.py,
     spec section 40) - unlike expire_subscription() above (which the
     caller commits), this owns its own commits since nothing else is
     driving the same transaction. Also queues a subscription.expired
     webhook event per expired subscription (spec sections 19, 31),
-    same DB-only queue_event() pattern PaymentService uses. Returns how
+    same DB-only queue_event() pattern PaymentService uses, via
+    app.webhooks.payloads.expiry_payload (2026-09 follow-up: "second
+    [webhook] for making status inactive when plan expires... unique
+    information" - the external identity Everyticket itself assigned on
+    onboarding, so it can deactivate the right account). Returns how
     many subscriptions were expired."""
     from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+    from app.webhooks.payloads import expiry_payload
 
     now = datetime.now(timezone.utc)
     due = (
@@ -322,22 +347,116 @@ def expire_due_subscriptions(db: Session) -> int:
         expire_subscription(db, subscription=subscription)
         application = db.get(Application, subscription.application_id)
         if application is not None:
+            external_customer_id, external_instance_id = _mapping_identity(
+                db, customer_id=subscription.customer_id, application_id=application.id
+            )
             webhook_service.queue_event(
                 db,
                 application=application,
                 event_type="subscription.expired",
                 entity_type="subscription",
                 entity_id=subscription.subscription_id,
-                payload={
-                    "subscription_id": subscription.subscription_id,
-                    "customer_id": subscription.customer.customer_id,
-                    "plan_code": subscription.plan.plan_code,
-                    "status": subscription.status,
-                },
+                payload=expiry_payload(
+                    subscription_id=subscription.subscription_id,
+                    customer_id=subscription.customer.customer_id,
+                    external_customer_id=external_customer_id,
+                    external_instance_id=external_instance_id,
+                    plan_code=subscription.plan.plan_code,
+                    status=subscription.status,
+                    expired_at=now.isoformat(),
+                ),
             )
         db.commit()
         expired_count += 1
     return expired_count
+
+
+def archive_stale_subscriptions(db: Session) -> int:
+    """Sweep entry point for the Celery beat task (app/subscriptions/tasks.py).
+    EXPIRED -> ARCHIVED once an application's admin-configured
+    archive_after_days has elapsed since the subscription expired
+    (2026-09 follow-up: "third [webhook] to delete/archive when user do
+    not renew for x days") - opt-in per application: archive_after_days
+    None or <= 0 means this application never archives, matching every
+    other admin-configurable threshold in this app (e.g. webhook_retry_limit).
+
+    Uses SubscriptionHistory's own EXPIRED row's occurred_at as "when it
+    expired" rather than re-deriving it from expires_at, since a
+    subscription can only reach EXPIRED via expire_subscription() above,
+    which always writes that history row at the same moment - the two
+    are equivalent, but the history row is the actual audit trail this
+    app already keeps for exactly this purpose. Returns how many
+    subscriptions were archived."""
+    from app.subscriptions.models import SubscriptionHistory
+    from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+    from app.webhooks.payloads import archive_payload
+
+    now = datetime.now(timezone.utc)
+    candidates = (
+        db.query(Subscription)
+        .join(Application, Subscription.application_id == Application.id)
+        .filter(
+            Subscription.status == SubscriptionStatus.EXPIRED.value,
+            Application.archive_after_days.isnot(None),
+            Application.archive_after_days > 0,
+        )
+        .all()
+    )
+    archived_count = 0
+    for subscription in candidates:
+        application = db.get(Application, subscription.application_id)
+        if application is None or not application.archive_after_days:
+            continue
+
+        expired_history = (
+            db.query(SubscriptionHistory)
+            .filter(
+                SubscriptionHistory.subscription_id == subscription.id,
+                SubscriptionHistory.event_type == SubscriptionEventType.EXPIRED.value,
+            )
+            .order_by(SubscriptionHistory.occurred_at.desc())
+            .first()
+        )
+        expired_at = ensure_aware(expired_history.occurred_at) if expired_history else None
+        if expired_at is None:
+            continue
+        days_since_expiry = (now - expired_at).days
+        if days_since_expiry < application.archive_after_days:
+            continue
+
+        subscription.status = SubscriptionStatus.ARCHIVED.value
+        db.add(subscription)
+        db.add(
+            SubscriptionHistory(
+                subscription_id=subscription.id,
+                event_type=SubscriptionEventType.ARCHIVED.value,
+                occurred_at=now,
+            )
+        )
+
+        external_customer_id, external_instance_id = _mapping_identity(
+            db, customer_id=subscription.customer_id, application_id=application.id
+        )
+        webhook_service.queue_event(
+            db,
+            application=application,
+            event_type="subscription.archived",
+            entity_type="subscription",
+            entity_id=subscription.subscription_id,
+            payload=archive_payload(
+                subscription_id=subscription.subscription_id,
+                customer_id=subscription.customer.customer_id,
+                external_customer_id=external_customer_id,
+                external_instance_id=external_instance_id,
+                plan_code=subscription.plan.plan_code,
+                status=subscription.status,
+                expired_at=expired_at.isoformat(),
+                days_since_expiry=days_since_expiry,
+            ),
+        )
+        db.commit()
+        archived_count += 1
+    return archived_count
 
 
 def send_renewal_reminders(db: Session) -> int:

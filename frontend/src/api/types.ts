@@ -406,12 +406,22 @@ export interface PaymentGatewayConfigOut {
   available_gateways: string[];
   payu_test: PayUCredentialsOut;
   payu_live: PayUCredentialsOut;
+  return_url: string | null;
+  payu_webhook_base_url: string | null;
 }
 
 export interface PaymentGatewayConfigUpdateInput {
   default_gateway: string;
   payu_test?: PayUCredentialsInput | null;
   payu_live?: PayUCredentialsInput | null;
+  return_url?: string | null;
+  payu_webhook_base_url?: string | null;
+}
+
+export interface EveryticketWebhookSampleOut {
+  event: string;
+  trigger: string;
+  payload: Record<string, unknown>;
 }
 
 export interface EveryticketIntegrationOut {
@@ -423,6 +433,8 @@ export interface EveryticketIntegrationOut {
   escalation_emails: string | null;
   escalation_email_subject: string | null;
   escalation_email_body: string | null;
+  archive_after_days: number | null;
+  webhook_samples: EveryticketWebhookSampleOut[];
 }
 
 export interface EveryticketIntegrationUpdateInput {
@@ -433,6 +445,7 @@ export interface EveryticketIntegrationUpdateInput {
   escalation_emails?: string | null;
   escalation_email_subject?: string | null;
   escalation_email_body?: string | null;
+  archive_after_days?: number | null;
 }
 
 export interface NotificationConfigOut {

@@ -290,6 +290,7 @@ def subscribe(
             payment_type=payment_type,
             gateway_code=application.default_gateway,
             gateway_mode=application.gateway_mode,
+            application=application,
         )
         db.commit()
         db.refresh(customer)
@@ -321,6 +322,7 @@ def subscribe(
         payment_type=PaymentType.NEW.value,
         gateway_code=application.default_gateway,
         gateway_mode=application.gateway_mode,
+        application=application,
     )
     db.commit()
     db.refresh(customer)

@@ -75,6 +75,18 @@ class Application(Base, TimestampMixin):
     smtp_password: Mapped[str | None] = mapped_column(String(500), nullable=True)  # masked in API responses
     smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # None = inherit env default
 
+    # --- Payment redirect / webhook URLs (2026-09 follow-up: "PayU redirect
+    # back to localhost:4200 which is wrong. instead allow to configure
+    # return URL and PayU webhook URL") - both override an env default
+    # (settings.FRONTEND_URL / settings.PAYU_SUCCESS_URL+PAYU_FAILURE_URL)
+    # the same way every other per-application override in this app does. ---
+    return_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # frontend app URL: /payment/return, /sso/consume
+    payu_webhook_base_url: Mapped[str | None] = mapped_column(String(500), nullable=True)  # this backend's own public base URL
+
+    # --- Everyticket integration: archive/delete after N days of non-renewal
+    # (2026-09 follow-up, third webhook type) - None/0 = disabled. ---
+    archive_after_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # --- Testing (spec section 55: also always gated on ENVIRONMENT != production at runtime) ---
     test_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     otp_bypass_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
