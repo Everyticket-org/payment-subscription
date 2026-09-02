@@ -27,6 +27,7 @@ import {
   simulateMockCallback,
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { isSessionExpired } from "../../utils/authError";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
@@ -89,9 +90,19 @@ export function PortalPage() {
       setPortal(portalData);
       setFormFields(fields);
     } catch (err) {
+      // An expired/invalid token would otherwise strand the user on this
+      // page's "loading" branch forever (no portal data ever arrives, so
+      // the page never reaches the view that has its own Sign out button) -
+      // clear it instead so RequireCustomer sends them to /login right
+      // away. Layout's header also has a Sign out control now as a
+      // manual fallback for any other case.
+      if (isSessionExpired(err)) {
+        setCustomerToken(null);
+        return;
+      }
       setError(err);
     }
-  }, [customerToken]);
+  }, [customerToken, setCustomerToken]);
 
   useEffect(() => {
     refresh();
@@ -99,6 +110,21 @@ export function PortalPage() {
 
   function signOut() {
     setCustomerToken(null);
+  }
+
+  // Shared by every mutation below: an expired/invalid token surfacing
+  // mid-session (user already has the portal loaded, then a later action
+  // 401s) gets the same "clear the token and let RequireCustomer redirect
+  // to /login" treatment as the initial load in refresh() above, instead
+  // of just toasting "Invalid or expired token" and leaving them stuck on
+  // a now-broken portal.
+  function reportError(err: unknown) {
+    if (isSessionExpired(err)) {
+      setCustomerToken(null);
+      return;
+    }
+    setError(err);
+    toast.error(err);
   }
 
   async function handleRenew() {
@@ -111,8 +137,7 @@ export function PortalPage() {
       setLastCallback(null);
       toast.info("Complete payment to renew");
     } catch (err) {
-      setError(err);
-      toast.error(err);
+      reportError(err);
     } finally {
       setBusy(false);
     }
@@ -129,8 +154,7 @@ export function PortalPage() {
       toast.success("Subscription cancelled");
       await refresh();
     } catch (err) {
-      setError(err);
-      toast.error(err);
+      reportError(err);
     } finally {
       setBusy(false);
     }
@@ -151,8 +175,7 @@ export function PortalPage() {
       }
       await refresh();
     } catch (err) {
-      setError(err);
-      toast.error(err);
+      reportError(err);
     } finally {
       setBusy(false);
     }

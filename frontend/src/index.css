@@ -151,6 +151,7 @@ code {
 
 .app-header nav {
   display: flex;
+  align-items: center;
   gap: 24px;
 }
 
@@ -162,6 +163,23 @@ code {
 }
 
 .app-header nav a:hover {
+  color: var(--header-text);
+}
+
+.app-header-signout {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid rgba(247, 236, 232, 0.3);
+  border-radius: 8px;
+  padding: 6px 14px;
+  color: var(--header-text-dim);
+  cursor: pointer;
+}
+
+.app-header-signout:hover {
+  border-color: rgba(247, 236, 232, 0.6);
   color: var(--header-text);
 }
 

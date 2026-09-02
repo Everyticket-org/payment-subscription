@@ -1,4 +1,4 @@
-import { Link, Outlet } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import logoUrl from "../assets/logo.svg";
 
@@ -8,9 +8,25 @@ import logoUrl from "../assets/logo.svg";
 // is deliberately no longer linked from here (still reachable directly
 // at /admin/login for anyone who knows the URL) - this header is
 // customer-facing only.
+//
+// Sign out lives here, in the shell every customer page renders inside
+// (see App.tsx), rather than only inside PortalPage's own content - a
+// page that hasn't finished loading yet (or never will, e.g. an expired
+// token that makes every fetch on it fail) still needs a working way
+// out, and previously this header had none at all: the only "Sign out"
+// button lived inside PortalPage's fully-loaded view, so a customer
+// whose token expired mid-session got stuck on that page's error banner
+// with no visible way to sign out (mirrors AdminLayout's topbar, which
+// already gets this right for the admin console).
 
 export function Layout() {
-  const { customerToken } = useAuth();
+  const { customerToken, setCustomerToken } = useAuth();
+  const navigate = useNavigate();
+
+  function signOut() {
+    setCustomerToken(null);
+    navigate("/login");
+  }
 
   return (
     <div className="app-shell">
@@ -21,6 +37,11 @@ export function Layout() {
         <nav>
           <Link to="/">Plans</Link>
           <Link to={customerToken ? "/portal" : "/login"}>My Subscriptions</Link>
+          {customerToken && (
+            <button type="button" className="app-header-signout" onClick={signOut}>
+              Sign out
+            </button>
+          )}
         </nav>
       </header>
       <main className="app-main">

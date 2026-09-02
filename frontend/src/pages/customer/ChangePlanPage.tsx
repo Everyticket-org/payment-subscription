@@ -23,13 +23,14 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { isSessionExpired } from "../../utils/authError";
 import { sanitizeHtml } from "../../utils/sanitizeHtml";
 import type { CustomerPortalOut, MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 type Step = "select" | "payment" | "done";
 
 export function ChangePlanPage() {
-  const { customerToken } = useAuth();
+  const { customerToken, setCustomerToken } = useAuth();
   const navigate = useNavigate();
   const toast = useToast();
 
@@ -48,8 +49,30 @@ export function ChangePlanPage() {
         setPortal(portalData);
         setPlans(planList);
       })
-      .catch(setError);
-  }, [customerToken]);
+      .catch((err) => {
+        // Same reasoning as PortalPage.refresh(): without this, an
+        // expired/invalid token leaves `portal` null forever, which keeps
+        // this page on its "loading" branch below - the only branch that
+        // doesn't render Layout's per-page content, but even that has no
+        // effect here since there was never a Sign out control on this
+        // page either. Clearing the token lets RequireCustomer redirect
+        // to /login instead.
+        if (isSessionExpired(err)) {
+          setCustomerToken(null);
+          return;
+        }
+        setError(err);
+      });
+  }, [customerToken, setCustomerToken]);
+
+  function reportError(err: unknown) {
+    if (isSessionExpired(err)) {
+      setCustomerToken(null);
+      return;
+    }
+    setError(err);
+    toast.error(err);
+  }
 
   async function handlePick(target: Plan) {
     if (!customerToken || !portal?.active_subscription) return;
@@ -65,8 +88,7 @@ export function ChangePlanPage() {
       setStep("payment");
       toast.info("Complete payment to apply the plan change");
     } catch (err) {
-      setError(err);
-      toast.error(err);
+      reportError(err);
     } finally {
       setBusy(false);
     }
@@ -86,8 +108,7 @@ export function ChangePlanPage() {
         toast.error("Payment failed - plan unchanged");
       }
     } catch (err) {
-      setError(err);
-      toast.error(err);
+      reportError(err);
     } finally {
       setBusy(false);
     }
