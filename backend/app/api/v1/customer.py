@@ -232,6 +232,7 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
         plan=target_plan,
         payment_type=payment_type,
         gateway_code=application.default_gateway,
+        gateway_mode=application.gateway_mode,
     )
     db.commit()
     db.refresh(customer)
@@ -273,6 +274,7 @@ def renew(
         plan=subscription.plan,
         payment_type=PaymentType.RENEWAL.value,
         gateway_code=application.default_gateway,
+        gateway_mode=application.gateway_mode,
     )
     db.commit()
     db.refresh(customer)

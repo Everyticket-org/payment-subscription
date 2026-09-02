@@ -8,6 +8,7 @@ import { PaymentReturnPage } from "./pages/public/PaymentReturnPage";
 import { CustomerLoginPage } from "./pages/public/CustomerLoginPage";
 import { SsoConsumePage } from "./pages/public/SsoConsumePage";
 import { PortalPage } from "./pages/customer/PortalPage";
+import { ChangePlanPage } from "./pages/customer/ChangePlanPage";
 import { AdminLoginPage } from "./pages/admin/AdminLoginPage";
 import { AdminDashboardPage } from "./pages/admin/AdminDashboardPage";
 import { AdminPlansPage } from "./pages/admin/AdminPlansPage";
@@ -41,6 +42,14 @@ function App() {
             element={
               <RequireCustomer>
                 <PortalPage />
+              </RequireCustomer>
+            }
+          />
+          <Route
+            path="portal/change-plan"
+            element={
+              <RequireCustomer>
+                <ChangePlanPage />
               </RequireCustomer>
             }
           />

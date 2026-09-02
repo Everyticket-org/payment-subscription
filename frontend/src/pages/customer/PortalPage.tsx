@@ -17,16 +17,14 @@
  * get_portal() for where those correlation fields are populated.
  */
 import { Fragment, useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   customerDownloadInvoicePdf,
   getRegistrationForm,
-  listPlans,
   cancelSubscription,
-  downgradeSubscription,
   getCustomerPortal,
   renewSubscription,
   simulateMockCallback,
-  upgradeSubscription,
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
@@ -38,7 +36,6 @@ import type {
   InvoiceOut,
   MockCallbackResult,
   PaymentTransactionOut,
-  Plan,
   PortalSubscriptionOut,
   RegistrationFormFieldOut,
   SubscribeResponse,
@@ -74,9 +71,7 @@ export function PortalPage() {
   const { customerToken, setCustomerToken } = useAuth();
   const toast = useToast();
   const [portal, setPortal] = useState<CustomerPortalOut | null>(null);
-  const [plans, setPlans] = useState<Plan[]>([]);
   const [formFields, setFormFields] = useState<RegistrationFormFieldOut[]>([]);
-  const [targetPlan, setTargetPlan] = useState<string>("");
   const [cancelReason, setCancelReason] = useState("");
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   const [pendingPayment, setPendingPayment] = useState<SubscribeResponse | null>(null);
@@ -87,13 +82,11 @@ export function PortalPage() {
   const refresh = useCallback(async () => {
     if (!customerToken) return;
     try {
-      const [portalData, planList, fields] = await Promise.all([
+      const [portalData, fields] = await Promise.all([
         getCustomerPortal(customerToken),
-        listPlans(),
         getRegistrationForm().catch(() => []),
       ]);
       setPortal(portalData);
-      setPlans(planList);
       setFormFields(fields);
     } catch (err) {
       setError(err);
@@ -106,28 +99,6 @@ export function PortalPage() {
 
   function signOut() {
     setCustomerToken(null);
-  }
-
-  async function handlePlanChange() {
-    if (!customerToken || !portal?.active_subscription || !targetPlan) return;
-    const current = plans.find((p) => p.plan_code === portal.active_subscription!.plan_code);
-    const target = plans.find((p) => p.plan_code === targetPlan);
-    if (!current || !target) return;
-
-    setBusy(true);
-    setError(null);
-    try {
-      const mutate = target.price > current.price ? upgradeSubscription : downgradeSubscription;
-      const result = await mutate(portal.active_subscription.subscription_id, targetPlan, customerToken);
-      setPendingPayment(result);
-      setLastCallback(null);
-      toast.info("Complete payment to apply the plan change");
-    } catch (err) {
-      setError(err);
-      toast.error(err);
-    } finally {
-      setBusy(false);
-    }
   }
 
   async function handleRenew() {
@@ -198,11 +169,6 @@ export function PortalPage() {
   }
 
   const { customer, registration_data, active_subscription, subscriptions, payments, invoices } = portal;
-  // Free trial plans are never a valid upgrade/downgrade target (spec
-  // follow-up: a trial can only ever be a brand-new subscription, checked
-  // server-side too in customer.py's _change_plan) - excluded here so the
-  // dropdown never offers a choice the backend would refuse anyway.
-  const otherPlans = plans.filter((p) => p.plan_code !== active_subscription?.plan_code && !p.is_trial);
   const fieldLabels = new Map(formFields.map((f) => [f.field_key, f.label]));
 
   return (
@@ -265,20 +231,13 @@ export function PortalPage() {
 
               <div className="portal-actions">
                 <div className="portal-action-group">
-                  <label>
-                    Change plan
-                    <select value={targetPlan} onChange={(e) => setTargetPlan(e.target.value)}>
-                      <option value="">Select a plan...</option>
-                      {otherPlans.map((p) => (
-                        <option key={p.plan_code} value={p.plan_code}>
-                          {p.name} - {p.currency} {p.price.toFixed(2)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button className="button button-primary" disabled={busy || !targetPlan} onClick={handlePlanChange}>
-                    Switch plan
-                  </button>
+                  {active_subscription.is_trial ? (
+                    <p className="hint">Free trials can't be switched to another plan - subscribe to a paid plan instead.</p>
+                  ) : (
+                    <Link className="button button-primary" to="/portal/change-plan">
+                      Change plan
+                    </Link>
+                  )}
                 </div>
 
                 <div className="portal-actions-cols">

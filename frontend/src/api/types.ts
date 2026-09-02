@@ -372,65 +372,86 @@ export interface InvoiceAdminOut {
   items: InvoiceItemOut[];
 }
 
+// Restructured 2026-09 into 4 admin Configuration sections - see
+// backend app/applications/config_schemas.py's module docstring for the
+// full rationale (why application_url/logo/favicon/support/timezone/active,
+// api_url and sso_secret are no longer on these screens even though their
+// backend columns/behavior are unchanged).
+
 export interface ApplicationGeneralOut {
   code: string;
   name: string;
-  application_url: string;
-  logo_url: string | null;
-  favicon_url: string | null;
-  support_email: string | null;
-  support_phone: string | null;
-  timezone: string;
   currency: string;
-  active: boolean;
+  gateway_mode: string; // test | live - "Live/Test Mode"
 }
 
 export interface ApplicationGeneralUpdateInput {
   name: string;
-  application_url: string;
-  logo_url?: string | null;
-  favicon_url?: string | null;
-  support_email?: string | null;
-  support_phone?: string | null;
-  timezone?: string;
-  currency?: string;
-  active?: boolean;
-}
-
-export interface ApplicationIntegrationOut {
-  api_url: string | null;
-  api_credentials_is_set: boolean;
-  webhook_url: string | null;
-  webhook_secret_is_set: boolean;
-  sso_secret_is_set: boolean;
-}
-
-export interface ApplicationIntegrationUpdateInput {
-  api_url?: string | null;
-  api_credentials?: Record<string, unknown> | null;
-  webhook_url?: string | null;
-  webhook_secret?: string | null;
-  sso_secret?: string | null;
-}
-
-export interface ApplicationPaymentOut {
-  default_gateway: string;
+  currency: string;
   gateway_mode: string;
 }
 
-export interface ApplicationPaymentUpdateInput {
-  default_gateway: string;
-  gateway_mode?: string;
+export interface PayUCredentialsOut {
+  merchant_key_is_set: boolean;
+  merchant_salt_is_set: boolean;
 }
 
-export interface ApplicationNotificationOut {
-  email_provider: string;
+export interface PayUCredentialsInput {
+  merchant_key?: string | null;
+  merchant_salt?: string | null;
+}
+
+export interface PaymentGatewayConfigOut {
+  default_gateway: string;
+  available_gateways: string[];
+  payu_test: PayUCredentialsOut;
+  payu_live: PayUCredentialsOut;
+}
+
+export interface PaymentGatewayConfigUpdateInput {
+  default_gateway: string;
+  payu_test?: PayUCredentialsInput | null;
+  payu_live?: PayUCredentialsInput | null;
+}
+
+export interface EveryticketIntegrationOut {
+  secret_key_is_set: boolean;
+  webhook_url: string | null;
+  extra_params: Record<string, string>;
+  retry_limit: number | null;
+  default_retry_limit: number;
+  escalation_emails: string | null;
+  escalation_email_subject: string | null;
+  escalation_email_body: string | null;
+}
+
+export interface EveryticketIntegrationUpdateInput {
+  secret_key?: string | null;
+  webhook_url?: string | null;
+  extra_params?: Record<string, string> | null;
+  retry_limit?: number | null;
+  escalation_emails?: string | null;
+  escalation_email_subject?: string | null;
+  escalation_email_body?: string | null;
+}
+
+export interface NotificationConfigOut {
+  smtp_host: string | null;
+  smtp_port: number | null;
+  smtp_username: string | null;
+  smtp_password_is_set: boolean;
+  smtp_use_tls: boolean | null;
   email_sender_name: string | null;
   email_sender_address: string | null;
   email_reply_to: string | null;
 }
 
-export interface ApplicationNotificationUpdateInput {
+export interface NotificationConfigUpdateInput {
+  smtp_host?: string | null;
+  smtp_port?: number | null;
+  smtp_username?: string | null;
+  smtp_password?: string | null;
+  smtp_use_tls?: boolean | null;
   email_provider?: string;
   email_sender_name?: string | null;
   email_sender_address?: string | null;
@@ -450,9 +471,9 @@ export type ApplicationSubscriptionRulesUpdateInput = ApplicationSubscriptionRul
 
 export interface ApplicationConfigOut {
   general: ApplicationGeneralOut;
-  integration: ApplicationIntegrationOut;
-  payment: ApplicationPaymentOut;
-  notification: ApplicationNotificationOut;
+  payment_gateway: PaymentGatewayConfigOut;
+  integration: EveryticketIntegrationOut;
+  notification: NotificationConfigOut;
   subscription_rules: ApplicationSubscriptionRulesOut;
 }
 

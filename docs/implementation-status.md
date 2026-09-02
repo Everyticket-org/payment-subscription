@@ -1171,6 +1171,113 @@ new - `AdminPlansPage.tsx`'s new `setIsTrial()` call inside an existing
 its neighboring `setError(null)` call, i.e. the same pre-existing pattern
 already present in this component, not a new class of issue).
 
+## 2026-09-02 (follow-up): admin Configuration restructure + dedicated change-plan page
+
+Vishal's feedback, verbatim: the customer portal's inline plan-switch
+form ("Plan switch - will lead to new page like fresh is doing.. currently
+inline form becomes messy") and a full restructure of the admin
+Configuration page into 4 named sections with an explicit field list per
+section.
+
+**Customer portal**: the old inline `<select>` + button in the Active
+Subscription card is replaced by a dedicated `/portal/change-plan` page
+(`ChangePlanPage.tsx`), modeled on the same pick -> pay -> done step flow
+`SubscribePage` already uses, so both flows feel consistent. Same
+upgrade/downgrade endpoints and mock-payment simulate step under the
+hood - only the layout changed. `PortalPage`'s Active Subscription card
+now just links to it (hidden for an active trial subscription, which
+can't be switched, same as before).
+
+**Admin Configuration restructure** (`app/applications/config_schemas.py`,
+`app/api/v1/admin_config.py`, `AdminConfigPage.tsx`) - 4 sections,
+matching Vishal's field list exactly:
+
+1. **Application**: name, currency (dropdown), Live/Test Mode
+   (`gateway_mode`, moved here from the old Payment screen) only. Every
+   other old General field (application_url, logo/favicon, support
+   contact, timezone, `active`) keeps its column/value untouched - just
+   no longer admin-editable from this screen (no data loss, just a
+   smaller form).
+2. **Payment Gateway**: a gateway dropdown (`default_gateway`, still
+   takes effect on the very next payment) plus, when PayU is selected,
+   separate Test and Live merchant key/salt fields - both are always
+   editable regardless of the current mode, so switching Live/Test Mode
+   later doesn't require re-entering credentials. Which set is actually
+   used is decided by the Application screen's Live/Test Mode, not a
+   per-credential toggle. Stored via the existing generic system_settings
+   key/value store (`app/payments/gateway_config.py`, same pattern as the
+   invoice tax config), not a new column - masked `*_is_set` booleans on
+   GET, same secret convention as everywhere else in this app. PayU's
+   adapter (`app/payments/gateways/payu/gateway.py`) now accepts an
+   optional credential override at construction time (falls back to env
+   vars when none given, so the module-level registry instance and every
+   existing PayU unit test keep working unchanged); the registry
+   (`get_gateway(code, db=..., mode=...)`) hands out a DB-resolved
+   instance when a db session is given, used from
+   `create_payment_transaction()` and the PayU callback route so the
+   create-payment hash and the callback's reverse-hash verification
+   always use the same credentials.
+3. **Everyticket Integration**: Secret Key (the existing `webhook_secret`,
+   relabeled), Webhook URL, a key/value editor for custom static POST
+   parameters sent with every delivery (`webhook_extra_params`, merged
+   into the outgoing JSON body without ever overriding a fixed event
+   field), a Retry limit overriding `WEBHOOK_RETRY_SCHEDULE_MINUTES`'s own
+   length (`webhook_retry_limit` - shorter truncates the schedule, longer
+   repeats its last delay), and an escalation email (recipients + admin-
+   edited subject/body via the same `RichTextEditor`+sanitizer pair
+   `Plan.description` already uses) sent once a delivery is marked
+   EXHAUSTED - fires exactly once per delivery, since `dispatch_pending()`
+   never re-picks-up an already-EXHAUSTED row. `api_url`/`api_credentials`/
+   `sso_secret` are no longer on this screen (SSO is a separate concern
+   from webhook delivery, and already has its own env fallback) - columns
+   and behavior unchanged, just not edited here any more.
+4. **Notifications**: real SMTP transport override
+   (host/port/username/password/use_tls - previously env-only via
+   `Settings.SMTP_*`, with no per-application override at all) alongside
+   the pre-existing sender name/address/reply-to fields. `send_direct_email()`
+   (new, alongside the existing `send_templated_email()`) sends admin-
+   composed content that isn't a `NotificationTemplate` DB row - used by
+   the webhook escalation email above - sharing the same per-application
+   settings-override resolution (`_resolve_settings()`, factored out of
+   `send_templated_email` for this reuse).
+
+New migration `c2d4e6f8a1b3`: adds `applications.webhook_extra_params`
+(JSON), `webhook_retry_limit` (Integer), `webhook_escalation_emails`/
+`_subject`/`_body`, and `smtp_host`/`_port`/`_username`/`_password`/
+`_use_tls` - all nullable, no data migration needed. PayU per-mode
+credentials are deliberately NOT a migration (system_settings instead,
+see above).
+
+**"Subscription rules" and "Security" configuration are unchanged** -
+same endpoints, same live enforcement (still 403s the matching customer
+action / still governs OTP length+expiry+attempts+cooldown) - they're
+just not rendered on the restructured Configuration page for now, since
+Vishal's list didn't include them ("do this much as of now"). Worth
+raising with him whether they should get their own page, or come back
+onto this one, in a future pass.
+
+Verified: 128 total backend tests, 127 passing (same pre-existing `/ready`
+gap). New tests: `tests/test_admin_config.py` rewritten for the new
+section shapes plus a real PayU-credential-round-trip test (switches to
+PayU with zero env credentials configured, stores Test credentials via
+the new endpoint, and confirms an actual subscribe's PayU checkout form
+uses the DB-stored key - not just that the config round-trips) and an SMTP-
+host-override test (confirms the fake SMTP class was actually constructed
+with the configured host/port, not just that the sender name changed).
+New `tests/test_webhook_config.py` (5 tests): extra params merged into
+the outgoing POST body without clobbering fixed fields, a shorter
+configured retry limit exhausts sooner than the schedule's own length,
+the escalation email is sent to every configured recipient with the
+real event context rendered in, no escalation email when no recipients
+are configured, and the escalation email fires exactly once (a second
+`dispatch_pending()` call against the same now-EXHAUSTED row is a no-op).
+Migration verified via `alembic history` (clean chain, `c2d4e6f8a1b3` is
+head) and `alembic upgrade ... --sql` (exact DDL confirmed - this
+environment's device bridge can reach Vishal's files but not his real
+Postgres instance, same pre-existing constraint as every prior pass).
+Frontend `tsc -b && vite build` clean; `oxlint` 0 errors (same 8 pre-
+existing warnings, none new).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

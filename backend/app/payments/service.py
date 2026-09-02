@@ -48,8 +48,14 @@ def create_payment_transaction(
     plan: Plan,
     payment_type: str,
     gateway_code: str = "mock",
+    gateway_mode: str = "test",
 ) -> PaymentTransaction:
-    gateway = get_gateway(gateway_code)
+    # `db`+`gateway_mode` resolve the admin-configured, per-mode PayU
+    # credentials (app.payments.gateway_config) when this application has
+    # any configured, falling back to env vars otherwise - see
+    # app.payments.gateways.registry.get_gateway's own docstring. Harmless
+    # for the mock gateway, which ignores both.
+    gateway = get_gateway(gateway_code, db=db, mode=gateway_mode)
 
     transaction = PaymentTransaction(
         transaction_id=new_transaction_id(),

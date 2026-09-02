@@ -12,7 +12,7 @@ responses (mask them), and production deployments should prefer setting
 them via environment variables and treating these columns as
 overrides/fallback only.
 """
-from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, TimestampMixin
@@ -59,6 +59,21 @@ class Application(Base, TimestampMixin):
     cancellation_behavior: Mapped[str] = mapped_column(String(50), default="IMMEDIATE", nullable=False)
     renewal_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     repurchase_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # --- Everyticket integration: extra webhook POST params, retry limit,
+    # escalation email on EXHAUSTED delivery (2026-09 admin config restructure) ---
+    webhook_extra_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    webhook_retry_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None = use WEBHOOK_RETRY_SCHEDULE_MINUTES's own length
+    webhook_escalation_emails: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # comma-separated
+    webhook_escalation_email_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    webhook_escalation_email_body: Mapped[str | None] = mapped_column(Text, nullable=True)  # sanitized rich text, see app.plans.sanitize
+
+    # --- Notifications: real SMTP transport override (previously env-only via Settings.SMTP_*) ---
+    smtp_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    smtp_port: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    smtp_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    smtp_password: Mapped[str | None] = mapped_column(String(500), nullable=True)  # masked in API responses
+    smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # None = inherit env default
 
     # --- Testing (spec section 55: also always gated on ENVIRONMENT != production at runtime) ---
     test_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

@@ -17,14 +17,14 @@ import type {
   ApplicationConfigOut,
   ApplicationGeneralOut,
   ApplicationGeneralUpdateInput,
-  ApplicationIntegrationOut,
-  ApplicationIntegrationUpdateInput,
-  ApplicationNotificationOut,
-  ApplicationNotificationUpdateInput,
-  ApplicationPaymentOut,
-  ApplicationPaymentUpdateInput,
   ApplicationSubscriptionRulesOut,
   ApplicationSubscriptionRulesUpdateInput,
+  EveryticketIntegrationOut,
+  EveryticketIntegrationUpdateInput,
+  NotificationConfigOut,
+  NotificationConfigUpdateInput,
+  PaymentGatewayConfigOut,
+  PaymentGatewayConfigUpdateInput,
   InvoiceEmailResult,
   MockCallbackResult,
   NotificationLogOut,
@@ -340,14 +340,14 @@ export const adminGetApplicationConfig = (token: string) =>
 export const adminUpdateGeneralConfig = (body: ApplicationGeneralUpdateInput, token: string) =>
   api.put<ApplicationGeneralOut>("/api/v1/admin/config/application/general", body, token);
 
-export const adminUpdateIntegrationConfig = (body: ApplicationIntegrationUpdateInput, token: string) =>
-  api.put<ApplicationIntegrationOut>("/api/v1/admin/config/application/integration", body, token);
+export const adminUpdateIntegrationConfig = (body: EveryticketIntegrationUpdateInput, token: string) =>
+  api.put<EveryticketIntegrationOut>("/api/v1/admin/config/application/integration", body, token);
 
-export const adminUpdatePaymentConfig = (body: ApplicationPaymentUpdateInput, token: string) =>
-  api.put<ApplicationPaymentOut>("/api/v1/admin/config/application/payment", body, token);
+export const adminUpdatePaymentGatewayConfig = (body: PaymentGatewayConfigUpdateInput, token: string) =>
+  api.put<PaymentGatewayConfigOut>("/api/v1/admin/config/application/payment-gateway", body, token);
 
-export const adminUpdateNotificationConfig = (body: ApplicationNotificationUpdateInput, token: string) =>
-  api.put<ApplicationNotificationOut>("/api/v1/admin/config/application/notification", body, token);
+export const adminUpdateNotificationConfig = (body: NotificationConfigUpdateInput, token: string) =>
+  api.put<NotificationConfigOut>("/api/v1/admin/config/application/notification", body, token);
 
 export const adminUpdateSubscriptionRulesConfig = (body: ApplicationSubscriptionRulesUpdateInput, token: string) =>
   api.put<ApplicationSubscriptionRulesOut>("/api/v1/admin/config/application/subscription-rules", body, token);

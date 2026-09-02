@@ -20,6 +20,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.applications.models import Application
 from app.core.config import get_settings
 from app.payments import service as payment_service
 from app.payments.gateways.registry import get_gateway
@@ -73,7 +74,14 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
         logger.warning("PayU callback for unknown transaction_id=%s", txnid)
         return _redirect("error", reason="unknown_transaction", transaction_id=txnid)
 
-    gateway = get_gateway(transaction.gateway)
+    # Resolve against the admin-configured, per-mode PayU credentials
+    # (app.payments.gateway_config) so the reverse-hash verification below
+    # uses the SAME salt create_payment_transaction() used to build the
+    # request hash for this transaction - falls back to env vars if
+    # nothing is configured, same pattern as everywhere else.
+    application = db.query(Application).filter(Application.code == "EVERYTICKET").first()
+    gateway_mode = application.gateway_mode if application is not None else "test"
+    gateway = get_gateway(transaction.gateway, db=db, mode=gateway_mode)
     result = gateway.process_webhook(payload=payload)
     updated_transaction, invoice = payment_service.process_gateway_result(db, transaction=transaction, result=result)
 

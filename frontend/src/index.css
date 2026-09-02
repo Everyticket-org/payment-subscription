@@ -326,6 +326,17 @@ select:focus {
   flex-wrap: wrap;
 }
 
+.kv-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.kv-row input {
+  flex: 1;
+}
+
 .hint {
   font-size: 13px;
   opacity: 0.75;

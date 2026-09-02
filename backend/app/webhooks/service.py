@@ -146,17 +146,22 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     application = db.get(Application, delivery.destination_application_id)
     _url, secret = _resolve_destination(application)
 
-    body = json.dumps(
-        {
-            "event_id": event.event_id,
-            "event_type": event.event_type,
-            "entity_type": event.entity_type,
-            "entity_id": event.entity_id,
-            "payload": event.payload,
-        },
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
+    body_dict = {
+        "event_id": event.event_id,
+        "event_type": event.event_type,
+        "entity_type": event.entity_type,
+        "entity_id": event.entity_id,
+        "payload": event.payload,
+    }
+    # Admin-configured static key/value parameters (2026-09 admin config
+    # restructure, Everyticket Integration screen) sent as extra top-level
+    # POST fields with every delivery - e.g. a merchant/account identifier
+    # Everyticket's endpoint expects that isn't part of the event itself.
+    # Never overrides one of the fixed fields above (event_id/event_type/...).
+    if application is not None and application.webhook_extra_params:
+        for key, value in application.webhook_extra_params.items():
+            body_dict.setdefault(key, value)
+    body = json.dumps(body_dict, separators=(",", ":"), default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if secret:
         headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
@@ -203,7 +208,7 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         delivery.status = WebhookDeliveryStatus.SUCCESS.value
         delivery.next_retry_at = None
     else:
-        schedule = settings.webhook_retry_schedule
+        schedule = _effective_retry_schedule(settings, application)
         if delivery.attempt_count <= len(schedule):
             delay_minutes = schedule[delivery.attempt_count - 1]
             delivery.status = WebhookDeliveryStatus.FAILED.value
@@ -211,6 +216,13 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         else:
             delivery.status = WebhookDeliveryStatus.EXHAUSTED.value
             delivery.next_retry_at = None
+            # Everyticket Integration screen's "Retry limit... if all retry
+            # options failed, send an email" - fires exactly once, on the
+            # transition INTO EXHAUSTED (this branch only runs when a
+            # delivery is being marked EXHAUSTED right now, never again for
+            # an already-EXHAUSTED row, since dispatch_pending() only
+            # re-attempts PENDING/FAILED deliveries).
+            _notify_webhook_exhausted(db, delivery=delivery, application=application)
 
     db.add(delivery)
     db.commit()
@@ -341,6 +353,81 @@ def _notify_provisioning_issue(db: Session, *, subscription: Subscription, appli
         logger.exception(
             "Failed to send provisioning_issue email for subscription %s", subscription.subscription_id
         )
+
+
+def _effective_retry_schedule(settings, application: "Application | None") -> list[int]:
+    """WEBHOOK_RETRY_SCHEDULE_MINUTES's own list, unless the admin
+    configured a different retry_limit (Everyticket Integration screen,
+    2026-09 restructure) - a shorter limit truncates the schedule, a
+    longer one repeats the schedule's last delay for the extra retries."""
+    schedule = settings.webhook_retry_schedule
+    limit = application.webhook_retry_limit if application is not None else None
+    if not limit or limit <= 0:
+        return schedule
+    if limit <= len(schedule):
+        return schedule[:limit]
+    return schedule + [schedule[-1]] * (limit - len(schedule))
+
+
+def _notify_webhook_exhausted(db: Session, *, delivery: WebhookDelivery, application: "Application | None") -> None:
+    """Admin-configured escalation email (Everyticket Integration screen):
+    sent to webhook_escalation_emails once a delivery is marked EXHAUSTED
+    (all retries failed), with admin-edited subject/body rather than a
+    NotificationTemplate the admin would have to go to a different screen
+    to edit - "Email content as editor" was the explicit ask. Uses the
+    same per-application SMTP override resolution as every other email in
+    this app (app.notifications.email.service), so a configured SMTP
+    override (also 2026-09) is honored here too. Best-effort/logged only,
+    same as every other notification call site - a broken escalation
+    email must never break delivery bookkeeping."""
+    if application is None or not application.webhook_escalation_emails:
+        return
+
+    from jinja2 import Template
+
+    from app.notifications.email import service as email_service
+
+    recipients = [addr.strip() for addr in application.webhook_escalation_emails.split(",") if addr.strip()]
+    if not recipients:
+        return
+
+    event = delivery.event
+    context = {
+        "event_type": event.event_type,
+        "entity_type": event.entity_type,
+        "entity_id": event.entity_id,
+        "destination_url": delivery.destination_url,
+        "attempt_count": delivery.attempt_count,
+        "http_status": delivery.http_status,
+    }
+    subject_template = application.webhook_escalation_email_subject or "Webhook delivery failed after all retries"
+    body_template = application.webhook_escalation_email_body or (
+        "<p>A webhook delivery to {{ destination_url }} for event "
+        "<strong>{{ event_type }}</strong> ({{ entity_type }} {{ entity_id }}) has "
+        "failed after {{ attempt_count }} attempts and will not be retried "
+        "automatically.</p>"
+    )
+    try:
+        subject = Template(subject_template).render(**context)
+        body_html = Template(body_template).render(**context)
+    except Exception:
+        logger.exception("Failed to render webhook-exhausted escalation email for delivery %s", delivery.id)
+        return
+
+    for to in recipients:
+        try:
+            email_service.send_direct_email(
+                db,
+                to=to,
+                subject=subject,
+                body_html=body_html,
+                template_code="webhook_delivery_exhausted",
+                related_entity_type="webhook_delivery",
+                related_entity_id=str(delivery.id),
+                application=application,
+            )
+        except Exception:
+            logger.exception("Failed to send webhook-exhausted escalation email to %s", to)
 
 
 def attempt_delivery_with_client(

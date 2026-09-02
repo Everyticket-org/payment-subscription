@@ -36,20 +36,42 @@ class PayUConfigurationError(RuntimeError):
 
 
 class PayUGateway(PaymentGateway):
+    """merchant_key/merchant_salt/base_url, if given at construction time,
+    override the PAYU_MERCHANT_KEY/PAYU_MERCHANT_SALT/PAYU_BASE_URL env
+    vars for this instance only - used by the registry to hand out a
+    gateway instance resolved against the admin-configured, per-mode
+    (test/live) credentials (app.payments.gateway_config), while the
+    zero-arg PayUGateway() the module-level registry/tests still
+    construct keeps falling back to env vars exactly as before (backward
+    compatible with every existing PayU unit test)."""
+
     code = "payu"
+
+    def __init__(
+        self, *, merchant_key: str | None = None, merchant_salt: str | None = None, base_url: str | None = None
+    ) -> None:
+        self._merchant_key = merchant_key
+        self._merchant_salt = merchant_salt
+        self._base_url = base_url
+
+    def _resolve(self) -> tuple[str, str, str]:
+        settings = get_settings()
+        key = self._merchant_key or settings.PAYU_MERCHANT_KEY
+        salt = self._merchant_salt or settings.PAYU_MERCHANT_SALT
+        base_url = self._base_url or settings.PAYU_BASE_URL
+        return key, salt, base_url
 
     def create_payment(
         self, *, transaction_id: str, amount: float, currency: str, metadata: dict[str, Any]
     ) -> GatewayPaymentResult:
         settings = get_settings()
-        if not settings.PAYU_MERCHANT_KEY or not settings.PAYU_MERCHANT_SALT:
+        key, salt, base_url = self._resolve()
+        if not key or not salt:
             raise PayUConfigurationError(
                 "PAYU_MERCHANT_KEY / PAYU_MERCHANT_SALT are not set - add your PayU test "
-                "credentials to backend/.env (see .env.example) before using the payu gateway."
+                "credentials to backend/.env (see .env.example), or configure them in the "
+                "admin Configuration > Payment Gateway screen, before using the payu gateway."
             )
-
-        key = settings.PAYU_MERCHANT_KEY
-        salt = settings.PAYU_MERCHANT_SALT
         txnid = transaction_id
         # PayU expects amount as a plain decimal string, not a currency-formatted one.
         amount_str = f"{amount:.2f}"
@@ -88,7 +110,7 @@ class PayUGateway(PaymentGateway):
             amount=amount,
             currency=currency,
             raw_response={
-                "action_url": f"{settings.PAYU_BASE_URL}/_payment",
+                "action_url": f"{base_url}/_payment",
                 "method": "POST",
                 "fields": checkout_fields,
             },
@@ -115,8 +137,7 @@ class PayUGateway(PaymentGateway):
         return True
 
     def process_webhook(self, *, payload: dict[str, Any]) -> GatewayPaymentResult:
-        settings = get_settings()
-        salt = settings.PAYU_MERCHANT_SALT
+        _key, salt, _base_url = self._resolve()
         key = str(payload.get("key", ""))
         txnid = str(payload.get("txnid", ""))
         amount = payload.get("amount", "")
