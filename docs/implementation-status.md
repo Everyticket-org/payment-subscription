@@ -1060,6 +1060,117 @@ pre-existing `/ready`-needs-Postgres gap). Frontend: `npm run build`
 copy after every file transferred to Vishal's machine, no new npm
 dependency added anywhere in this increment.
 
+## 2026-09-02: free trial plan (configurable duration, one-per-customer-lifetime)
+
+Vishal asked: "Please add plan for free trial as well - configurable
+duration of trial. - Process will be the same," then, on being asked to
+clarify the trial shape, specified: trial as its own separate plan (not an
+attribute of an existing paid plan); (1) an email before the trial ends to
+prompt renewal; (2) once the trial ends, just mark the subscription
+EXPIRED and re-fire the existing webhook - no auto-charge; (3) one set of
+credentials can take only one trial, for the account's full lifetime; (4)
+explicit security rigor against concurrent/duplicate trial-creation abuse
+("unnecessary dumping").
+
+**Design**: a trial is its own distinct `Plan` (`is_trial=True`,
+`trial_period_days` configurable, `price=0`) rather than a flag on an
+existing paid plan - "process will be the same" is satisfied literally,
+since the entire subscribe -> pay -> activate -> expire pipeline is
+reused completely unchanged.
+
+- New migration `b7e3d4f1a9c2`: `plans.is_trial`/`plans.trial_period_days`,
+  `subscriptions.is_trial` (a denormalized copy of `plan.is_trial` at
+  creation time - needed because a Postgres partial-unique-index predicate
+  can only reference columns on its own table), and a new partial unique
+  index `uq_one_trial_subscription_per_customer_application` on
+  `subscriptions(customer_id, application_id) WHERE is_trial` - unlike the
+  existing one-active-subscription index, this one is deliberately NOT
+  scoped to `status`, so a CANCELLED/EXPIRED trial still blocks a second
+  one forever (point 3).
+- Point 4 (race-condition security): this codebase's one-active-
+  subscription rule has only ever used an application-level pre-check (no
+  `IntegrityError` handling anywhere before this). The trial path goes
+  further, as explicitly requested: `assert_trial_not_already_used()` is
+  the pre-check, and `create_pending_subscription()` also wraps the trial
+  insert in a `db.begin_nested()` SAVEPOINT and catches `IntegrityError`
+  from the flush, translating a lost race between two concurrent trial
+  signups into a clean `TrialAlreadyUsed` (409) instead of a raw error -
+  scoped only to the `is_trial` branch, so the far more common non-trial
+  signup path is untouched.
+- Point 2 (expiry + webhook): `expire_due_subscriptions()` already
+  re-queues the `subscription.expired` webhook for any expired
+  subscription regardless of plan - zero new code needed, confirmed by a
+  new test rather than assumed.
+- Point 1 (reminder email): `send_renewal_reminders()`'s template
+  selection is now dynamic - the new seeded `trial_ending` template
+  instead of `renewal_reminder` when `subscription.plan.is_trial`, same
+  sweep, same `RENEWAL_REMINDER_DAYS_BEFORE` window, same dedup-via-
+  NotificationLog-lookback approach.
+- A trial can never be reached as an upgrade/downgrade target, nor
+  renewed: `admin_plans.py`'s `create_plan()`/`update_plan()` cross-
+  validate `is_trial`/`trial_period_days`/`price` consistency (trial
+  requires `trial_period_days > 0` and `price == 0`; non-trial requires
+  `price > 0`) against the MERGED effective state on a partial `PUT`, not
+  just the fields a request happened to include; `customer.py`'s
+  `_change_plan()` refuses a trial `target_plan`, and `renew()` refuses a
+  trial subscription outright (a trial simply expires - there's no
+  renewal payment flow for it); `public.py`'s `/subscribe` auto-routing
+  refuses a trial target before it would otherwise be silently treated as
+  an ordinary price-based downgrade against an existing active
+  subscription.
+- Seeded a `FREE_TRIAL` plan (14-day default) and the `trial_ending` email
+  template in `app/core/seed.py`.
+- Frontend: `AdminPlansPage.tsx`'s plan form gained a "Free trial plan"
+  checkbox + duration field (price is forced to 0 and disabled while
+  checked - computed explicitly in the submit handler rather than trusted
+  off the disabled input, since a disabled `<input>` is excluded from
+  `FormData` entirely); the public `PlansPage.tsx` and `SubscribePage.tsx`
+  show "Free for N days" instead of a price for a trial plan; the
+  customer portal's change-plan dropdown excludes trial plans as a
+  target, and hides the Renew button (replaced with explanatory text) on
+  an active trial subscription.
+- Also fixed `test_plan_description_and_reorder.py`'s reorder test to
+  include the new seeded `FREE_TRIAL` plan in its full-plan-list
+  requirement (the reorder endpoint requires naming every one of an
+  application's plans) - a real, expected fallout of adding a fourth
+  seeded plan, not a regression.
+
+New test file `tests/test_free_trial.py`: admin cross-field validation
+(create + partial-update against the merged effective state), day-based
+(not month/year) billing period on activation, one-trial-per-lifetime
+enforcement surviving cancellation (scoped per customer, verified a
+different customer can still take the trial), both places a trial-as-
+upgrade/downgrade-target is blocked, renewal blocked, the expiry sweep +
+webhook re-fire, the trial-ending reminder email (using the same
+`fake_smtp_success` fixture `test_email_service.py` already established,
+imported across files the same way `_admin_headers` already is), and a
+direct unit test that mocks `db.flush()` to simulate the lost-race
+`IntegrityError` and confirms it becomes a clean `TrialAlreadyUsed` with
+no dangling subscription row left behind - the real DB-level guarantee
+(the Postgres-only partial unique index) can't be exercised by this
+SQLite test suite directly, same as the pre-existing one-active-
+subscription index; this call exercises the application-level handling
+code instead, without needing a real Postgres race to trigger it.
+
+**Environment note**: this pass's device bridge could reach Vishal's
+files but NOT his real Postgres instance (`localhost:5433` from the
+bridge's Linux VM refuses the connection - a pre-existing, previously-
+documented constraint, not new). The new migration was still verified two
+ways that don't need a live DB: `alembic history` resolves the revision
+chain cleanly with `b7e3d4f1a9c2` as the new head, and
+`alembic upgrade a4f7c9e2b6d1:b7e3d4f1a9c2 --sql` was used to generate and
+inspect the exact DDL it would run (two `ALTER TABLE ... ADD COLUMN`s and
+the `CREATE UNIQUE INDEX ... WHERE is_trial = true`, all as intended).
+Vishal should still run `alembic upgrade head` for real against his own
+Postgres as the final check.
+
+Verified: 123 total tests, 122 passing (same pre-existing `/ready` gap).
+Frontend `tsc -b && vite build` clean; `oxlint` 0 errors (8 warnings, one
+new - `AdminPlansPage.tsx`'s new `setIsTrial()` call inside an existing
+`useEffect` that already had the same `set-state-in-effect` warning for
+its neighboring `setError(null)` call, i.e. the same pre-existing pattern
+already present in this component, not a new class of issue).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
