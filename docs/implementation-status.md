@@ -1470,6 +1470,40 @@ this pass only changes payload shapes and Python-level behavior, no
 schema change. Frontend `tsc -b && vite build` clean; `oxlint` 0 errors
 (same 8 pre-existing warnings, none new).
 
+## 2026-09-02 (follow-up 4): email/mobile re-added to the onboarding webhook payload
+
+Vishal's feedback, verbatim: "in activated json, customer data also need
+to be there.. email and mobile as part of payload or registration data,
+any of them are fine." Follow-up 3 (immediately before this) had trimmed
+`subscription.activated`'s payload down to a literal reading of his
+earlier list (subscription ID/plan code/name/price/is_trial/expiry
+date/registration_data) and dropped email/mobile along with everything
+else - this pass adds them back specifically, since they're basic
+customer identity every subscribe flow has regardless of what the
+registration form asks, not something that should have been trimmed
+away.
+
+`app.webhooks.payloads.onboarding_payload()` gained `email`/`mobile`
+parameters and returns them as their own top-level payload fields
+(alongside `registration_data`, not folded into it, since they're
+account-level identity rather than a form answer) - `subscription.
+activated`'s payload is now `subscription_id`, `email`, `mobile`,
+`plan_code`, `plan_name`, `price`, `is_trial`, `expires_at`,
+`registration_data`. The two real call sites - `app.payments.service`'s
+real dispatch path and `app.api.v1.admin_config`'s sample-JSON preview -
+both updated to pass `email`/`mobile` (real values from `subscription.
+customer` on the dispatch path, illustrative placeholders on the
+preview), so the admin Configuration screen's sample stays honest.
+
+No other event's payload changed - renew/expire/cancel/archived still
+carry only `subscription_id`, per Vishal's own explicit list in
+follow-up 3.
+
+Verified: 141 backend tests, 140 passing (same pre-existing `/ready`
+gap) - `tests/test_webhook_payloads.py`'s onboarding-payload test
+updated to assert the new 9-key set including real `email`/`mobile`
+values. No new migration.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

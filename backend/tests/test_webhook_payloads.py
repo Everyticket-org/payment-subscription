@@ -5,10 +5,11 @@ below: 1) onboarding... 2) status inactive when plan expires... 3)
 delete/archive when user do not renew for x days"; follow-up 3: "Add
 one more webhook for renew" plus an explicit trim of every payload):
 
-  - subscription.activated ("onboarding") carries subscription_id, plan
-    code/name/price, is_trial, expires_at, and the customer's full
-    registration-form answers - the exact fields Vishal's follow-up 3
-    list asked to keep, nothing more.
+  - subscription.activated ("onboarding") carries subscription_id,
+    email, mobile, plan code/name/price, is_trial, expires_at, and the
+    customer's full registration-form answers - the fields Vishal's
+    follow-up 3 list asked to keep, plus email/mobile re-added in a
+    follow-up ("customer data also need to be there").
   - subscription.renewed / subscription.expired / subscription.cancelled
     / subscription.archived all carry subscription_id ONLY - Everyticket
     resolves anything else about the subscription by looking it up with
@@ -80,12 +81,15 @@ def test_onboarding_webhook_payload_has_exactly_the_fields_vishal_asked_to_keep(
         .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    # Subscription ID, customer form data, plan code, name, price,
-    # is_trial, expiry date - exactly these seven keys, nothing more
-    # (no customer_id/email/mobile/currency/status/starts_at/
-    # transaction_id/external identity).
+    # Subscription ID, customer form data (both email/mobile AND the
+    # dynamic registration form), plan code, name, price, is_trial,
+    # expiry date - exactly these nine keys, nothing more (no
+    # customer_id/currency/status/starts_at/transaction_id/external
+    # identity).
     assert set(event.payload) == {
         "subscription_id",
+        "email",
+        "mobile",
         "plan_code",
         "plan_name",
         "price",
@@ -94,6 +98,8 @@ def test_onboarding_webhook_payload_has_exactly_the_fields_vishal_asked_to_keep(
         "registration_data",
     }
     assert event.payload["subscription_id"] == subscription.subscription_id
+    assert event.payload["email"] == subscription.customer.email
+    assert event.payload["mobile"] == subscription.customer.mobile
     assert event.payload["registration_data"] == registration_data
     assert event.payload["plan_code"] == subscription.plan.plan_code
     assert event.payload["is_trial"] is False

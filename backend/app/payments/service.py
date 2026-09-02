@@ -217,6 +217,8 @@ def process_gateway_result(
                     entity_id=subscription.subscription_id,
                     payload=onboarding_payload(
                         subscription_id=subscription.subscription_id,
+                        email=subscription.customer.email,
+                        mobile=subscription.customer.mobile,
                         plan_code=subscription.plan.plan_code,
                         plan_name=subscription.plan.name,
                         price=float(subscription.plan.price),

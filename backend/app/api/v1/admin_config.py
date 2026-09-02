@@ -125,6 +125,8 @@ def _build_webhook_samples(db: Session, application: Application) -> list[Everyt
 
     onboarding = onboarding_payload(
         subscription_id=sample_subscription_id,
+        email="customer@example.com",
+        mobile="9999999999",
         plan_code=plan_code,
         plan_name=plan_name,
         price=price,

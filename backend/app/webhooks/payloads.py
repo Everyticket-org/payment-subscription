@@ -6,8 +6,9 @@ the fields he listed, and simplified the wire envelope to just
 event_type + payload):
 
   1. onboarding_payload  - subscription.activated, first-time signup.
-     Payload: subscription_id, plan_code, plan_name, price, is_trial,
-     expires_at, registration_data (the customer's own form answers).
+     Payload: subscription_id, email, mobile, plan_code, plan_name,
+     price, is_trial, expires_at, registration_data (the customer's own
+     form answers).
   2. renewed_payload  - subscription.renewed, an existing subscription
      is renewed on its current plan. Payload: subscription_id only.
   3. expiry_payload   - subscription.expired, plan expires unrenewed.
@@ -31,6 +32,8 @@ payload) is built by app.webhooks.service.build_wire_body().
 def onboarding_payload(
     *,
     subscription_id: str,
+    email: str | None,
+    mobile: str | None,
     plan_code: str,
     plan_name: str,
     price: float,
@@ -47,15 +50,21 @@ def onboarding_payload(
     CustomerRegistrationData) so Everyticket can provision the account
     without a second round-trip to ask for the same details.
 
-    Deliberately no customer_id/email/mobile/external identity here -
-    trimmed to exactly the fields Vishal asked to keep (subscription ID,
-    customer form data, plan code, name, price, is_trial, expiry date).
-    Everyticket's own response to THIS delivery is what assigns the
-    external identity (spec section 32) - see
+    email/mobile were re-added in a follow-up ("in activated json,
+    customer data also need to be there.. email and mobile as part of
+    payload or registration data") - kept as their own top-level fields
+    rather than folded into registration_data, since they're account-
+    level identity, not a form answer, and every subscribe flow has them
+    regardless of what the registration form asks. Still no customer_id
+    or external identity here - trimmed to exactly the fields Vishal
+    asked to keep. Everyticket's own response to THIS delivery is what
+    assigns the external identity (spec section 32) - see
     app.webhooks.service._handle_activation_outcome, which upserts
     CustomerApplicationMapping from that response."""
     return {
         "subscription_id": subscription_id,
+        "email": email,
+        "mobile": mobile,
         "plan_code": plan_code,
         "plan_name": plan_name,
         "price": price,
