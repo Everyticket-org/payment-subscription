@@ -1,10 +1,13 @@
 """
-2026-09 admin config restructure, Everyticket Integration screen: custom
-key/value POST parameters sent with every webhook delivery, an admin-
-configurable retry limit overriding WEBHOOK_RETRY_SCHEDULE_MINUTES' own
-length, and an escalation email sent once a delivery is EXHAUSTED. Same
-no-real-network testing approach as tests/test_webhooks.py (httpx.
-MockTransport standing in for the real destination).
+2026-09 admin config restructure, Everyticket Integration screen: an
+admin-configurable retry limit overriding WEBHOOK_RETRY_SCHEDULE_MINUTES'
+own length, and an escalation email sent once a delivery is EXHAUSTED.
+(The custom key/value extra-parameters feature this file used to also
+cover was removed in the 2026-09 follow-up 3 pass - see
+tests/test_webhook_payloads.py::test_build_wire_body_is_just_event_type_and_payload
+for the resulting simpler wire-body shape.) Same no-real-network testing
+approach as tests/test_webhooks.py (httpx.MockTransport standing in for
+the real destination).
 """
 from datetime import datetime, timedelta, timezone
 
@@ -25,7 +28,6 @@ def _application(db_session, **overrides):
         application_url="http://localhost:9999",
         webhook_url=overrides.get("webhook_url", "http://localhost:9999/webhooks"),
         webhook_secret=overrides.get("webhook_secret", "test-secret"),
-        webhook_extra_params=overrides.get("webhook_extra_params"),
         webhook_retry_limit=overrides.get("webhook_retry_limit"),
         webhook_escalation_emails=overrides.get("webhook_escalation_emails"),
         webhook_escalation_email_subject=overrides.get("webhook_escalation_email_subject"),
@@ -34,36 +36,6 @@ def _application(db_session, **overrides):
     db_session.add(app_row)
     db_session.flush()
     return app_row
-
-
-def test_extra_params_merged_into_outgoing_body(db_session):
-    app_row = _application(db_session, webhook_extra_params={"merchant_id": "MERCH-1", "source": "everyticket-subs"})
-    webhook_service.queue_event(
-        db_session, application=app_row, event_type="subscription.activated",
-        entity_type="subscription", entity_id="SUB-PARAMS", payload={"foo": "bar"},
-    )
-    db_session.commit()
-
-    seen_bodies = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        import json
-
-        seen_bodies.append(json.loads(request.content))
-        return httpx.Response(200, json={"received": True})
-
-    client = httpx.Client(transport=httpx.MockTransport(handler))
-    webhook_service.dispatch_pending(db_session, http_client=client)
-
-    assert len(seen_bodies) == 1
-    body = seen_bodies[0]
-    assert body["merchant_id"] == "MERCH-1"
-    assert body["source"] == "everyticket-subs"
-    # The event's own fields are never overridden by an extra param sharing
-    # the same key - not exercised by name collision here, but the fixed
-    # fields must still be present regardless.
-    assert body["event_type"] == "subscription.activated"
-    assert body["entity_id"] == "SUB-PARAMS"
 
 
 def test_configured_retry_limit_shorter_than_schedule_exhausts_sooner(db_session):

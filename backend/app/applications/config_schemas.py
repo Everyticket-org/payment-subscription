@@ -16,19 +16,24 @@ Restructured 2026-09 (Vishal's explicit 4-section layout) into:
      to configure return URL and PayU webhook URL") - real columns on
      this model, not secrets, echoed back as plain URLs.
   3. Everyticket Integration - the webhook secret ("Secret Key"),
-     destination URL, custom key/value POST parameters sent with every
-     delivery, an admin-configurable retry limit, an escalation email
-     (recipients + admin-edited subject/body) sent once a delivery is
-     EXHAUSTED, an archive_after_days threshold for the third webhook
-     type below, and webhook_samples - a read-only preview of the exact
-     JSON each of the three real event types sends (2026-09 follow-up:
+     destination URL, an admin-configurable retry limit, an escalation
+     email (recipients + admin-edited subject/body) sent once a delivery
+     is EXHAUSTED, an archive_after_days threshold for the archive
+     webhook, and webhook_samples - a read-only preview of the exact
+     JSON each of the five real event types sends (2026-09 follow-up:
      "Webhook for everyticket app are as below: 1) onboarding... 2)
      status inactive when plan expires... 3) delete/archive when user do
-     not renew for x days" - see app.webhooks.payloads). `api_url`/
-     `api_credentials`/`sso_secret` (SSO is a separate concern from
-     webhook delivery) are deliberately not on this screen any more -
-     their columns/behavior are unchanged, just not exposed here (SSO
-     already has its own env fallback).
+     not renew for x days", plus follow-up 3's "Add one more webhook for
+     renew" - see app.webhooks.payloads). `api_url`/`api_credentials`/
+     `sso_secret` (SSO is a separate concern from webhook delivery) are
+     deliberately not on this screen any more - their columns/behavior
+     are unchanged, just not exposed here (SSO already has its own env
+     fallback). The custom key/value extra-parameters editor that used
+     to live on this screen was removed in follow-up 3 ("Remove feature
+     for parameters (key,value) from this section") - the underlying
+     Application.webhook_extra_params column is kept (no migration,
+     matching this codebase's "dead column" convention for a removed
+     admin field) but is no longer read or written by this screen.
   4. Notifications - real SMTP transport (host/port/username/password/
      use_tls, previously env-only) plus the pre-existing sender name/
      address/reply-to overrides.
@@ -111,7 +116,6 @@ class EveryticketWebhookSampleOut(BaseModel):
 class EveryticketIntegrationOut(BaseModel):
     secret_key_is_set: bool
     webhook_url: str | None = None
-    extra_params: dict[str, str]
     retry_limit: int | None = None  # None = use the env schedule's own length
     default_retry_limit: int  # informational: WEBHOOK_RETRY_SCHEDULE_MINUTES's length, shown as a placeholder
     escalation_emails: str | None = None  # comma-separated
@@ -126,7 +130,6 @@ class EveryticketIntegrationOut(BaseModel):
 class EveryticketIntegrationUpdate(BaseModel):
     secret_key: str | None = None  # None = unchanged, "" clears
     webhook_url: str | None = None
-    extra_params: dict[str, str] | None = None
     retry_limit: int | None = None
     escalation_emails: str | None = None
     escalation_email_subject: str | None = None

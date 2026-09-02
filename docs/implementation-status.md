@@ -1388,6 +1388,88 @@ Postgres instance, so he still needs to run `alembic upgrade head` for
 real. Frontend `tsc -b && vite build` clean; `oxlint` 0 errors (same 8
 pre-existing warnings, none new).
 
+## 2026-09-02 (follow-up 3): renew webhook added, all five webhook payloads trimmed, custom extra-parameters feature removed
+
+Vishal's feedback, verbatim: "Add one more webhook for renew," plus an
+explicit reshape of every Everyticket webhook payload - Activate should
+keep only `event_type` at the top level, with its payload trimmed to
+subscription ID / customer form data / plan code / name / price /
+is_trial / expiry date; Renew, Expire, Cancel, and Archived should each
+carry nothing but `event_type` and a payload with just the subscription
+ID. He also asked to remove the custom key/value POST-parameters feature
+from the Everyticket Integration screen entirely.
+
+**Wire envelope simplified**: `app.webhooks.service.build_wire_body()`
+used to send `{event_id, event_type, entity_type, entity_id, payload}`
+plus any admin-configured `extra_params` merged in as sibling top-level
+fields. It now sends exactly `{event_type, payload}` - nothing else. The
+`event_id`/`entity_type`/`entity_id` fields still exist on the internal
+`WebhookEvent` DB row (used for retry bookkeeping, admin webhook-log
+pages, and audit trails) - they simply aren't part of the JSON body
+POSTed to Everyticket any more.
+
+**All five payloads trimmed**, `app/webhooks/payloads.py` rewritten:
+
+1. `onboarding_payload` (`subscription.activated`) - now returns exactly
+   `subscription_id`, `plan_code`, `plan_name`, `price`, `is_trial`,
+   `expires_at`, `registration_data`. Dropped: `customer_id`, `email`,
+   `mobile`, `currency`, `status`, `starts_at`, `transaction_id`.
+2. `renewed_payload` (`subscription.renewed`, **new**) - `subscription_id`
+   only. Wired into `app.payments.service.process_gateway_result`'s
+   RENEWAL branch, which used to share a richer inline dict with
+   upgrade/downgrade; renewal now gets its own trimmed payload while
+   upgrade/downgrade (not part of Vishal's list) keep the old shape
+   unchanged.
+3. `expiry_payload` (`subscription.expired`) - `subscription_id` only.
+   Dropped: `customer_id`, `external_customer_id`, `external_instance_id`,
+   `plan_code`, `status`, `expired_at`.
+4. `cancelled_payload` (`subscription.cancelled`, **new**) -
+   `subscription_id` only. `app.subscriptions.service.cancel_subscription`
+   gained an `application` parameter and now queues this event itself
+   (both real call sites - the customer-facing cancel endpoint and the
+   admin Testing module's CANCEL test event - already had `application`
+   in scope and were updated to pass it).
+5. `archive_payload` (`subscription.archived`) - `subscription_id` only.
+   Dropped: `customer_id`, `external_customer_id`, `external_instance_id`,
+   `plan_code`, `status`, `expired_at`, `days_since_expiry`.
+
+Since none of the trimmed events carry Everyticket's external identity
+any more, `app.subscriptions.service._mapping_identity()` (the helper
+that looked it up from `CustomerApplicationMapping`) became dead code and
+was removed along with its now-unused `CustomerApplicationMapping`
+import in that module - onboarding's own provisioning flow (spec section
+32, `app.webhooks.service._handle_activation_outcome`) is completely
+unaffected, since it upserts that mapping from Everyticket's *response*
+to the activation webhook, not from anything in the outbound payload.
+
+**Custom extra-parameters feature removed**: the key/value POST-
+parameters editor on the admin Everyticket Integration screen
+(`KeyValueEditor` in `AdminConfigPage.tsx`) is gone, along with
+`EveryticketIntegrationOut`/`Update.extra_params` and the merge logic in
+`build_wire_body()`. `Application.webhook_extra_params` (the DB column)
+is kept but no longer read or written anywhere - same "dead column, no
+migration" convention this codebase already uses for every other admin
+field that was later removed from a screen (e.g. the General section's
+`application_url`/logo/timezone fields from the 2026-09 restructure).
+
+**Admin Configuration's "Webhook events" sample-JSON viewer** now shows
+all five event types (`subscription.activated`/`renewed`/`expired`/
+`cancelled`/`archived`), each rendered as the real two-field wire
+envelope `build_wire_body()` produces - built from the exact same
+`app.webhooks.payloads` functions a real delivery uses, so the preview
+can never drift from reality (`app.api.v1.admin_config._build_webhook_samples`).
+
+Verified: 141 backend tests, 140 passing (same pre-existing `/ready`-
+needs-real-Postgres gap) - `tests/test_webhook_payloads.py` rewritten
+around the trimmed shapes plus new coverage for the renew and cancel
+webhooks (fired through the real customer-facing renew/cancel endpoints,
+not just unit-called); `tests/test_admin_config.py` and
+`tests/test_webhook_config.py` updated to drop every extra_params
+assertion and cover the new five-event sample list. No new migration -
+this pass only changes payload shapes and Python-level behavior, no
+schema change. Frontend `tsc -b && vite build` clean; `oxlint` 0 errors
+(same 8 pre-existing warnings, none new).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

@@ -1,22 +1,26 @@
 """
-The three real outbound Everyticket webhook events + their payload
-shapes (2026-09 follow-up: "Webhook for everyticket app are as below:
-1) onboarding... 2) status inactive when plan expires... 3) delete/
-archive when user do not renew for x days"):
+The five real outbound Everyticket webhook events + their trimmed
+payload shapes (2026-09 follow-up: "Webhook for everyticket app are as
+below: 1) onboarding... 2) status inactive when plan expires... 3)
+delete/archive when user do not renew for x days"; follow-up 3: "Add
+one more webhook for renew" plus an explicit trim of every payload):
 
-  - subscription.activated ("onboarding") now carries the customer's full
-    registration-form answers, not just bare identifiers.
-  - subscription.expired ("status inactive") now carries the external
-    customer/instance identity Everyticket itself assigned at onboarding.
-  - subscription.archived ("delete/archive after x days") is an entirely
-    new sweep (app.subscriptions.service.archive_stale_subscriptions),
-    opt-in per application via Application.archive_after_days.
+  - subscription.activated ("onboarding") carries subscription_id, plan
+    code/name/price, is_trial, expires_at, and the customer's full
+    registration-form answers - the exact fields Vishal's follow-up 3
+    list asked to keep, nothing more.
+  - subscription.renewed / subscription.expired / subscription.cancelled
+    / subscription.archived all carry subscription_id ONLY - Everyticket
+    resolves anything else about the subscription by looking it up with
+    that ID.
 
 Also covers app.webhooks.service.build_wire_body(), the pure function
 that wraps a queued event's payload into the exact JSON body a real
-delivery sends (event envelope + admin-configured extra_params merged
-in) - the same function app.api.v1.admin_config's "sample JSON" preview
-calls, so these tests indirectly protect that preview from drifting too.
+delivery sends - now just {event_type, payload}, nothing else (follow-up
+3: "Keep only event_type" at the top level; the custom extra_params
+merge feature was removed in the same pass) - the same function
+app.api.v1.admin_config's "sample JSON" preview calls, so these tests
+indirectly protect that preview from drifting too.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -49,6 +53,13 @@ def _subscribe_with_registration_data(client, seeded_db, *, email: str, registra
     return seeded_db.query(Subscription).filter(Subscription.subscription_id == subscription_id).one()
 
 
+def _customer_token(client, email: str, mobile: str) -> str:
+    identify = client.post("/api/v1/public/identify", json={"email": email, "mobile": mobile})
+    otp_session_id = identify.json()["otp_session_id"]
+    verify = client.post("/api/v1/public/otp/verify", json={"otp_session_id": otp_session_id, "code": "BYPASS"})
+    return verify.json()["access_token"]
+
+
 def _configure_webhook_destination(db) -> Application:
     application, _plan = _basic_plan(db)
     application.webhook_url = "http://everyticket.example.com/hooks"
@@ -57,7 +68,7 @@ def _configure_webhook_destination(db) -> Application:
     return application
 
 
-def test_onboarding_webhook_carries_full_registration_data(client, seeded_db):
+def test_onboarding_webhook_payload_has_exactly_the_fields_vishal_asked_to_keep(client, seeded_db):
     _configure_webhook_destination(seeded_db)
     registration_data = {"museum_name": "CSMVS", "contact_person": "Asha Rao"}
     subscription = _subscribe_with_registration_data(
@@ -69,13 +80,23 @@ def test_onboarding_webhook_carries_full_registration_data(client, seeded_db):
         .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
+    # Subscription ID, customer form data, plan code, name, price,
+    # is_trial, expiry date - exactly these seven keys, nothing more
+    # (no customer_id/email/mobile/currency/status/starts_at/
+    # transaction_id/external identity).
+    assert set(event.payload) == {
+        "subscription_id",
+        "plan_code",
+        "plan_name",
+        "price",
+        "is_trial",
+        "expires_at",
+        "registration_data",
+    }
+    assert event.payload["subscription_id"] == subscription.subscription_id
     assert event.payload["registration_data"] == registration_data
-    assert event.payload["customer_id"] == subscription.customer.customer_id
     assert event.payload["plan_code"] == subscription.plan.plan_code
-    assert event.payload["status"] == "ACTIVE"
-    # Never present at queue-time - Everyticket's own response to this
-    # delivery is what assigns it (see app.webhooks.service._handle_activation_outcome).
-    assert "external_customer_id" not in event.payload
+    assert event.payload["is_trial"] is False
 
 
 def test_onboarding_webhook_registration_data_defaults_to_empty_dict_when_none_submitted(client, seeded_db):
@@ -91,20 +112,42 @@ def test_onboarding_webhook_registration_data_defaults_to_empty_dict_when_none_s
     assert event.payload["registration_data"] == {}
 
 
-def test_expiry_webhook_carries_external_identity_once_onboarding_provisioned(client, seeded_db):
+def test_renewed_webhook_payload_is_subscription_id_only(client, seeded_db):
+    _configure_webhook_destination(seeded_db)
+    subscription = _subscribe_with_registration_data(
+        client, seeded_db, email="renew-webhook@museum.example", registration_data={}
+    )
+    token = _customer_token(client, "renew-webhook@museum.example", "9812345671")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    resp = client.post(f"/api/v1/customer/subscriptions/{subscription.subscription_id}/renew", headers=headers)
+    assert resp.status_code == 200, resp.text
+    txn = resp.json()["payment"]["transaction_id"]
+    callback = client.post("/api/v1/payment/mock/callback", json={"transaction_id": txn, "scenario": "SUCCESS"})
+    assert callback.status_code == 200, callback.text
+
+    event = (
+        seeded_db.query(WebhookEvent)
+        .filter(WebhookEvent.event_type == "subscription.renewed", WebhookEvent.entity_id == subscription.subscription_id)
+        .one()
+    )
+    assert event.payload == {"subscription_id": subscription.subscription_id}
+
+
+def test_expiry_webhook_payload_is_subscription_id_only(client, seeded_db):
     application = _configure_webhook_destination(seeded_db)
     subscription = _subscribe_with_registration_data(
-        client, seeded_db, email="expiry-identity@museum.example", registration_data={}
+        client, seeded_db, email="expiry-webhook@museum.example", registration_data={}
     )
 
     # Simulate Everyticket's own successful response to the onboarding
-    # webhook, which is what assigns the external identity (same pattern
-    # tests/test_provisioning.py establishes).
+    # webhook (real provisioning still happens - CustomerApplicationMapping
+    # is upserted from Everyticket's response, unaffected by the payload
+    # trim, which only concerns what THIS app sends out).
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"success": True, "external_customer_id": "MUSEUM-9001", "instance_id": "INSTANCE-9001"})
 
     webhook_service.dispatch_pending(seeded_db, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
-
     mapping = (
         seeded_db.query(CustomerApplicationMapping)
         .filter(CustomerApplicationMapping.customer_id == subscription.customer_id, CustomerApplicationMapping.application_id == application.id)
@@ -124,27 +167,30 @@ def test_expiry_webhook_carries_external_identity_once_onboarding_provisioned(cl
         .filter(WebhookEvent.event_type == "subscription.expired", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    assert event.payload["external_customer_id"] == "MUSEUM-9001"
-    assert event.payload["external_instance_id"] == "INSTANCE-9001"
+    assert event.payload == {"subscription_id": subscription.subscription_id}
 
 
-def test_expiry_webhook_identity_fields_are_none_when_never_provisioned(client, seeded_db):
+def test_cancelled_webhook_payload_is_subscription_id_only(client, seeded_db):
     _configure_webhook_destination(seeded_db)
     subscription = _subscribe_with_registration_data(
-        client, seeded_db, email="expiry-noidentity@museum.example", registration_data={}
+        client, seeded_db, email="cancel-webhook@museum.example", registration_data={}
     )
-    subscription.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
-    seeded_db.commit()
+    token = _customer_token(client, "cancel-webhook@museum.example", "9812345671")
+    headers = {"Authorization": f"Bearer {token}"}
 
-    subscription_service.expire_due_subscriptions(seeded_db)
+    resp = client.post(
+        f"/api/v1/customer/subscriptions/{subscription.subscription_id}/cancel",
+        json={"reason": "no longer needed"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
 
     event = (
         seeded_db.query(WebhookEvent)
-        .filter(WebhookEvent.event_type == "subscription.expired", WebhookEvent.entity_id == subscription.subscription_id)
+        .filter(WebhookEvent.event_type == "subscription.cancelled", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    assert event.payload["external_customer_id"] is None
-    assert event.payload["external_instance_id"] is None
+    assert event.payload == {"subscription_id": subscription.subscription_id}
 
 
 def test_archive_sweep_is_disabled_by_default(client, seeded_db):
@@ -226,10 +272,7 @@ def test_archive_sweep_archives_past_threshold_and_queues_webhook(client, seeded
         .filter(WebhookEvent.event_type == "subscription.archived", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    assert event.payload["external_customer_id"] == "MUSEUM-7001"
-    assert event.payload["external_instance_id"] == "INSTANCE-7001"
-    assert event.payload["days_since_expiry"] >= 40
-    assert event.payload["status"] == "ARCHIVED"
+    assert event.payload == {"subscription_id": subscription.subscription_id}
 
     # Idempotent: running the sweep again must not re-archive/re-queue.
     again = subscription_service.archive_stale_subscriptions(seeded_db)
@@ -238,19 +281,9 @@ def test_archive_sweep_archives_past_threshold_and_queues_webhook(client, seeded
     assert len(events) == 1
 
 
-def test_build_wire_body_merges_extra_params_without_overriding_envelope_fields(seeded_db):
-    application, _plan = _basic_plan(seeded_db)
-    application.webhook_extra_params = {"merchant_id": "MERCH-1", "event_type": "should-not-win"}
-    seeded_db.commit()
-
+def test_build_wire_body_is_just_event_type_and_payload(seeded_db):
     body = webhook_service.build_wire_body(
-        event_id="EVT-1",
         event_type="subscription.activated",
-        entity_type="subscription",
-        entity_id="SUB-1",
         payload={"subscription_id": "SUB-1"},
-        application=application,
     )
-    assert body["event_type"] == "subscription.activated"  # extra_params never overrides a fixed envelope field
-    assert body["merchant_id"] == "MERCH-1"
-    assert body["payload"] == {"subscription_id": "SUB-1"}
+    assert body == {"event_type": "subscription.activated", "payload": {"subscription_id": "SUB-1"}}

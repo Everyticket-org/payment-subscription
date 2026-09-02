@@ -427,7 +427,6 @@ export interface EveryticketWebhookSampleOut {
 export interface EveryticketIntegrationOut {
   secret_key_is_set: boolean;
   webhook_url: string | null;
-  extra_params: Record<string, string>;
   retry_limit: number | null;
   default_retry_limit: number;
   escalation_emails: string | null;
@@ -440,7 +439,6 @@ export interface EveryticketIntegrationOut {
 export interface EveryticketIntegrationUpdateInput {
   secret_key?: string | null;
   webhook_url?: string | null;
-  extra_params?: Record<string, string> | null;
   retry_limit?: number | null;
   escalation_emails?: string | null;
   escalation_email_subject?: string | null;

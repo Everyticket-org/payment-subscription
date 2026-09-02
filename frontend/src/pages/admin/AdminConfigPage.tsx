@@ -4,15 +4,17 @@
  * Payment Gateway (gateway dropdown + per-mode PayU credentials shown
  * only when PayU is selected, plus the Return URL/PayU webhook URL the
  * payment flow redirects through), Everyticket Integration (secret key,
- * webhook URL, custom key/value POST parameters, retry limit, an
- * archive-after-days threshold, a read-only sample-JSON preview of the
- * three real webhook event types, and an escalation email sent once a
- * delivery is exhausted), and Notifications (SMTP transport + sender
- * overrides). "Subscription rules" and "Security" configuration keep
- * their existing backend endpoints and live enforcement, completely
- * unchanged - they're just not rendered on this page for now (see
+ * webhook URL, retry limit, an archive-after-days threshold, a
+ * read-only sample-JSON preview of the five real webhook event types,
+ * and an escalation email sent once a delivery is exhausted), and
+ * Notifications (SMTP transport + sender overrides). "Subscription
+ * rules" and "Security" configuration keep their existing backend
+ * endpoints and live enforcement, completely unchanged - they're just
+ * not rendered on this page for now (see
  * app/applications/config_schemas.py's module docstring on the backend
- * for the full rationale).
+ * for the full rationale). The custom key/value extra-parameters editor
+ * this screen used to have was removed in the 2026-09 follow-up 3 pass
+ * ("Remove feature for parameters (key,value) from this section").
  *
  * Every save here has a REAL effect on the next request, not just
  * storage: default_gateway/PayU credentials/redirect URLs change the
@@ -60,45 +62,6 @@ function SaveButton({ saving, savedAt }: { saving: boolean; savedAt: number | nu
       </button>
       {savedAt && <span className="hint" style={{ marginLeft: 8 }}>Saved.</span>}
     </>
-  );
-}
-
-/** A simple, uncontrolled-friendly key/value list editor for the
- * Everyticket Integration screen's custom webhook POST parameters.
- * Deliberately plain (no drag-reorder) - this is a short, occasional-
- * edit list, not a data table. */
-function KeyValueEditor({
-  rows,
-  onChange,
-}: {
-  rows: Array<{ key: string; value: string }>;
-  onChange: (rows: Array<{ key: string; value: string }>) => void;
-}) {
-  function update(index: number, field: "key" | "value", value: string) {
-    const next = rows.slice();
-    next[index] = { ...next[index], [field]: value };
-    onChange(next);
-  }
-
-  function remove(index: number) {
-    onChange(rows.filter((_, i) => i !== index));
-  }
-
-  return (
-    <div>
-      {rows.map((row, i) => (
-        <div className="kv-row" key={i}>
-          <input placeholder="Key" value={row.key} onChange={(e) => update(i, "key", e.target.value)} />
-          <input placeholder="Value" value={row.value} onChange={(e) => update(i, "value", e.target.value)} />
-          <button type="button" className="button button-secondary" onClick={() => remove(i)}>
-            Remove
-          </button>
-        </div>
-      ))}
-      <button type="button" className="button button-secondary" onClick={() => onChange([...rows, { key: "", value: "" }])}>
-        Add parameter
-      </button>
-    </div>
   );
 }
 
@@ -314,9 +277,6 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
   const [webhookUrl, setWebhookUrl] = useState(initial.webhook_url ?? "");
   const [secretKey, setSecretKey] = useState("");
   const [secretKeyIsSet, setSecretKeyIsSet] = useState(initial.secret_key_is_set);
-  const [params, setParams] = useState(
-    Object.entries(initial.extra_params).map(([key, value]) => ({ key, value })),
-  );
   const [retryLimit, setRetryLimit] = useState(initial.retry_limit != null ? String(initial.retry_limit) : "");
   const [escalationEmails, setEscalationEmails] = useState(initial.escalation_emails ?? "");
   const [escalationSubject, setEscalationSubject] = useState(initial.escalation_email_subject ?? "");
@@ -337,15 +297,10 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
     setSaving(true);
     setError(null);
     try {
-      const extraParams: Record<string, string> = {};
-      for (const { key, value } of params) {
-        if (key.trim()) extraParams[key.trim()] = value;
-      }
       const updated = await adminUpdateIntegrationConfig(
         {
           webhook_url: webhookUrl || null,
           secret_key: secretKey || undefined,
-          extra_params: extraParams,
           retry_limit: retryLimit ? Number(retryLimit) : null,
           escalation_emails: escalationEmails || null,
           escalation_email_subject: escalationSubject || null,
@@ -370,7 +325,7 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
   return (
     <Section
       title="Everyticket integration"
-      hint="Webhook destination, extra POST parameters, and retry limit all take effect on the next webhook delivery attempt. If every retry fails, an escalation email is sent to the recipients below."
+      hint="Webhook destination and retry limit take effect on the next webhook delivery attempt. If every retry fails, an escalation email is sent to the recipients below."
     >
       <ErrorBanner error={error} />
       <form onSubmit={handleSubmit}>
@@ -403,20 +358,16 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
               placeholder="disabled"
             />
             <span className="hint">
-              Days an expired subscription can stay unrenewed before the third webhook below fires. Blank disables
+              Days an expired subscription can stay unrenewed before the archive webhook below fires. Blank disables
               archiving.
             </span>
           </label>
         </div>
 
-        <h3 style={{ marginTop: 16 }}>Parameters sent with every webhook call</h3>
-        <KeyValueEditor rows={params} onChange={setParams} />
-
         <h3 style={{ marginTop: 16 }}>Webhook events</h3>
         <p className="hint">
-          Everyticket's endpoint receives exactly one of these three JSON bodies (plus the parameters above, merged
-          in as extra top-level fields) for the corresponding event. Save first to refresh the samples below with
-          your latest settings.
+          Everyticket's endpoint receives exactly one of these five JSON bodies for the corresponding event. Save
+          first to refresh the samples below with your latest settings.
         </p>
         <div className="webhook-sample-list">
           {webhookSamples.map((sample) => (

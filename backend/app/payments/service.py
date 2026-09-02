@@ -34,7 +34,7 @@ from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
 from app.webhooks import service as webhook_service
-from app.webhooks.payloads import onboarding_payload
+from app.webhooks.payloads import onboarding_payload, renewed_payload
 
 logger = logging.getLogger("subscription")
 
@@ -192,14 +192,15 @@ def process_gateway_result(
         #
         # PaymentType.NEW (first-ever activation, "onboarding") gets its
         # own richer payload - the customer's full registration-form
-        # answers, not just bare identifiers (2026-09 follow-up: "onboarding
-        # ... with more details, show JSON with all data passing") - built
-        # via app.webhooks.payloads.onboarding_payload so the admin
+        # answers plus plan details, trimmed to exactly the fields Vishal
+        # asked to keep (2026-09 follow-up 3) - built via
+        # app.webhooks.payloads.onboarding_payload so the admin
         # Configuration screen's sample-JSON preview can never drift from
         # what's actually sent (app.api.v1.admin_config calls the same
-        # function). Upgrade/downgrade/renewal keep the existing, simpler
-        # payload shape - Vishal's numbered list only asked for onboarding/
-        # expiry/archive to be enriched.
+        # function). RENEWAL is trimmed to just subscription_id, same as
+        # expire/cancel/archive below. Upgrade/downgrade are not part of
+        # Vishal's numbered webhook list and keep their existing, richer
+        # payload shape unchanged.
         if application is not None:
             if transaction.payment_type == PaymentType.NEW.value:
                 registration_entry = (
@@ -216,26 +217,34 @@ def process_gateway_result(
                     entity_id=subscription.subscription_id,
                     payload=onboarding_payload(
                         subscription_id=subscription.subscription_id,
-                        customer_id=subscription.customer.customer_id,
-                        email=subscription.customer.email,
-                        mobile=subscription.customer.mobile,
                         plan_code=subscription.plan.plan_code,
                         plan_name=subscription.plan.name,
-                        currency=subscription.plan.currency,
                         price=float(subscription.plan.price),
                         is_trial=subscription.is_trial,
-                        status=subscription.status,
-                        starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
                         expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
-                        transaction_id=transaction.transaction_id,
                         registration_data=(registration_entry.data if registration_entry else {}),
                     ),
                 )
+            elif transaction.payment_type == PaymentType.RENEWAL.value:
+                # Trimmed to just subscription_id (2026-09 follow-up 3:
+                # "Renew, Expire, Cancel, Archived ... payload with
+                # subscription ID") - Everyticket looks up anything else
+                # about the subscription by this ID.
+                webhook_service.queue_event(
+                    db,
+                    application=application,
+                    event_type="subscription.renewed",
+                    entity_type="subscription",
+                    entity_id=subscription.subscription_id,
+                    payload=renewed_payload(subscription_id=subscription.subscription_id),
+                )
             else:
+                # UPGRADE/DOWNGRADE - not part of Vishal's numbered webhook
+                # list, so these keep their existing, richer payload shape
+                # unchanged.
                 webhook_event_type = {
                     PaymentType.UPGRADE.value: "subscription.upgraded",
                     PaymentType.DOWNGRADE.value: "subscription.downgraded",
-                    PaymentType.RENEWAL.value: "subscription.renewed",
                 }[transaction.payment_type]
                 webhook_service.queue_event(
                     db,

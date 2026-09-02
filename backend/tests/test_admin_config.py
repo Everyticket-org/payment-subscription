@@ -96,14 +96,13 @@ def test_update_general_config_round_trips(client, seeded_db):
     )
 
 
-def test_update_integration_config_secret_never_echoed_back_and_extra_params_stored(client, seeded_db):
+def test_update_integration_config_secret_never_echoed_back(client, seeded_db):
     headers = _admin_headers(client)
     resp = client.put(
         "/api/v1/admin/config/application/integration",
         json={
             "webhook_url": "https://everyticket.example.com/hooks",
             "secret_key": "s3cr3t",
-            "extra_params": {"merchant_id": "MERCH-1"},
             "retry_limit": 3,
             "escalation_emails": "ops@example.com, billing@example.com",
             "escalation_email_subject": "Webhook down",
@@ -114,8 +113,8 @@ def test_update_integration_config_secret_never_echoed_back_and_extra_params_sto
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert "secret_key" not in body
+    assert "extra_params" not in body  # feature removed, 2026-09 follow-up 3
     assert body["secret_key_is_set"] is True
-    assert body["extra_params"] == {"merchant_id": "MERCH-1"}
     assert body["retry_limit"] == 3
     assert body["escalation_emails"] == "ops@example.com, billing@example.com"
     # sanitized the same way Plan.description is - onclick/attributes stripped.
@@ -232,37 +231,47 @@ def test_update_integration_config_stores_archive_after_days(client, seeded_db):
     assert cleared.json()["archive_after_days"] is None
 
 
-def test_application_config_webhook_samples_reflect_real_registration_fields_and_configured_extras(client, seeded_db):
+def test_application_config_webhook_samples_cover_all_five_events_with_trimmed_payloads(client, seeded_db):
     """2026-09 follow-up: 'Webhook for everyticket app are as below...
     show JSON with all data passing / show sample JSON with unique
-    information' - the sample payloads use this application's real,
-    already-seeded registration-form field keys (museum_name,
-    contact_person - see app.core.seed) and its configured
-    extra_params/archive_after_days, not hardcoded generic text."""
+    information'; follow-up 3: 'Add one more webhook for renew' plus an
+    explicit trim of every payload. The onboarding sample uses this
+    application's real, already-seeded registration-form field keys
+    (museum_name, contact_person - see app.core.seed); the other four
+    events carry nothing but subscription_id, so there's no
+    application-specific data left for them to reflect."""
     headers = _admin_headers(client)
 
     client.put(
         "/api/v1/admin/config/application/integration",
-        json={"webhook_url": None, "extra_params": {"merchant_id": "MERCH-9"}, "archive_after_days": 21},
+        json={"webhook_url": None, "archive_after_days": 21},
         headers=headers,
     )
 
     resp = client.get("/api/v1/admin/config/application", headers=headers)
     samples = {s["event"]: s for s in resp.json()["integration"]["webhook_samples"]}
-    assert set(samples) == {"subscription.activated", "subscription.expired", "subscription.archived"}
+    assert set(samples) == {
+        "subscription.activated",
+        "subscription.renewed",
+        "subscription.expired",
+        "subscription.cancelled",
+        "subscription.archived",
+    }
 
     onboarding = samples["subscription.activated"]["payload"]
     assert onboarding["event_type"] == "subscription.activated"
-    assert onboarding["merchant_id"] == "MERCH-9"  # configured extra_params merged in as a wire-level sibling field
+    assert set(onboarding) == {"event_type", "payload"}  # just the two-field envelope, nothing merged in
     assert "museum_name" in onboarding["payload"]["registration_data"]  # real seeded form field, not a placeholder
 
-    archived = samples["subscription.archived"]["payload"]
-    assert archived["payload"]["days_since_expiry"] == 21  # reflects the configured archive_after_days
+    for event_type in ("subscription.renewed", "subscription.expired", "subscription.cancelled", "subscription.archived"):
+        wire_body = samples[event_type]["payload"]
+        assert wire_body["event_type"] == event_type
+        assert set(wire_body["payload"]) == {"subscription_id"}
 
     # Restore defaults so later tests aren't affected.
     client.put(
         "/api/v1/admin/config/application/integration",
-        json={"webhook_url": None, "extra_params": {}, "archive_after_days": None},
+        json={"webhook_url": None, "archive_after_days": None},
         headers=headers,
     )
 

@@ -262,7 +262,11 @@ def test_subscription_event(
         subscription_service.renew_subscription(db, subscription=subscription)
     elif event == "CANCEL":
         subscription_service.cancel_subscription(
-            db, subscription=subscription, cancelled_by=admin.email, reason="Test event via admin Testing module"
+            db,
+            subscription=subscription,
+            cancelled_by=admin.email,
+            reason="Test event via admin Testing module",
+            application=application,
         )
     elif event == "EXPIRE":
         subscription_service.expire_subscription(db, subscription=subscription)

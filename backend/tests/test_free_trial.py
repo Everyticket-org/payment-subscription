@@ -313,7 +313,9 @@ def test_trial_expiry_sweep_expires_and_queues_webhook(client, seeded_db):
         .first()
     )
     assert event is not None
-    assert event.payload["plan_code"] == "FREE_TRIAL"
+    # Trimmed to just subscription_id (2026-09 follow-up 3) - plan_code
+    # is no longer part of the expiry payload.
+    assert event.payload["subscription_id"] == subscription_id
 
 
 # --- Trial-ending reminder email, item 1: "before trial over - email to renew" ---

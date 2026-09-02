@@ -36,7 +36,13 @@ from app.payments.gateway_config import get_payu_credentials_status, set_payu_cr
 from app.payments.gateways.registry import list_gateway_codes
 from app.plans.models import Plan
 from app.plans.sanitize import sanitize_description as _sanitize_html
-from app.webhooks.payloads import archive_payload, expiry_payload, onboarding_payload
+from app.webhooks.payloads import (
+    archive_payload,
+    cancelled_payload,
+    expiry_payload,
+    onboarding_payload,
+    renewed_payload,
+)
 from app.webhooks.service import build_wire_body
 
 router = APIRouter(prefix="/config", tags=["admin-config"])
@@ -77,18 +83,21 @@ def _sample_value_for_field(field: RegistrationFormField) -> object:
 
 
 def _build_webhook_samples(db: Session, application: Application) -> list[EveryticketWebhookSampleOut]:
-    """Read-only preview of the exact JSON each of the three real
+    """Read-only preview of the exact JSON each of the five real
     outbound webhook events sends (2026-09 follow-up: "Webhook for
     everyticket app are as below: 1) onboarding... 2) status inactive
     when plan expires... 3) delete/archive when user do not renew for x
-    days"). Built from app.webhooks.payloads - the SAME functions that
-    shape a real delivery - so this documentation can never quietly
-    drift from what's actually sent. Registration-field keys are pulled
-    from this application's real, currently-configured form (falling
-    back to two generic example fields if none are configured yet), and
-    plan_code/name/price come from a real active plan when one exists,
-    so the preview reflects this application's actual setup rather than
-    being entirely made up."""
+    days"; follow-up 3: "Add one more webhook for renew"). Built from
+    app.webhooks.payloads - the SAME functions that shape a real
+    delivery - so this documentation can never quietly drift from what's
+    actually sent. Registration-field keys are pulled from this
+    application's real, currently-configured form (falling back to two
+    generic example fields if none are configured yet), and plan_code/
+    name/price come from a real active plan when one exists, so the
+    onboarding sample reflects this application's actual setup rather
+    than being entirely made up. The other four events are trimmed to
+    just subscription_id (2026-09 follow-up 3), so there is nothing
+    application-specific left to reflect for them."""
     now = datetime.now(timezone.utc)
     fields = (
         db.query(RegistrationFormField)
@@ -110,80 +119,45 @@ def _build_webhook_samples(db: Session, application: Application) -> list[Everyt
     )
     plan_code = plan.plan_code if plan else "PRO"
     plan_name = plan.name if plan else "Pro Plan"
-    currency = plan.currency if plan else application.currency
     price = float(plan.price) if plan else 999.0
 
     sample_subscription_id = "SUB-000123"
 
     onboarding = onboarding_payload(
         subscription_id=sample_subscription_id,
-        customer_id="CUS-000456",
-        email="customer@example.com",
-        mobile="9999999999",
         plan_code=plan_code,
         plan_name=plan_name,
-        currency=currency,
         price=price,
         is_trial=False,
-        status="ACTIVE",
-        starts_at=now.isoformat(),
         expires_at=(now + timedelta(days=30)).isoformat(),
-        transaction_id="TXN-000789",
         registration_data=registration_data,
     )
-    expiry = expiry_payload(
-        subscription_id=sample_subscription_id,
-        customer_id="CUS-000456",
-        external_customer_id="MUSEUM-4587",
-        external_instance_id="INSTANCE-1001",
-        plan_code=plan_code,
-        status="EXPIRED",
-        expired_at=now.isoformat(),
-    )
-    archive_days = application.archive_after_days or 30
-    archived = archive_payload(
-        subscription_id=sample_subscription_id,
-        customer_id="CUS-000456",
-        external_customer_id="MUSEUM-4587",
-        external_instance_id="INSTANCE-1001",
-        plan_code=plan_code,
-        status="ARCHIVED",
-        expired_at=(now - timedelta(days=archive_days)).isoformat(),
-        days_since_expiry=archive_days,
-    )
-    archive_note = (
-        f"this application's configured Archive after threshold ({application.archive_after_days} days)"
-        if application.archive_after_days
-        else "the default 30-day example used below - archiving is not yet configured for this application"
-    )
+    renewed = renewed_payload(subscription_id=sample_subscription_id)
+    expired = expiry_payload(subscription_id=sample_subscription_id)
+    cancelled = cancelled_payload(subscription_id=sample_subscription_id)
+    archived = archive_payload(subscription_id=sample_subscription_id)
 
     # Wrapped via the SAME build_wire_body() a real delivery uses (see
-    # app.webhooks.service._attempt_one) - the outer event_id/event_type/
-    # entity_type/entity_id envelope plus this application's configured
-    # extra_params merged in exactly as they'd really be sent, so the
-    # preview below is the literal JSON body Everyticket's endpoint would
-    # receive, not just the inner event data.
+    # app.webhooks.service._attempt_one) - just {event_type, payload}, so
+    # the preview below is the literal JSON body Everyticket's endpoint
+    # would receive, not just the inner event data.
     events = [
         ("subscription.activated", onboarding, "Onboarding: fires once, the first time a new customer's payment succeeds."),
-        ("subscription.expired", expiry, "Status inactive: fires once when an active subscription's plan expires unrenewed."),
+        ("subscription.renewed", renewed, "Renew: fires once an existing subscription's renewal payment succeeds."),
+        ("subscription.expired", expired, "Status inactive: fires once when an active subscription's plan expires unrenewed."),
+        ("subscription.cancelled", cancelled, "Cancel: fires once a customer cancels their subscription immediately."),
         (
             "subscription.archived",
             archived,
-            f"Delete/archive: fires once an expired subscription has stayed unrenewed for {archive_note}.",
+            "Delete/archive: fires once an expired subscription has stayed unrenewed past the Archive after "
+            "threshold below (disabled until that field is set).",
         ),
     ]
     return [
         EveryticketWebhookSampleOut(
             event=event_type,
             trigger=trigger,
-            payload=build_wire_body(
-                event_id="EVT-000001",
-                event_type=event_type,
-                entity_type="subscription",
-                entity_id=sample_subscription_id,
-                payload=event_payload,
-                application=application,
-            ),
+            payload=build_wire_body(event_type=event_type, payload=event_payload),
         )
         for event_type, event_payload, trigger in events
     ]
@@ -193,7 +167,6 @@ def _integration_out(db: Session, application: Application) -> EveryticketIntegr
     return EveryticketIntegrationOut(
         secret_key_is_set=bool(application.webhook_secret),
         webhook_url=application.webhook_url,
-        extra_params=application.webhook_extra_params or {},
         retry_limit=application.webhook_retry_limit,
         default_retry_limit=len(get_settings().webhook_retry_schedule),
         escalation_emails=application.webhook_escalation_emails,
@@ -303,17 +276,19 @@ def update_integration_config(
     application: Application = Depends(get_application),
     admin: AdminUser = Depends(require_permission("SYSTEM_CONFIG_MANAGE")),
 ):
-    """webhook_url/extra_params/retry_limit/escalation_* all take effect
-    on the very next webhook delivery attempt (app.webhooks.service).
-    None on a field = leave the currently-stored value unchanged (so the
-    frontend never has to round-trip the secret key) - pass "" to
-    explicitly clear secret_key/webhook_url; extra_params/retry_limit/
-    escalation_* are replaced outright when given (they aren't secrets)."""
+    """webhook_url/retry_limit/escalation_* all take effect on the very
+    next webhook delivery attempt (app.webhooks.service). None on a
+    field = leave the currently-stored value unchanged (so the frontend
+    never has to round-trip the secret key) - pass "" to explicitly
+    clear secret_key/webhook_url; retry_limit/escalation_* are replaced
+    outright when given (they aren't secrets). The custom key/value
+    extra-parameters editor that used to live on this endpoint was
+    removed (2026-09 follow-up 3: "Remove feature for parameters
+    (key,value) from this section") - webhook_extra_params is no longer
+    read from or written by this endpoint."""
     application.webhook_url = body.webhook_url
     if body.secret_key is not None:
         application.webhook_secret = body.secret_key or None
-    if body.extra_params is not None:
-        application.webhook_extra_params = body.extra_params or None
     application.webhook_retry_limit = body.retry_limit
     application.webhook_escalation_emails = body.escalation_emails or None
     application.webhook_escalation_email_subject = body.escalation_email_subject or None

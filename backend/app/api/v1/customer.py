@@ -303,7 +303,7 @@ def cancel(
 
     plan_name = subscription.plan.name
     subscription_service.cancel_subscription(
-        db, subscription=subscription, cancelled_by=customer.customer_id, reason=body.reason
+        db, subscription=subscription, cancelled_by=customer.customer_id, reason=body.reason, application=application
     )
     db.commit()
     db.refresh(subscription)

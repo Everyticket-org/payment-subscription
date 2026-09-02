@@ -136,40 +136,20 @@ def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
 
-def build_wire_body(
-    *,
-    event_id: str,
-    event_type: str,
-    entity_type: str,
-    entity_id: str,
-    payload: dict,
-    application: Application | None,
-) -> dict:
+def build_wire_body(*, event_type: str, payload: dict) -> dict:
     """The exact top-level JSON object POSTed to the destination webhook
-    URL: the event envelope (event_id/event_type/entity_type/entity_id/
-    payload) plus this application's admin-configured extra_params
-    (2026-09 admin config restructure, Everyticket Integration screen)
-    merged in as extra top-level POST fields - e.g. a merchant/account
-    identifier Everyticket's endpoint expects that isn't part of the
-    event itself. setdefault() means extra_params never overrides one of
-    the fixed envelope fields above.
+    URL - deliberately just two fields (2026-09 follow-up 3: "Keep only
+    event_type" at the top level, everything else about the event lives
+    in payload). The custom key/value extra-parameters feature that used
+    to get merged in here was removed in the same pass - a delivery's
+    wire body is now exactly {event_type, payload}, nothing more.
 
     Pulled out of _attempt_one() into its own pure function so
     app.api.v1.admin_config's read-only "sample JSON" preview (2026-09
     follow-up: "show JSON with all data passing") can build the EXACT
     same shape a real delivery sends, rather than a hand-maintained
     approximation that could quietly drift from it."""
-    body_dict = {
-        "event_id": event_id,
-        "event_type": event_type,
-        "entity_type": entity_type,
-        "entity_id": entity_id,
-        "payload": payload,
-    }
-    if application is not None and application.webhook_extra_params:
-        for key, value in application.webhook_extra_params.items():
-            body_dict.setdefault(key, value)
-    return body_dict
+    return {"event_type": event_type, "payload": payload}
 
 
 def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.Client | None = None) -> bool:
@@ -182,14 +162,7 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     application = db.get(Application, delivery.destination_application_id)
     _url, secret = _resolve_destination(application)
 
-    body_dict = build_wire_body(
-        event_id=event.event_id,
-        event_type=event.event_type,
-        entity_type=event.entity_type,
-        entity_id=event.entity_id,
-        payload=event.payload,
-        application=application,
-    )
+    body_dict = build_wire_body(event_type=event.event_type, payload=event.payload)
     body = json.dumps(body_dict, separators=(",", ":"), default=str).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if secret:
