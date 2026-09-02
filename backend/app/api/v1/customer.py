@@ -14,7 +14,14 @@ from app.api.deps import get_application, get_db
 from app.applications.models import Application
 from app.auth.deps import get_current_customer_id
 from app.core.enums import PaymentType, SubscriptionStatus
-from app.core.exceptions import ActionNotAllowed, AppError, CustomerNotFound, PlanNotFound, SubscriptionNotFound
+from app.core.exceptions import (
+    ActionNotAllowed,
+    AppError,
+    CustomerNotFound,
+    InvalidPlanTransition,
+    PlanNotFound,
+    SubscriptionNotFound,
+)
 from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.portal_schemas import CustomerPortalOut
 from app.customers.schemas import CustomerOut, RegistrationDataOut
@@ -51,6 +58,7 @@ def _to_portal_subscription(sub: Subscription) -> PortalSubscriptionOut:
         currency=sub.plan.currency,
         billing_interval=sub.plan.billing_interval,
         billing_frequency=sub.plan.billing_frequency,
+        is_trial=sub.is_trial,
     )
 
 
@@ -200,6 +208,12 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
     )
     if target_plan is None:
         raise PlanNotFound(f"No active plan '{target_plan_code}'")
+    if target_plan.is_trial:
+        # A free trial can only ever be reached as a brand-new
+        # subscription (spec follow-up: one trial per customer lifetime,
+        # checked in create_pending_subscription()) - never as an
+        # upgrade/downgrade target for an existing subscription.
+        raise InvalidPlanTransition("Cannot switch to a free trial plan")
 
     transition_type = subscription_service.assert_transition_allowed(
         db, from_plan=subscription.plan, to_plan=target_plan
@@ -243,6 +257,14 @@ def renew(
         raise ActionNotAllowed("Renewal is currently disabled for this application")
     customer = _get_customer(db, customer_id)
     subscription = _get_owned_subscription(db, customer=customer, subscription_id=subscription_id)
+    if subscription.plan.is_trial:
+        # Spec follow-up: a trial simply expires (and re-fires the
+        # subscription.expired webhook via the existing expiry sweep) -
+        # there is no renewal payment flow for it. A customer who wants to
+        # keep using the product after their trial ends subscribes to a
+        # paid plan instead (a fresh, non-trial create_pending_subscription
+        # call), they don't "renew" the trial itself.
+        raise ActionNotAllowed("A free trial subscription cannot be renewed")
 
     payment = payment_service.create_payment_transaction(
         db,

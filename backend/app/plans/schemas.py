@@ -20,6 +20,8 @@ class PlanOut(BaseModel):
     billing_interval: str
     billing_frequency: int
     display_order: int
+    is_trial: bool = False
+    trial_period_days: int | None = None
     features: list[PlanFeatureOut] = []
 
     @property
@@ -61,6 +63,8 @@ class PlanAdminOut(BaseModel):
     billing_frequency: int
     active: bool
     display_order: int
+    is_trial: bool = False
+    trial_period_days: int | None = None
     features: list[PlanFeatureAdminOut] = []
 
 
@@ -72,11 +76,22 @@ class PlanCreate(BaseModel):
     # before storage, see app.plans.sanitize.sanitize_description(). The
     # generous cap is just an abuse guard, not a real content limit.
     description: str | None = Field(default=None, max_length=20000)
-    price: float = Field(gt=0)
+    # ge=0, not gt=0: a free-trial plan (is_trial=True) is priced at exactly
+    # 0. Cross-validated in app.api.v1.admin_plans.create_plan(): is_trial
+    # requires price == 0 and trial_period_days > 0; a non-trial plan still
+    # requires price > 0 (enforced there, not by this field constraint).
+    price: float = Field(ge=0)
     currency: str = Field(default="INR", max_length=10)
     billing_interval: str = Field(default="month", pattern="^(month|year)$")
     billing_frequency: int = Field(default=1, ge=1)
     display_order: int = 0
+    # Free trial support (spec follow-up): is_trial marks this as a trial
+    # plan (own distinct plan, not an attribute of a paid plan);
+    # trial_period_days is the configurable trial duration in days,
+    # required when is_trial is True. See app.api.v1.admin_plans for the
+    # cross-field validation.
+    is_trial: bool = False
+    trial_period_days: int | None = Field(default=None, gt=0)
 
 
 class PlanUpdate(BaseModel):
@@ -85,12 +100,14 @@ class PlanUpdate(BaseModel):
     URL and may already be referenced by live subscriptions/payments)."""
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=20000)
-    price: float | None = Field(default=None, gt=0)
+    price: float | None = Field(default=None, ge=0)
     currency: str | None = Field(default=None, max_length=10)
     billing_interval: str | None = Field(default=None, pattern="^(month|year)$")
     billing_frequency: int | None = Field(default=None, ge=1)
     active: bool | None = None
     display_order: int | None = None
+    is_trial: bool | None = None
+    trial_period_days: int | None = Field(default=None, gt=0)
 
 
 class PlanReorderRequest(BaseModel):

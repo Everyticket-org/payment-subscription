@@ -10,11 +10,17 @@ transaction per spec section 58) decides when to commit.
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.applications.models import Application
 from app.core.enums import ProvisioningStatus, SubscriptionEventType, SubscriptionStatus
-from app.core.exceptions import CustomerAlreadySubscribed, InvalidPlanTransition, PlanNotFound
+from app.core.exceptions import (
+    CustomerAlreadySubscribed,
+    InvalidPlanTransition,
+    PlanNotFound,
+    TrialAlreadyUsed,
+)
 from app.core.ids import new_subscription_id
 from app.core.time import ensure_aware
 from app.customers.models import Customer
@@ -36,6 +42,30 @@ def get_active_subscription(db: Session, *, customer_id: int, application_id: in
     )
 
 
+def assert_trial_not_already_used(db: Session, *, customer_id: int, application_id: int) -> None:
+    """"One credentials can take only one trial lifetime" (spec follow-up):
+    checked regardless of that prior trial subscription's current status -
+    PENDING_PAYMENT/ACTIVE/EXPIRED/CANCELLED all count, so a customer can't
+    get a second trial just by letting the first one expire or cancelling
+    it. This is the application-level pre-check; the real guarantee against
+    a race between two concurrent trial-signup requests for the same
+    customer is the DB-level partial unique index
+    (uq_one_trial_subscription_per_customer_application on
+    subscriptions(customer_id, application_id) WHERE is_trial), backed up
+    by the IntegrityError catch in create_pending_subscription() below."""
+    prior_trial = (
+        db.query(Subscription.id)
+        .filter(
+            Subscription.customer_id == customer_id,
+            Subscription.application_id == application_id,
+            Subscription.is_trial.is_(True),
+        )
+        .first()
+    )
+    if prior_trial is not None:
+        raise TrialAlreadyUsed("This customer has already used their free trial for this application")
+
+
 def create_pending_subscription(
     db: Session, *, customer: Customer, application: Application, plan: Plan
 ) -> Subscription:
@@ -49,6 +79,14 @@ def create_pending_subscription(
     through apply_plan_change() via the dedicated
     /customer/subscriptions/{id}/upgrade|downgrade endpoints instead, not
     through here.
+
+    For a trial plan (plan.is_trial), also refuses (TrialAlreadyUsed) if
+    this customer has ever had a trial subscription for this application
+    before - belt and suspenders: a pre-check here, PLUS an IntegrityError
+    catch around the flush translating a lost race (two concurrent trial
+    signups) into the same clean 409 rather than a raw DB error. Scoped to
+    the is_trial branch only, so the far more common non-trial path is
+    unaffected.
     """
     if plan.application_id != application.id:
         raise PlanNotFound(f"Plan {plan.plan_code} does not belong to application {application.code}")
@@ -60,6 +98,9 @@ def create_pending_subscription(
             f"({existing_active.subscription_id}) for {application.code}"
         )
 
+    if plan.is_trial:
+        assert_trial_not_already_used(db, customer_id=customer.id, application_id=application.id)
+
     subscription = Subscription(
         subscription_id=new_subscription_id(),
         customer_id=customer.id,
@@ -67,14 +108,36 @@ def create_pending_subscription(
         plan_id=plan.id,
         status=SubscriptionStatus.PENDING_PAYMENT.value,
         provisioning_status=ProvisioningStatus.NOT_STARTED.value,
+        is_trial=plan.is_trial,
     )
     db.add(subscription)
-    db.flush()
+
+    if plan.is_trial:
+        # SAVEPOINT, not a full db.rollback(): a lost race here must only
+        # discard this one insert, not any other not-yet-committed work the
+        # caller's outer transaction may already hold (e.g. a newly created
+        # Customer row earlier in the same /public/subscribe request).
+        try:
+            with db.begin_nested():
+                db.flush()
+        except IntegrityError:
+            db.expunge(subscription)
+            raise TrialAlreadyUsed(
+                "This customer has already used their free trial for this application"
+            )
+    else:
+        db.flush()
     return subscription
 
 
 def _billing_period_end(start: datetime, plan: Plan) -> datetime:
-    if plan.billing_interval == "year":
+    if plan.is_trial:
+        # Trial billing period is day-based off the plan's configurable
+        # trial_period_days, not the month/year billing_interval used by
+        # paid plans (spec follow-up: free trial as its own distinct,
+        # configurable-duration plan).
+        days = plan.trial_period_days or 0
+    elif plan.billing_interval == "year":
         days = 365 * plan.billing_frequency
     else:
         days = 30 * plan.billing_frequency
@@ -280,12 +343,17 @@ def expire_due_subscriptions(db: Session) -> int:
 def send_renewal_reminders(db: Session) -> int:
     """Sweep entry point for the Celery beat task (app/subscriptions/tasks.py,
     spec section 49) - emails every ACTIVE subscription expiring within
-    RENEWAL_REMINDER_DAYS_BEFORE days. Idempotency is a heuristic rather
-    than a dedicated column: it skips a subscription if a
-    'renewal_reminder' NotificationLog already exists for it within a
-    window wide enough to cover the current expiry cycle - good enough to
-    avoid spamming the same reminder every few minutes without adding new
-    schema for this pass (see docs/implementation-status.md)."""
+    RENEWAL_REMINDER_DAYS_BEFORE days. A trial subscription (plan.is_trial)
+    gets the 'trial_ending' template instead of 'renewal_reminder' (spec
+    follow-up: "before trial over - email to renew") - same sweep, same
+    RENEWAL_REMINDER_DAYS_BEFORE window, just a different template_code, so
+    trial customers get a nudge before their trial's day-based expiry the
+    same way paid customers do before a billing-cycle expiry. Idempotency
+    is a heuristic rather than a dedicated column: it skips a subscription
+    if a NotificationLog for the relevant template already exists for it
+    within a window wide enough to cover the current expiry cycle - good
+    enough to avoid spamming the same reminder every few minutes without
+    adding new schema for this pass (see docs/implementation-status.md)."""
     from app.core.config import get_settings
     from app.notifications.email import service as email_service
     from app.notifications.models import NotificationLog
@@ -308,10 +376,11 @@ def send_renewal_reminders(db: Session) -> int:
     reminder_lookback = now - timedelta(days=settings.RENEWAL_REMINDER_DAYS_BEFORE + 2)
     sent_count = 0
     for subscription in due:
+        template_code = "trial_ending" if subscription.plan.is_trial else "renewal_reminder"
         already_reminded = (
             db.query(NotificationLog)
             .filter(
-                NotificationLog.template_code == "renewal_reminder",
+                NotificationLog.template_code == template_code,
                 NotificationLog.related_entity_id == subscription.subscription_id,
                 NotificationLog.created_at >= reminder_lookback,
             )
@@ -322,7 +391,7 @@ def send_renewal_reminders(db: Session) -> int:
 
         sent = email_service.send_templated_email(
             db,
-            template_code="renewal_reminder",
+            template_code=template_code,
             to=subscription.customer.email,
             context={
                 "plan_name": subscription.plan.name,

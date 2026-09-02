@@ -28,13 +28,19 @@ export function PlansPage() {
           <article key={plan.plan_code} className="plan-card">
             <h2>{plan.name}</h2>
             <p className="plan-price">
-              {plan.currency} {plan.price.toFixed(2)}
-              <span className="plan-interval">
-                {" "}
-                / {plan.billing_frequency > 1 ? `${plan.billing_frequency} ` : ""}
-                {plan.billing_interval}
-                {plan.billing_frequency > 1 ? "s" : ""}
-              </span>
+              {plan.is_trial ? (
+                `Free for ${plan.trial_period_days ?? "?"} days`
+              ) : (
+                <>
+                  {plan.currency} {plan.price.toFixed(2)}
+                  <span className="plan-interval">
+                    {" "}
+                    / {plan.billing_frequency > 1 ? `${plan.billing_frequency} ` : ""}
+                    {plan.billing_interval}
+                    {plan.billing_frequency > 1 ? "s" : ""}
+                  </span>
+                </>
+              )}
             </p>
             {plan.description && (
               // Description is rich-text HTML (spec section 51: bullet-point

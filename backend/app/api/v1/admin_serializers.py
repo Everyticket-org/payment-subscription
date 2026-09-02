@@ -29,6 +29,7 @@ def to_subscription_admin_out(sub: Subscription) -> SubscriptionAdminOut:
         cancelled_at=sub.cancelled_at,
         cancellation_reason=sub.cancellation_reason,
         created_at=sub.created_at,
+        is_trial=sub.is_trial,
     )
 
 

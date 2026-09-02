@@ -44,7 +44,13 @@ from app.sso.schemas import SsoConsumeRequest
 from app.auth.deps import get_current_customer_id_optional
 from app.core.config import get_settings
 from app.core.enums import PaymentType
-from app.core.exceptions import ConflictingCustomerIdentity, OtpVerificationRequired, PlanNotFound, Unauthorized
+from app.core.exceptions import (
+    ConflictingCustomerIdentity,
+    InvalidPlanTransition,
+    OtpVerificationRequired,
+    PlanNotFound,
+    Unauthorized,
+)
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
@@ -258,6 +264,16 @@ def subscribe(
         db, customer_id=customer.id, application_id=application.id
     )
     if existing_active is not None:
+        # A trial plan can never be reached via the upgrade/downgrade
+        # auto-routing path - it must go through create_pending_subscription()
+        # below (a fresh repurchase-shaped flow) so the one-trial-per-
+        # lifetime check (assert_trial_not_already_used) always runs. Since
+        # trial plans are priced at 0, assert_transition_allowed() would
+        # otherwise classify switching to one as an ordinary DOWNGRADE and
+        # silently swap the customer's existing active subscription onto it.
+        if plan.is_trial:
+            raise InvalidPlanTransition("A free trial plan cannot be switched to from an existing subscription")
+
         # assert_transition_allowed() itself raises InvalidPlanTransition
         # (409) when to_plan == from_plan - i.e. the SAME PLAN case ("do
         # not create another subscription, do not create another

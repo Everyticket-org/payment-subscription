@@ -198,7 +198,11 @@ export function PortalPage() {
   }
 
   const { customer, registration_data, active_subscription, subscriptions, payments, invoices } = portal;
-  const otherPlans = plans.filter((p) => p.plan_code !== active_subscription?.plan_code);
+  // Free trial plans are never a valid upgrade/downgrade target (spec
+  // follow-up: a trial can only ever be a brand-new subscription, checked
+  // server-side too in customer.py's _change_plan) - excluded here so the
+  // dropdown never offers a choice the backend would refuse anyway.
+  const otherPlans = plans.filter((p) => p.plan_code !== active_subscription?.plan_code && !p.is_trial);
   const fieldLabels = new Map(formFields.map((f) => [f.field_key, f.label]));
 
   return (
@@ -280,9 +284,15 @@ export function PortalPage() {
                 <div className="portal-actions-cols">
                   <div className="portal-action-col">
                     <h3>Renew</h3>
-                    <button className="button button-secondary" disabled={busy} onClick={handleRenew}>
-                      Renew now
-                    </button>
+                    {active_subscription.is_trial ? (
+                      <p className="hint">
+                        Free trials can't be renewed - subscribe to a paid plan before it ends to keep access without interruption.
+                      </p>
+                    ) : (
+                      <button className="button button-secondary" disabled={busy} onClick={handleRenew}>
+                        Renew now
+                      </button>
+                    )}
                   </div>
                   <div className="portal-action-col">
                     <h3>Cancel</h3>

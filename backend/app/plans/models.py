@@ -29,6 +29,17 @@ class Plan(Base, TimestampMixin):
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
+    # Free trial support: a trial is its own distinct Plan (price=0,
+    # is_trial=True), not an attribute of an existing paid plan. When
+    # is_trial is True, trial_period_days is the configurable trial
+    # duration (billing period is day-based rather than
+    # billing_interval/billing_frequency - see
+    # app.subscriptions.service._billing_period_end()). Cross-validated in
+    # app.api.v1.admin_plans (is_trial requires trial_period_days > 0 and
+    # price == 0; non-trial requires price > 0).
+    is_trial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    trial_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     application: Mapped["Application"] = relationship(back_populates="plans")
     features: Mapped[list["PlanFeature"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan", order_by="PlanFeature.display_order"

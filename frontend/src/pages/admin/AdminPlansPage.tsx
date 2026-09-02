@@ -163,7 +163,13 @@ export function AdminPlansPage() {
                   <td>{plan.plan_code}</td>
                   <td>{plan.name}</td>
                   <td className="numeric">
-                    {plan.currency} {plan.price.toFixed(2)}
+                    {plan.is_trial ? (
+                      <span title={`${plan.trial_period_days ?? "?"}-day free trial`}>
+                        Free trial ({plan.trial_period_days ?? "?"}d)
+                      </span>
+                    ) : (
+                      `${plan.currency} ${plan.price.toFixed(2)}`
+                    )}
                   </td>
                   <td>
                     every {plan.billing_frequency} {plan.billing_interval}
@@ -246,6 +252,12 @@ function PlanFormModal({
   const { adminToken } = useAuth();
   const toast = useToast();
   const [error, setError] = useState<unknown>(null);
+  // is_trial is tracked as controlled state (unlike the rest of this
+  // uncontrolled form) because checking it needs to immediately disable/
+  // zero the Price field and reveal the trial-duration field - free trial
+  // is its own distinct plan (price=0, configurable trial_period_days),
+  // not an attribute layered onto a normal-priced plan.
+  const [isTrial, setIsTrial] = useState<boolean>(state?.mode === "edit" ? state.plan.is_trial : false);
   // The rich text editor is uncontrolled (see RichTextEditor's own
   // docstring) and re-seeded from `defaultValue` only when its key
   // changes, so switching between "create" and a specific plan's "edit"
@@ -254,6 +266,7 @@ function PlanFormModal({
 
   useEffect(() => {
     setError(null);
+    setIsTrial(state?.mode === "edit" ? state.plan.is_trial : false);
   }, [state]);
 
   if (!state) return null;
@@ -265,6 +278,13 @@ function PlanFormModal({
     if (!adminToken) return;
     const form = new FormData(e.currentTarget);
     const description = String(form.get("description") || "") || undefined;
+    // Price/trial_period_days are read here rather than trusted straight
+    // off the (possibly disabled) inputs: a disabled <input> is excluded
+    // from FormData entirely, so the trial checkbox's price=0 / duration
+    // override has to be applied explicitly rather than relying on what
+    // the browser submitted.
+    const price = isTrial ? 0 : Number(form.get("price"));
+    const trialPeriodDays = isTrial ? Number(form.get("trial_period_days") || 0) : undefined;
 
     try {
       if (isEdit && plan) {
@@ -273,9 +293,11 @@ function PlanFormModal({
           {
             name: String(form.get("name")),
             description,
-            price: Number(form.get("price")),
+            price,
             billing_interval: (form.get("billing_interval") as "month" | "year") || "month",
             billing_frequency: Number(form.get("billing_frequency") || 1),
+            is_trial: isTrial,
+            trial_period_days: trialPeriodDays,
           },
           adminToken,
         );
@@ -286,10 +308,12 @@ function PlanFormModal({
             plan_code: String(form.get("plan_code")),
             name: String(form.get("name")),
             description,
-            price: Number(form.get("price")),
+            price,
             currency: String(form.get("currency") || "INR"),
             billing_interval: (form.get("billing_interval") as "month" | "year") || "month",
             billing_frequency: Number(form.get("billing_frequency") || 1),
+            is_trial: isTrial,
+            trial_period_days: trialPeriodDays,
           },
           adminToken,
         );
@@ -319,7 +343,16 @@ function PlanFormModal({
           </label>
           <label>
             Price
-            <input name="price" type="number" step="0.01" min="0.01" required defaultValue={plan?.price} />
+            <input
+              key={isTrial ? "trial" : "paid"}
+              name="price"
+              type="number"
+              step="0.01"
+              min="0.01"
+              required={!isTrial}
+              disabled={isTrial}
+              defaultValue={isTrial ? 0 : plan?.price}
+            />
           </label>
           {!isEdit && (
             <label>
@@ -329,16 +362,43 @@ function PlanFormModal({
           )}
           <label>
             Billing interval
-            <select name="billing_interval" defaultValue={plan?.billing_interval ?? "month"}>
+            <select name="billing_interval" defaultValue={plan?.billing_interval ?? "month"} disabled={isTrial}>
               <option value="month">month</option>
               <option value="year">year</option>
             </select>
           </label>
           <label>
             Every N intervals
-            <input name="billing_frequency" type="number" min="1" defaultValue={plan?.billing_frequency ?? 1} />
+            <input name="billing_frequency" type="number" min="1" defaultValue={plan?.billing_frequency ?? 1} disabled={isTrial} />
           </label>
         </div>
+        <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
+          <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={isTrial}
+              onChange={(e) => setIsTrial(e.target.checked)}
+            />
+            Free trial plan
+          </label>
+          {isTrial && (
+            <label>
+              Trial duration (days)
+              <input
+                name="trial_period_days"
+                type="number"
+                min="1"
+                required={isTrial}
+                defaultValue={plan?.trial_period_days ?? 14}
+              />
+            </label>
+          )}
+        </div>
+        {isTrial && (
+          <p className="hint">
+            Free trial plans are priced at 0 automatically and follow a day-based billing period (the duration above) instead of the month/year billing interval.
+          </p>
+        )}
         {isEdit && (
           <p className="hint">
             Active/Inactive is set from the plans grid now - close this and click the status badge on {plan!.name}'s row.

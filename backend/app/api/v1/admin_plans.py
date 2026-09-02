@@ -15,7 +15,7 @@ from app.applications.models import Application
 from app.audit import service as audit_service
 from app.auth.deps import require_permission
 from app.auth.models import AdminUser
-from app.core.exceptions import AppError
+from app.core.exceptions import AppError, InvalidPlanConfiguration
 from app.plans.models import Plan, PlanFeature, PlanTransition
 from app.plans.sanitize import sanitize_description
 from app.plans.schemas import (
@@ -68,6 +68,24 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _validate_trial_configuration(*, is_trial: bool, price: float, trial_period_days: int | None) -> None:
+    """Cross-field validation for a plan's trial configuration (free trial
+    is its own distinct, configurable-duration plan - spec follow-up).
+    Called with the FULL body on create, and with the MERGED effective
+    state (existing plan values overridden by whatever fields a partial
+    PUT actually supplied) on update, so a PUT that only touches one of
+    these three fields can never leave the plan in an inconsistent state
+    (e.g. is_trial=True with price left at some old non-zero value)."""
+    if is_trial:
+        if not trial_period_days or trial_period_days <= 0:
+            raise InvalidPlanConfiguration("A trial plan requires trial_period_days > 0")
+        if price != 0:
+            raise InvalidPlanConfiguration("A trial plan must be priced at 0")
+    else:
+        if price <= 0:
+            raise InvalidPlanConfiguration("A non-trial plan requires price > 0")
+
+
 @router.get("", response_model=list[PlanAdminOut])
 def list_plans(
     db: Session = Depends(get_db),
@@ -99,6 +117,8 @@ def create_plan(
     if existing is not None:
         raise PlanCodeInUse(f"Plan code '{body.plan_code}' already exists")
 
+    _validate_trial_configuration(is_trial=body.is_trial, price=body.price, trial_period_days=body.trial_period_days)
+
     plan = Plan(
         application_id=application.id,
         plan_code=body.plan_code.upper(),
@@ -110,6 +130,8 @@ def create_plan(
         billing_frequency=body.billing_frequency,
         display_order=body.display_order,
         active=True,
+        is_trial=body.is_trial,
+        trial_period_days=body.trial_period_days,
     )
     db.add(plan)
     db.flush()
@@ -304,6 +326,14 @@ def update_plan(
     updates = body.model_dump(exclude_unset=True)
     if "description" in updates:
         updates["description"] = sanitize_description(updates["description"])
+
+    effective_is_trial = updates.get("is_trial", plan.is_trial)
+    effective_price = updates.get("price", float(plan.price))
+    effective_trial_period_days = updates.get("trial_period_days", plan.trial_period_days)
+    _validate_trial_configuration(
+        is_trial=effective_is_trial, price=float(effective_price), trial_period_days=effective_trial_period_days
+    )
+
     for field, value in updates.items():
         setattr(plan, field, value)
     db.add(plan)

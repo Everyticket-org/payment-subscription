@@ -26,6 +26,7 @@ class PortalSubscriptionOut(SubscriptionOut):
     currency: str
     billing_interval: str
     billing_frequency: int
+    is_trial: bool = False
 
 
 class SubscribeResponse(BaseModel):
@@ -67,6 +68,7 @@ class SubscriptionAdminOut(BaseModel):
     cancelled_at: datetime | None = None
     cancellation_reason: str | None = None
     created_at: datetime
+    is_trial: bool = False
 
 
 class SubscriptionDetailAdminOut(BaseModel):

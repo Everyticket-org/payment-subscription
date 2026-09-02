@@ -189,6 +189,16 @@ def seed(db: Session) -> AdminUser:
         db, application, plan_code="ENTERPRISE", name="Enterprise", description="Full feature set",
         price=15000, currency="INR", billing_interval="month", billing_frequency=1, display_order=3,
     )
+    # Free trial (spec follow-up): its own distinct plan, price=0, with a
+    # configurable trial_period_days rather than an attribute bolted onto
+    # one of the paid plans above - "process will be the same" per the
+    # feature request, so it goes through the exact same subscribe/
+    # activate/expire flow as any other plan, just with is_trial=True.
+    _get_or_create_plan(
+        db, application, plan_code="FREE_TRIAL", name="Free Trial", description="Try Everyticket free for 14 days",
+        price=0, currency="INR", billing_interval="month", billing_frequency=1, display_order=0,
+        is_trial=True, trial_period_days=14,
+    )
 
     _get_or_create_transition(db, application, basic, professional, "UPGRADE")
     _get_or_create_transition(db, application, basic, enterprise, "UPGRADE")
@@ -233,6 +243,12 @@ def seed(db: Session) -> AdminUser:
         subject="Your {{ plan_name }} subscription expires soon",
         body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.</p>",
         body_text="Your {{ plan_name }} subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.",
+    )
+    _get_or_create_template(
+        db, template_code="trial_ending",
+        subject="Your free trial ends soon",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> free trial ends on {{ expires_at }}. Subscribe to a paid plan from your account portal before then to keep access without interruption.</p>",
+        body_text="Your {{ plan_name }} free trial ends on {{ expires_at }}. Subscribe to a paid plan from your account portal before then to keep access without interruption.",
     )
     _get_or_create_template(
         db, template_code="invoice_generated",

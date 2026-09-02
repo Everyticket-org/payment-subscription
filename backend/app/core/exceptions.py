@@ -125,6 +125,30 @@ class ActionNotAllowed(AppError):
     error_code = "ACTION_NOT_ALLOWED"
 
 
+class TrialAlreadyUsed(AppError):
+    """This customer has already used a free trial for this application, in
+    any subscription status (PENDING_PAYMENT/ACTIVE/EXPIRED/CANCELLED all
+    count) - "one credentials can take only one trial lifetime". Raised
+    both from an application-level pre-check and from an IntegrityError
+    caught around the DB-level partial unique index
+    (uq_one_trial_subscription_per_customer_application), so a race between
+    two concurrent trial-signup requests for the same customer can only
+    ever result in one created subscription, never a raw 500."""
+
+    http_status = 409
+    error_code = "TRIAL_ALREADY_USED"
+
+
+class InvalidPlanConfiguration(AppError):
+    """A trial plan (is_trial=True) without a positive trial_period_days,
+    a trial plan with a non-zero price, or a non-trial plan with a
+    non-positive price (spec follow-up: free trial as a separate,
+    configurable-duration plan)."""
+
+    http_status = 422
+    error_code = "INVALID_PLAN_CONFIGURATION"
+
+
 class WebhookAlreadyDelivered(AppError):
     """An admin tried to manually retry a webhook delivery that has
     already SUCCEEDED (spec section 32: "Do not create duplicate

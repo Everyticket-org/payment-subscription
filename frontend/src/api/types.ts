@@ -15,6 +15,8 @@ export interface Plan {
   billing_interval: string;
   billing_frequency: number;
   description?: string | null;
+  is_trial?: boolean;
+  trial_period_days?: number | null;
 }
 
 export interface Customer {
@@ -41,6 +43,7 @@ export interface PortalSubscriptionOut extends SubscriptionOut {
   currency: string;
   billing_interval: string;
   billing_frequency: number;
+  is_trial?: boolean;
 }
 
 export interface PayUCheckoutFields {
@@ -245,6 +248,8 @@ export interface PlanAdminOut {
   billing_frequency: number;
   active: boolean;
   display_order: number;
+  is_trial: boolean;
+  trial_period_days?: number | null;
   features: PlanFeatureAdminOut[];
 }
 
@@ -257,6 +262,8 @@ export interface PlanCreateInput {
   billing_interval?: "month" | "year";
   billing_frequency?: number;
   display_order?: number;
+  is_trial?: boolean;
+  trial_period_days?: number | null;
 }
 
 export interface PlanUpdateInput {
@@ -268,6 +275,8 @@ export interface PlanUpdateInput {
   billing_frequency?: number;
   active?: boolean;
   display_order?: number;
+  is_trial?: boolean;
+  trial_period_days?: number | null;
 }
 
 export interface PlanTransitionOut {
@@ -309,6 +318,7 @@ export interface SubscriptionAdminOut {
   cancelled_at: string | null;
   cancellation_reason: string | null;
   created_at: string;
+  is_trial?: boolean;
 }
 
 export interface SubscriptionHistoryOut {

@@ -59,9 +59,23 @@ export function SubscribePage() {
     // panel just stays empty), so it's swallowed rather than surfaced
     // via the page's main ErrorBanner.
     listPlans()
-      .then((all) => setOtherPlans(all.filter((p) => p.plan_code !== planCode)))
+      .then((all) =>
+        setOtherPlans(
+          all.filter((p) => {
+            if (p.plan_code === planCode) return false;
+            // A signed-in customer switching plans here goes through the
+            // upgrade/downgrade path (spec follow-up), which never accepts
+            // a free trial plan as a target - so don't offer one. A
+            // brand-new, not-signed-in visitor can still see and pick a
+            // trial plan (a genuinely new subscription, where the one-
+            // trial-per-lifetime check runs server-side).
+            if (customerToken && p.is_trial) return false;
+            return true;
+          }),
+        ),
+      )
       .catch(() => {});
-  }, [planCode]);
+  }, [planCode, customerToken]);
 
   if (!planCode) {
     return <p>No plan selected.</p>;
@@ -290,7 +304,7 @@ export function SubscribePage() {
               <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
                 <span className="plan-mini-name">{p.name}</span>
                 <span className="plan-mini-price">
-                  {p.currency} {p.price.toFixed(2)}
+                  {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
                 </span>
               </Link>
             ))}
