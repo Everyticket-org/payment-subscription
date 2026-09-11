@@ -158,6 +158,13 @@ def process_gateway_result(
     subscription = transaction.subscription
     application = db.get(Application, subscription.application_id)
     invoice: Invoice | None = None
+    # Populated below whenever a real Everyticket webhook event is
+    # queued for this payment - used AFTER commit (see below) to kick
+    # off one immediate, non-blocking delivery attempt per event
+    # (2026-09-11 follow-up: "why its not being called properly on
+    # payment success" - see webhook_service.attempt_soon()'s docstring
+    # for the full explanation).
+    queued_webhook_event_ids: list[str] = []
 
     if result.status == PaymentStatus.SUCCESS.value:
         if transaction.payment_type == PaymentType.UPGRADE.value:
@@ -186,9 +193,12 @@ def process_gateway_result(
 
         # Outbound Everyticket webhook (spec sections 19, 31, 33): a pure
         # DB write here (see app/webhooks/service.py's module docstring
-        # for why) - the actual HTTP delivery happens out-of-band via the
-        # Celery beat sweep in app/webhooks/tasks.py, never synchronously
-        # inside this transaction (spec section 58).
+        # for why) - never synchronously inside this transaction (spec
+        # section 58). The real HTTP delivery attempt happens after this
+        # transaction commits below: an immediate, backgrounded
+        # attempt_soon() call (2026-09-11 follow-up) plus, as a backstop
+        # for anything that fails or was somehow missed, the Celery beat
+        # sweep in app/webhooks/tasks.py.
         #
         # PaymentType.NEW (first-ever activation, "onboarding") gets its
         # own richer payload - the customer's full registration-form
@@ -209,7 +219,7 @@ def process_gateway_result(
                     .order_by(CustomerRegistrationData.created_at.desc())
                     .first()
                 )
-                webhook_service.queue_event(
+                _queued_event = webhook_service.queue_event(
                     db,
                     application=application,
                     event_type="subscription.activated",
@@ -227,12 +237,14 @@ def process_gateway_result(
                         registration_data=(registration_entry.data if registration_entry else {}),
                     ),
                 )
+                if _queued_event is not None:
+                    queued_webhook_event_ids.append(_queued_event.event_id)
             elif transaction.payment_type == PaymentType.RENEWAL.value:
                 # Trimmed to just subscription_id (2026-09 follow-up 3:
                 # "Renew, Expire, Cancel, Archived ... payload with
                 # subscription ID") - Everyticket looks up anything else
                 # about the subscription by this ID.
-                webhook_service.queue_event(
+                _queued_event = webhook_service.queue_event(
                     db,
                     application=application,
                     event_type="subscription.renewed",
@@ -240,6 +252,8 @@ def process_gateway_result(
                     entity_id=subscription.subscription_id,
                     payload=renewed_payload(subscription_id=subscription.subscription_id),
                 )
+                if _queued_event is not None:
+                    queued_webhook_event_ids.append(_queued_event.event_id)
             else:
                 # UPGRADE/DOWNGRADE - not part of Vishal's numbered webhook
                 # list, so these keep their existing, richer payload shape
@@ -248,7 +262,7 @@ def process_gateway_result(
                     PaymentType.UPGRADE.value: "subscription.upgraded",
                     PaymentType.DOWNGRADE.value: "subscription.downgraded",
                 }[transaction.payment_type]
-                webhook_service.queue_event(
+                _queued_event = webhook_service.queue_event(
                     db,
                     application=application,
                     event_type=webhook_event_type,
@@ -263,6 +277,8 @@ def process_gateway_result(
                         "transaction_id": transaction.transaction_id,
                     },
                 )
+                if _queued_event is not None:
+                    queued_webhook_event_ids.append(_queued_event.event_id)
     elif result.status == PaymentStatus.FAILED.value:
         subscription_service.mark_payment_failed(db, subscription=subscription)
         audit_service.record(
@@ -279,6 +295,18 @@ def process_gateway_result(
 
     db.commit()
     db.refresh(transaction)
+
+    # Real webhook delivery attempt(s) - AFTER the financial transaction
+    # above has committed, same "never inside that commit" rule as the
+    # emails below (spec section 58), and non-blocking: attempt_soon()
+    # hands off to a background thread with its own DB session, so this
+    # request returns exactly as fast as it did before this event was
+    # added - it never waits on the outbound HTTP call. Without this, a
+    # queued event's very first attempt depended entirely on the Celery
+    # beat schedule eventually picking it up (still true for any RETRY
+    # after a failure - this only ever makes one immediate attempt).
+    for _event_id in queued_webhook_event_ids:
+        webhook_service.attempt_soon(_event_id)
 
     # Confirmation email (spec section 49) - sent AFTER the financial
     # transaction above has committed, never inside it (spec section 58:

@@ -1945,6 +1945,96 @@ connection this throwaway test environment doesn't have). Frontend
 `tsc -b && vite build` clean; `oxlint` 0 errors, 9 warnings (same
 pre-existing count as follow-up 5, no new warnings introduced).
 
+## 2026-09-11 (follow-up 7): real webhook dispatch no longer depends on Celery at all; bounded HTTP timeouts + a bigger DB pool to stop admin API "freezing"
+
+Vishal's follow-up, verbatim: "still api shows pending.. it has to be
+called properly which is working on attempt button perfectly. why its
+not being call properly on payment success[.] Also attempt call is also
+taking time including payu success and return time as well.. all API
+get freesed in admin panel."
+
+**Two separate real problems, both root-caused by reading the actual
+code rather than guessing:**
+
+1. **Still PENDING on payment success, confirming follow-up 6's
+   diagnosis**: `webhook_service.queue_event()` is a deliberate pure DB
+   write (spec section 58: no external HTTP call held open inside a
+   financial-transaction commit) - the actual HTTP attempt only ever
+   happened via `dispatch_pending()`, only ever invoked by Celery beat.
+   Since Vishal isn't running Celery worker+beat (or Docker Compose),
+   nothing was ever actually attempting a real event's delivery at all -
+   exactly why "Attempt" (which calls the real dispatch logic directly,
+   synchronously, on demand) "works perfectly" while an automatic
+   delivery just sat there.
+2. **"All API get freezed"**: `_attempt_one()` (shared by dispatch,
+   Attempt, and Verify connectivity) built its `httpx.Client` with a
+   flat `timeout=10.0`, which httpx applies to EACH phase (connect/
+   read/write/pool) independently, not as one combined budget - so a
+   single unreachable/slow destination could hold a request thread, and
+   the DB connection its session was still checked out with, open for
+   well over 10 seconds. `app/core/database.py`'s engine never set an
+   explicit `pool_size`/`max_overflow`, so it ran on SQLAlchemy's
+   defaults (5 + 10 = 15 total connections) - a couple of concurrently
+   slow/stuck webhook attempts were enough to exhaust that and make
+   every OTHER admin request (including completely unrelated pages)
+   block for up to `pool_timeout` waiting for a connection to free up.
+   This is a real, general resource-exhaustion risk, not something
+   specific to the new Attempt button - it would affect any concurrent
+   slow outbound call in this app.
+
+**Fix, three parts:**
+
+1. **`webhook_service.attempt_soon(event_id)`** (`app/webhooks/service.py`,
+   new) - called right after a real business event's enclosing
+   transaction commits (`app/payments/service.py`'s `process_gateway_result`,
+   for the activation/renewal/upgrade/downgrade events it queues), it
+   spawns a short-lived background thread with its OWN fresh DB session
+   (mirroring `app/webhooks/tasks.py`'s Celery-task pattern exactly) and
+   makes ONE real, immediate delivery attempt - never blocking the
+   caller (the payment-success API response returns exactly as fast as
+   before), never holding the request's own DB connection open for the
+   duration of the outbound call, and never touching anything before
+   the commit (spec section 58 is still fully respected - the call only
+   happens after `db.commit()`, same placement as the existing
+   confirmation-email sends). Celery beat remains the only thing that
+   ever RETRIES a delivery that failed on this first attempt - nothing
+   about the retry schedule, EXHAUSTED handling, or the admin Attempt/
+   Retry actions changes. Net effect: a real payment's webhook now
+   actually gets sent within moments of the payment succeeding, with
+   zero dependency on Celery being up at all - Celery is now purely a
+   retry backstop, not a requirement for the very first attempt.
+2. **Bounded HTTP timeouts**: replaced every flat `httpx.Client(timeout=10.0)`
+   webhook call (`_attempt_one()`, used by dispatch/Attempt/Verify/the
+   new attempt_soon(), and `send_ad_hoc_webhook()`, used by Verify
+   connectivity and the Testing module's ad-hoc send) with a proper
+   split `httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=3.0)` (or
+   the equivalent scaled to `send_ad_hoc_webhook`'s own timeout
+   parameter) - bounds a single stuck destination to a predictable ~5-8s
+   worst case instead of an unbounded-feeling 10s+ per phase.
+3. **Bigger DB connection pool**: `app/core/database.py`'s engine now
+   sets `pool_size=10, max_overflow=20, pool_timeout=30` explicitly
+   (was: SQLAlchemy's defaults, 5 + 10) - a defensive safety margin so a
+   few concurrently slow outbound calls (now bounded to ~5-8s each by
+   the point above) can't cascade into blocking unrelated requests
+   app-wide the way Vishal described.
+
+New test file `tests/test_webhook_attempt_soon.py` (5 tests):
+`attempt_soon()` makes a real attempt (success and failure cases,
+`threading.Thread` patched to run synchronously for determinism, no
+sleep/poll); a `None` event id (the "no destination configured" case)
+is a safe no-op that never spawns a thread; an unknown event id is
+swallowed rather than raised; and an integration-level test that drives
+a real subscribe + mock-payment-success round trip through the actual
+API and asserts `PaymentService` calls `webhook_service.attempt_soon()`
+with the real, just-queued activation event's id - the concrete wiring
+Vishal's bug report was about, not just the underlying function in
+isolation.
+
+Verified: 173 total backend tests, 172 passing (same pre-existing,
+unrelated `/ready` DB-connectivity gap only). Frontend unaffected by
+this pass (backend-only) - `tsc -b && vite build` and `oxlint` re-run
+anyway to confirm: clean, same 9 pre-existing warnings.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

@@ -10,13 +10,27 @@ external dependency required" philosophy for the payment gateways):
     external HTTP call held open inside a financial-transaction commit).
     It creates a durable WebhookEvent + WebhookDelivery(PENDING) row and
     touches no network and no Celery/Redis at all.
-  - dispatch_pending() is the actual delivery sweep: finds every
+  - dispatch_pending() is the periodic delivery sweep: finds every
     delivery that's due (PENDING, or FAILED with next_retry_at in the
     past) and attempts each once over HTTP, updating retry bookkeeping
     per WEBHOOK_RETRY_SCHEDULE_MINUTES. app/webhooks/tasks.py's Celery
     beat task calls this periodically in a running deployment; a test
     can call it directly (optionally with a fake httpx client) with zero
-    Celery involved.
+    Celery involved. This is what actually retries a FAILED delivery -
+    it depends on the Celery worker+beat processes actually running.
+  - attempt_soon() (2026-09-11 follow-up) is the immediate path: called
+    right after a real business event's enclosing transaction commits
+    (e.g. PaymentService, after a payment succeeds), it makes ONE real
+    delivery attempt in a background thread with its own DB session -
+    never blocking its caller, never depending on Celery being up at
+    all. Before this existed, a queued delivery's very first attempt
+    depended entirely on dispatch_pending() eventually being invoked by
+    Celery beat - if that background process wasn't running (the
+    default for a plain `uvicorn` run per this repo's own README, unless
+    Docker Compose or the worker+beat commands are also started), a
+    real delivery sat at PENDING with no response forever, exactly what
+    Vishal reported ("webhook called from payment success to
+    everyticket does not show response and show pending only").
 
 Every delivery is HMAC-SHA256 signed (X-Webhook-Signature: sha256=<hex>,
 over the raw JSON body) using the destination application's own
@@ -50,6 +64,7 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -58,6 +73,7 @@ from sqlalchemy.orm import Session
 
 from app.applications.models import Application, CustomerApplicationMapping
 from app.core.config import get_settings
+from app.core.database import SessionLocal
 from app.core.enums import ProvisioningStatus, WebhookDeliveryStatus
 from app.core.ids import new_event_id
 from app.subscriptions.models import Subscription
@@ -66,6 +82,20 @@ from app.webhooks.models import WebhookDelivery, WebhookEvent
 logger = logging.getLogger("subscription")
 
 _ACTIVATION_EVENT_TYPE = "subscription.activated"
+
+# Bounds how long any single delivery attempt can hold its DB connection
+# and block its caller (2026-09-11 follow-up: Vishal reported "attempt
+# call is also taking time including payu success and return time as
+# well.. all API get freesed in admin panel" - traced to the flat
+# httpx.Client(timeout=10.0) this module used to construct everywhere,
+# which applies 10s independently to EACH phase (connect/read/write/pool)
+# rather than one combined 10s budget, so a single stuck destination
+# could hold a request - and the DB connection its session was still
+# holding - open for well over 10s. A real, unreachable, or slow-to-
+# respond Everyticket destination should fail fast and predictably
+# instead. Every httpx.Client this module constructs for a webhook
+# attempt now uses this same bounded timeout.
+_WEBHOOK_HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=5.0, write=5.0, pool=3.0)
 
 
 def _resolve_destination(application: Application | None) -> tuple[str | None, str | None]:
@@ -133,6 +163,64 @@ def queue_event(
     return event
 
 
+def _attempt_soon_worker(event_id: str) -> None:
+    """Runs in its own background thread with its own DB session/
+    connection - never the caller's - so it can never hold the caller's
+    request or its DB connection open, and never needs the caller's own
+    transaction to still be in scope. Opens fresh, attempts, closes,
+    exactly like app/webhooks/tasks.py's Celery task does; the only
+    difference is what triggers it (a real event just being queued,
+    right here, instead of a periodic beat tick)."""
+    db = SessionLocal()
+    try:
+        event = db.query(WebhookEvent).filter(WebhookEvent.event_id == event_id).first()
+        if event is None:
+            logger.warning("attempt_soon: webhook event %s not found - nothing to attempt", event_id)
+            return
+        for delivery in event.deliveries:
+            if delivery.status != WebhookDeliveryStatus.PENDING.value:
+                continue
+            try:
+                _attempt_one(db, delivery)
+            except Exception:
+                logger.exception("attempt_soon: delivery %s for event %s failed unexpectedly", delivery.id, event_id)
+    except Exception:
+        logger.exception("attempt_soon: failed to process webhook event %s", event_id)
+    finally:
+        db.close()
+
+
+def attempt_soon(event_id: str | None) -> None:
+    """Kicks off one real, immediate delivery attempt for a just-queued
+    webhook event in the background - added per Vishal: "why its not
+    being called properly on payment success" (2026-09-11 follow-up).
+
+    queue_event() above is deliberately a pure DB write with no network
+    call, so a real business event (a payment succeeding, a renewal, a
+    cancellation...) used to depend ENTIRELY on the Celery beat schedule
+    (app/core/celery_app.py, every 60s) ever attempting it at all - if
+    that background process wasn't running, the delivery sat at PENDING
+    forever, exactly what Vishal reported ("show pending only"). This
+    function is called right after the enclosing transaction commits
+    (never before - see queue_event()'s own docstring and spec section
+    58, which this still respects: no external HTTP call is ever made
+    INSIDE that commit) and spawns a short-lived background thread that
+    makes the real attempt on its own schedule, own session, own
+    connection - the caller (e.g. the payment-success API request) is
+    never blocked waiting for it and never holds its own DB connection
+    open any longer because of it. Celery beat is still what retries a
+    FAILED delivery later (this only ever makes ONE immediate attempt);
+    nothing about the retry schedule, EXHAUSTED handling, or the admin
+    Attempt/Retry actions changes.
+
+    A no-op (logged, swallowed) if event_id is None - the normal
+    "no destination configured" case queue_event() already handles by
+    returning None and queueing nothing at all."""
+    if event_id is None:
+        return
+    threading.Thread(target=_attempt_soon_worker, args=(event_id,), daemon=True).start()
+
+
 def _sign(secret: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
@@ -171,7 +259,7 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     delivery.request_headers = headers
 
     owns_client = http_client is None
-    client = http_client or httpx.Client(timeout=10.0)
+    client = http_client or httpx.Client(timeout=_WEBHOOK_HTTP_TIMEOUT)
     try:
         response = client.post(delivery.destination_url, content=body, headers=headers)
         delivery.http_status = response.status_code
@@ -451,7 +539,7 @@ def attempt_delivery_with_client(
 
 
 def send_ad_hoc_webhook(
-    *, application: Application, payload: dict, extra_headers: dict[str, str] | None = None, timeout: float = 10.0
+    *, application: Application, payload: dict, extra_headers: dict[str, str] | None = None, timeout: float = 8.0
 ) -> dict:
     """A one-off signed POST of a given JSON payload to the application's
     configured webhook destination - the actual HTTP send shared by the
@@ -485,7 +573,11 @@ def send_ad_hoc_webhook(
 
     started = _time.monotonic()
     try:
-        with httpx.Client(timeout=timeout) as client:
+        # Same connect/read split as _WEBHOOK_HTTP_TIMEOUT above, scaled to
+        # this function's own (admin-overridable) timeout parameter rather
+        # than hardcoding it, so an explicit caller-provided timeout is
+        # still honored end to end.
+        with httpx.Client(timeout=httpx.Timeout(connect=min(timeout, 3.0), read=timeout, write=timeout, pool=3.0)) as client:
             response = client.post(url, content=body, headers=headers)
         elapsed_ms = round((_time.monotonic() - started) * 1000, 1)
         return {
