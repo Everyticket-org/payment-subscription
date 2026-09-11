@@ -1590,6 +1590,48 @@ pre-existing `setState`-in-`useEffect` warning pattern already present
 on the Plans page's edit modal, now also present on this one, following
 the same established convention).
 
+## 2026-09-11 (follow-up): TEST EVERYTICKET WEBHOOK result now stored even on failure
+
+Vishal's feedback, verbatim: "store the response from webhook even if its
+error, to everyticket." Follow-up on the "Secret Key" question just
+before it, about the admin Testing/Developer Tools "Test Everyticket
+webhook" tool (`POST /admin/testing/webhook/send`,
+`webhook_service.send_ad_hoc_webhook()`).
+
+That tool already returned the full request/response/error/elapsed-time
+detail in its live HTTP response (shown inline on the admin Testing
+page), and a REAL webhook delivery (the actual `subscription.*` events)
+already stores its `http_status`/`response_body` on the `WebhookDelivery`
+row regardless of success or failure - that part was already correct.
+The gap was specific to this ad-hoc diagnostic tool: it deliberately
+never writes a `WebhookEvent`/`WebhookDelivery` row (it's a live poke at
+the destination, not a real business event - see
+`send_ad_hoc_webhook()`'s own docstring), and its `TEST_WEBHOOK_SENT`
+audit-log entry only recorded `{sent, http_status}` - dropping
+`response_body`/`error`/the request that was sent. So a failed test send
+was visible only in the admin's browser for as long as that page stayed
+open; refresh or navigate away and it was gone.
+
+Fixed by storing the tool's entire result dict (already truncated to a
+sane size by `send_ad_hoc_webhook()`) as the audit entry's `new_value`
+instead of the trimmed `{sent, http_status}` pair - `response_body`/
+`error`/`elapsed_ms`/the request (url/headers/payload) sent are now all
+in the same durable audit-log row, viewable later from Admin → Audit
+Logs regardless of whether the test send succeeded or failed. No schema
+change - `AuditLog.new_value` is already a JSON column with no fixed
+size limit, and the admin Audit Logs page already pretty-prints
+`new_value` in its expandable row - nothing new needed there either.
+
+Verified: new `test_webhook_send_result_is_stored_in_audit_log_even_on_failure`
+in `tests/test_admin_testing.py`, asserting the failure case (nothing
+listens at the fallback `EVERYTICKET_WEBHOOK_URL` in this test
+environment, so the send genuinely fails) is captured byte-for-byte the
+same as what the live HTTP response returned. Full suite: 151 total
+backend tests, 150 passing (same pre-existing `/ready` gap only - the
+other, unrelated PDF-cache environment failure noted in the previous
+entry did not recur this run, consistent with it being an environment
+flake rather than a real regression). No frontend changes needed.
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

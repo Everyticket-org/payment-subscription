@@ -212,6 +212,38 @@ def test_webhook_send_returns_request_response_shape(client, seeded_db):
         assert "error" in body
 
 
+def test_webhook_send_result_is_stored_in_audit_log_even_on_failure(client, seeded_db):
+    """A test send that fails (nothing is listening at the fallback
+    EVERYTICKET_WEBHOOK_URL in this test environment) must still be
+    durably recorded - not just returned in the live HTTP response and
+    then lost the moment the admin navigates away. TEST_WEBHOOK_SENT's
+    audit entry now stores the full result dict, so the error/response
+    detail is reviewable later from Audit Logs regardless of outcome."""
+    headers = _admin_headers(client)
+    resp = client.post(
+        "/api/v1/admin/testing/webhook/send",
+        json={"payload": {"hello": "world"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    live_result = resp.json()
+
+    logs = client.get("/api/v1/admin/audit-logs", params={"action": "TEST_WEBHOOK_SENT"}, headers=headers)
+    assert logs.status_code == 200, logs.text
+    entries = logs.json()["items"]
+    assert len(entries) >= 1
+    stored = entries[0]["new_value"]
+
+    # The exact same fields the live response carried (sent/http_status,
+    # and - since nothing is listening at the configured fallback URL in
+    # this test environment - error) must have been persisted, not just
+    # a trimmed-down sent/http_status pair.
+    assert stored["sent"] == live_result["sent"]
+    assert stored["sent"] is False
+    assert "error" in stored and stored["error"]
+    assert stored["error"] == live_result["error"]
+
+
 def test_test_email_sends_via_faked_smtp(client, seeded_db, monkeypatch):
     monkeypatch.setattr(smtp_provider.smtplib, "SMTP", _FakeSMTP)
     headers = _admin_headers(client)

@@ -311,13 +311,21 @@ def test_webhook_send(
     WebhookEvent/WebhookDelivery row, since this is a live diagnostic
     send, not a real business event."""
     result = webhook_service.send_ad_hoc_webhook(application=application, payload=body.payload, extra_headers=body.headers)
+    # Store the full result - including response_body/error on a failed
+    # send, not just sent/http_status - so a test send that errors is
+    # still reviewable later from Audit Logs, not only visible in the
+    # admin's browser for as long as this page stays open. response_body
+    # is already truncated to 4000 chars by send_ad_hoc_webhook(); the
+    # request dict (url/headers/payload) is included too since a
+    # signature header or destination misconfiguration is often exactly
+    # what an admin needs to see after the fact.
     audit_service.record(
         db,
         actor=admin.email,
         action="TEST_WEBHOOK_SENT",
         entity_type="application",
         entity_id=application.code,
-        new_value={"sent": result.get("sent"), "http_status": result.get("http_status")},
+        new_value=result,
         ip_address=_client_ip(request),
     )
     db.commit()
