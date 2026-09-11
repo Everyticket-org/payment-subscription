@@ -6,9 +6,16 @@ the fields he listed, and simplified the wire envelope to just
 event_type + payload):
 
   1. onboarding_payload  - subscription.activated, first-time signup.
-     Payload: subscription_id, email, mobile, plan_code, plan_name,
-     price, is_trial, expires_at, registration_data (the customer's own
-     form answers).
+     Payload: subscription_id, email, phone_number, plan_code, plan_name,
+     price, is_trial, expires_at, plus every registration-form answer
+     merged in FLAT at the top level (2026-09-11 follow-up: "Keep the
+     key for email and phone number as below shown in JSON... Pass
+     payload like this flat structure including registration form
+     data.." - registration_data used to be nested under its own key;
+     it is now spread directly alongside the other fields instead, and
+     the phone number's wire key changed from "mobile" to
+     "phone_number" - the Customer model's own column is still called
+     mobile, only the outbound JSON key name changed).
   2. renewed_payload  - subscription.renewed, an existing subscription
      is renewed on its current plan. Payload: subscription_id only.
   3. expiry_payload   - subscription.expired, plan expires unrenewed.
@@ -50,27 +57,42 @@ def onboarding_payload(
     CustomerRegistrationData) so Everyticket can provision the account
     without a second round-trip to ask for the same details.
 
-    email/mobile were re-added in a follow-up ("in activated json,
-    customer data also need to be there.. email and mobile as part of
-    payload or registration data") - kept as their own top-level fields
-    rather than folded into registration_data, since they're account-
-    level identity, not a form answer, and every subscribe flow has them
-    regardless of what the registration form asks. Still no customer_id
-    or external identity here - trimmed to exactly the fields Vishal
-    asked to keep. Everyticket's own response to THIS delivery is what
-    assigns the external identity (spec section 32) - see
-    app.webhooks.service._handle_activation_outcome, which upserts
+    email/mobile were re-added in an earlier follow-up ("in activated
+    json, customer data also need to be there.. email and mobile as
+    part of payload or registration data") - kept as their own
+    top-level fields rather than folded into registration_data, since
+    they're account-level identity, not a form answer, and every
+    subscribe flow has them regardless of what the registration form
+    asks.
+
+    2026-09-11 follow-up ("Keep the key for email and phone number as
+    below shown in JSON: {email, phone_number}... Pass payload like
+    this flat structure including registration form data.."): the wire
+    key for the customer's mobile number is now "phone_number" (this
+    function's own `mobile` parameter name is unchanged - it still maps
+    onto the Customer model's own `mobile` column, only the JSON key
+    sent over the wire changed), and registration_data's fields are now
+    spread directly at the top level of the payload instead of nested
+    under a "registration_data" key - the fixed fields below always
+    win if a registration form's field_key happens to collide with one
+    of them, so a customer-editable form answer can never silently
+    overwrite subscription_id/email/phone_number/plan/price/trial/expiry.
+
+    Still no customer_id or external identity here - trimmed to exactly
+    the fields Vishal asked to keep. Everyticket's own response to THIS
+    delivery is what assigns the external identity (spec section 32) -
+    see app.webhooks.service._handle_activation_outcome, which upserts
     CustomerApplicationMapping from that response."""
     return {
+        **registration_data,
         "subscription_id": subscription_id,
         "email": email,
-        "mobile": mobile,
+        "phone_number": mobile,
         "plan_code": plan_code,
         "plan_name": plan_name,
         "price": price,
         "is_trial": is_trial,
         "expires_at": expires_at,
-        "registration_data": registration_data,
     }
 
 

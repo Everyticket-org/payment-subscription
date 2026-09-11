@@ -261,7 +261,13 @@ def test_application_config_webhook_samples_cover_all_five_events_with_trimmed_p
     onboarding = samples["subscription.activated"]["payload"]
     assert onboarding["event_type"] == "subscription.activated"
     assert set(onboarding) == {"event_type", "payload"}  # just the two-field envelope, nothing merged in
-    assert "museum_name" in onboarding["payload"]["registration_data"]  # real seeded form field, not a placeholder
+    # registration-form answers are spread flat into the payload itself
+    # (no nested "registration_data" key) - museum_name is a real seeded
+    # form field, not a placeholder.
+    assert "museum_name" in onboarding["payload"]
+    assert "registration_data" not in onboarding["payload"]
+    assert "phone_number" in onboarding["payload"]
+    assert "mobile" not in onboarding["payload"]
 
     for event_type in ("subscription.renewed", "subscription.expired", "subscription.cancelled", "subscription.archived"):
         wire_body = samples[event_type]["payload"]

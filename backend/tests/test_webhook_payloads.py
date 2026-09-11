@@ -6,10 +6,15 @@ delete/archive when user do not renew for x days"; follow-up 3: "Add
 one more webhook for renew" plus an explicit trim of every payload):
 
   - subscription.activated ("onboarding") carries subscription_id,
-    email, mobile, plan code/name/price, is_trial, expires_at, and the
-    customer's full registration-form answers - the fields Vishal's
-    follow-up 3 list asked to keep, plus email/mobile re-added in a
-    follow-up ("customer data also need to be there").
+    email, phone_number, plan code/name/price, is_trial, expires_at,
+    and the customer's full registration-form answers spread FLAT at
+    the top level (not nested under a "registration_data" key) - the
+    fields Vishal's follow-up 3 list asked to keep, email/phone_number
+    re-added in a follow-up ("customer data also need to be there"),
+    and flattened + the mobile number's wire key renamed from "mobile"
+    to "phone_number" in a further follow-up ("Keep the key for email
+    and phone number as below shown in JSON... Pass payload like this
+    flat structure including registration form data..").
   - subscription.renewed / subscription.expired / subscription.cancelled
     / subscription.archived all carry subscription_id ONLY - Everyticket
     resolves anything else about the subscription by looking it up with
@@ -81,31 +86,34 @@ def test_onboarding_webhook_payload_has_exactly_the_fields_vishal_asked_to_keep(
         .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    # Subscription ID, customer form data (both email/mobile AND the
-    # dynamic registration form), plan code, name, price, is_trial,
-    # expiry date - exactly these nine keys, nothing more (no
+    # Subscription ID, customer identity (email/phone_number), plan
+    # code, name, price, is_trial, expiry date, and every registration
+    # form answer spread flat at the top level (not nested under a
+    # "registration_data" key) - exactly these keys, nothing more (no
     # customer_id/currency/status/starts_at/transaction_id/external
     # identity).
     assert set(event.payload) == {
         "subscription_id",
         "email",
-        "mobile",
+        "phone_number",
         "plan_code",
         "plan_name",
         "price",
         "is_trial",
         "expires_at",
-        "registration_data",
+        *registration_data.keys(),
     }
     assert event.payload["subscription_id"] == subscription.subscription_id
     assert event.payload["email"] == subscription.customer.email
-    assert event.payload["mobile"] == subscription.customer.mobile
-    assert event.payload["registration_data"] == registration_data
+    assert event.payload["phone_number"] == subscription.customer.mobile
+    assert event.payload["museum_name"] == "CSMVS"
+    assert event.payload["contact_person"] == "Asha Rao"
+    assert "registration_data" not in event.payload
     assert event.payload["plan_code"] == subscription.plan.plan_code
     assert event.payload["is_trial"] is False
 
 
-def test_onboarding_webhook_registration_data_defaults_to_empty_dict_when_none_submitted(client, seeded_db):
+def test_onboarding_webhook_adds_no_extra_keys_when_no_registration_data_submitted(client, seeded_db):
     _configure_webhook_destination(seeded_db)
     subscription = _subscribe_with_registration_data(
         client, seeded_db, email="onboarding-nodata@museum.example", registration_data={}
@@ -115,7 +123,36 @@ def test_onboarding_webhook_registration_data_defaults_to_empty_dict_when_none_s
         .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
         .one()
     )
-    assert event.payload["registration_data"] == {}
+    assert set(event.payload) == {
+        "subscription_id",
+        "email",
+        "phone_number",
+        "plan_code",
+        "plan_name",
+        "price",
+        "is_trial",
+        "expires_at",
+    }
+
+
+def test_onboarding_webhook_fixed_fields_win_over_a_colliding_registration_form_key(client, seeded_db):
+    """A registration form field_key can technically collide with one of
+    the fixed identity/plan fields (e.g. an admin names a custom field
+    "email"). The fixed field must always win, since it's the account-
+    level identity Everyticket relies on - a customer-editable form
+    answer must never be able to silently override it."""
+    _configure_webhook_destination(seeded_db)
+    subscription = _subscribe_with_registration_data(
+        client, seeded_db, email="onboarding-collision@museum.example",
+        registration_data={"email": "attacker-supplied@example.com", "plan_code": "FORGED"},
+    )
+    event = (
+        seeded_db.query(WebhookEvent)
+        .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
+        .one()
+    )
+    assert event.payload["email"] == subscription.customer.email
+    assert event.payload["plan_code"] == subscription.plan.plan_code
 
 
 def test_renewed_webhook_payload_is_subscription_id_only(client, seeded_db):

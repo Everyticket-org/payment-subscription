@@ -1765,6 +1765,51 @@ only - confirmed unrelated again this pass, no change to `app/main.py`
 or the DB layer). Frontend `tsc -b && vite build` clean; `oxlint` 0
 errors (same 9 pre-existing warnings, none in the changed file).
 
+## 2026-09-11 (follow-up 4): onboarding webhook payload flattened, mobile key renamed to phone_number
+
+Vishal's follow-up, verbatim: "Keep the key for email and phone number
+as below shown in JSON: {"email": ..., "phone_number": ...}...
+1. Pass payload like this flat structure including registration form
+data.." - a further trim/reshape of the `subscription.activated`
+("onboarding") webhook payload, the only one of the five real outbound
+Everyticket events that carries more than just `subscription_id`.
+
+Two changes, both in `app.webhooks.payloads.onboarding_payload()` (the
+single function shared by a real delivery and the admin Configuration
+screen's read-only "sample JSON" preview, so both stay in sync
+automatically):
+
+1. The wire key for the customer's mobile number is now `phone_number`
+   (was `mobile`). Only the outbound JSON key changed - the function's
+   own `mobile` parameter and the `Customer.mobile` column are
+   unchanged, this app's own public API (`POST /subscribe`, `/identify`,
+   etc.) still uses `mobile` throughout, exactly as before.
+2. Every registration-form answer the customer submitted at signup is
+   now spread directly at the top level of the payload instead of
+   nested under a `"registration_data"` key - e.g. `{"museum_name":
+   "CSMVS", ...}` alongside `subscription_id`/`email`/`phone_number`/
+   plan/price/trial/expiry, not `{"registration_data": {"museum_name":
+   "CSMVS"}}`. The fixed identity/plan fields always win if a
+   registration form's `field_key` happens to collide with one of them
+   (e.g. an admin names a custom field "email") - a customer-editable
+   form answer can never silently overwrite `subscription_id`,
+   `email`, `phone_number`, or the plan/price/trial/expiry fields.
+
+No migration - this only changes the shape of an outbound JSON payload,
+nothing stored. No frontend change needed either: the admin
+Configuration screen's webhook-sample viewer just
+`JSON.stringify`s whatever the backend returns.
+
+Verified: `tests/test_webhook_payloads.py`'s onboarding test rewritten
+for the flat shape (asserts `phone_number` present/`mobile` absent,
+registration fields present at top level/`registration_data` key
+absent), plus two new tests - one confirming no extra keys appear when
+no registration data was submitted, one confirming a colliding
+registration-form key (`email`, `plan_code`) never overrides the real
+value. `tests/test_admin_config.py`'s sample-JSON test updated to match.
+Full suite: 163 total backend tests, 162 passing (same pre-existing,
+unrelated `/ready` DB-connectivity gap only).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
