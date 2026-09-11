@@ -17,6 +17,29 @@ right now" immediately. Unlike the Testing module's TEST EVERYTICKET
 WEBHOOK tool, it is NOT gated by require_test_mode() - an admin needs to
 check real, live webhook connectivity in production too, not only in a
 test-mode sandbox.
+
+attempt_delivery (added per Vishal: "provide attempt button for each
+webhook log so we can try again from there. verify connectivity button
+get success for same API of webhook but webhook called from payment
+success to everyticket does not show response and show pending only.
+please review it properly") is a second deliberate exception, for the
+same reason. Root cause of the symptom Vishal described: a delivery
+queued by queue_event() (e.g. subscription.activated fired from
+PaymentService on a successful payment) is only ever actually attempted
+- a real outbound HTTP POST made - by dispatch_pending(), and nothing in
+this codebase calls dispatch_pending() except the Celery beat schedule.
+If the Celery worker+beat processes aren't running alongside the API
+(e.g. only `uvicorn` was started, or `docker compose up` was never run),
+a queued delivery sits at PENDING with http_status/response_body both
+still null forever - not because the attempt failed, but because it was
+never made. "Verify connectivity" never has this problem because it
+calls send_ad_hoc_webhook() synchronously from inside its own request
+handler, with zero dependency on Celery. attempt_delivery gives an admin
+that same Celery-independent, immediate-result path for one specific
+already-queued delivery, by calling the exact real-dispatch logic
+(webhook_service.attempt_delivery_with_client, which _attempt_one()
+also uses) directly from the request instead of waiting for the next
+beat tick.
 """
 from datetime import datetime, timezone
 
@@ -161,6 +184,48 @@ def retry_delivery(
         entity_id=str(delivery.id),
         old_value={"status": old_status},
         new_value={"status": delivery.status},
+    )
+    db.commit()
+    db.refresh(delivery)
+    return WebhookDeliveryOut.model_validate(delivery)
+
+
+@router.post("/deliveries/{delivery_id}/attempt", response_model=WebhookDeliveryOut)
+def attempt_delivery(
+    delivery_id: int,
+    db: Session = Depends(get_db),
+    admin: AdminUser = Depends(require_permission("WEBHOOKS_MANAGE")),
+):
+    """Makes one real, synchronous delivery attempt for this specific
+    delivery right now - the same webhook_service.attempt_delivery_with_client
+    / _attempt_one() logic dispatch_pending() uses for its automatic sweep,
+    just invoked directly from this request instead of waiting for the next
+    Celery beat tick (see this module's docstring for why a delivery can
+    otherwise sit at PENDING with no response indefinitely). Unlike
+    /retry, this endpoint blocks until the outbound HTTP call actually
+    returns, and the response reflects the real, immediate outcome -
+    http_status/response_body/response_headers/status/attempt_count/
+    next_retry_at are all fully updated by the time this returns, not just
+    reset to PENDING for a background process to pick up later."""
+    delivery = db.query(WebhookDelivery).filter(WebhookDelivery.id == delivery_id).first()
+    if delivery is None:
+        raise WebhookDeliveryNotFoundError(f"Unknown webhook delivery {delivery_id}")
+    if delivery.status == WebhookDeliveryStatus.SUCCESS.value:
+        raise WebhookAlreadyDelivered(
+            f"Webhook delivery {delivery_id} already succeeded - attempting it again risks a duplicate downstream instance"
+        )
+
+    old_status = delivery.status
+    succeeded = webhook_service.attempt_delivery_with_client(db, delivery)
+
+    audit_service.record(
+        db,
+        actor=admin.email,
+        action="WEBHOOK_DELIVERY_ATTEMPTED",
+        entity_type="webhook_delivery",
+        entity_id=str(delivery.id),
+        old_value={"status": old_status},
+        new_value={"status": delivery.status, "http_status": delivery.http_status, "succeeded": succeeded},
     )
     db.commit()
     db.refresh(delivery)

@@ -257,6 +257,14 @@ export const adminListWebhookDeliveries = (params: { status?: string; limit?: nu
 export const adminRetryWebhookDelivery = (deliveryId: number, token: string) =>
   api.post<WebhookDeliveryOut>(`/api/v1/admin/webhooks/deliveries/${deliveryId}/retry`, {}, token);
 
+// Attempt: unlike Retry (which only resets status back to PENDING for
+// the Celery beat schedule to eventually pick up), this makes one real,
+// synchronous delivery attempt right now and returns the fully updated
+// row - http_status/response_body/response_headers/status/attempt_count
+// all reflect what actually happened, immediately.
+export const adminAttemptWebhookDelivery = (deliveryId: number, token: string) =>
+  api.post<WebhookDeliveryOut>(`/api/v1/admin/webhooks/deliveries/${deliveryId}/attempt`, {}, token);
+
 // Verify connectivity: same request/response shape as the Testing
 // module's ad-hoc TEST EVERYTICKET WEBHOOK send (TestWebhookSendResult) -
 // this endpoint shares send_ad_hoc_webhook() under the hood, it just

@@ -1,7 +1,6 @@
 /** Admin Webhook Logs (spec sections 34-37, 51): recent events (with
  * their delivery attempts) and a standalone deliveries list with a
- * manual retry action. Retry only resets a delivery to PENDING - the
- * actual HTTP dispatch stays the Celery beat schedule's job.
+ * manual "Attempt" action.
  *
  * Per Vishal's follow-up ("I want to have response into webhook logs"):
  * every delivery row - success or failure - already stored the
@@ -19,13 +18,30 @@
  * "Verify connectivity" button sends a small signed ping to the
  * configured destination right now and reports back immediately -
  * without needing TEST_MODE or the separate Testing module page - then
- * reloads so the attempt is visible in the log below. */
+ * reloads so the attempt is visible in the log below.
+ *
+ * Per Vishal's latest follow-up ("provide attempt button for each
+ * webhook log so we can try again from there. verify connectivity
+ * button get success for same API of webhook but webhook called from
+ * payment success to everyticket does not show response and show
+ * pending only. please review it properly"): the per-delivery action
+ * button now calls POST .../attempt instead of .../retry, and shows for
+ * PENDING deliveries too (not just FAILED/EXHAUSTED) - a real payment's
+ * subscription.activated delivery is only ever actually sent by the
+ * Celery beat schedule (see admin_webhooks.py's backend docstring for
+ * the full root-cause explanation of why one can otherwise sit at
+ * PENDING with no response forever if that background process isn't
+ * running), so Attempt gives an admin the same Celery-independent,
+ * immediate-result path "Verify connectivity" already has, but for one
+ * specific already-queued delivery instead of a fixed ping. The plain
+ * /retry endpoint (reset to PENDING only, no HTTP call) still exists on
+ * the backend but is no longer used by this screen. */
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
+  adminAttemptWebhookDelivery,
   adminListWebhookDeliveries,
   adminListWebhookEvents,
-  adminRetryWebhookDelivery,
   adminVerifyWebhookConnectivity,
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
@@ -79,7 +95,7 @@ export function AdminWebhooksPage() {
   const [events, setEvents] = useState<WebhookEventOut[] | null>(null);
   const [deliveries, setDeliveries] = useState<WebhookDeliveryOut[] | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [retryingId, setRetryingId] = useState<number | null>(null);
+  const [attemptingId, setAttemptingId] = useState<number | null>(null);
   const [expandedDeliveryId, setExpandedDeliveryId] = useState<number | null>(null);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -97,18 +113,26 @@ export function AdminWebhooksPage() {
 
   useEffect(reload, [reload]);
 
-  async function handleRetry(deliveryId: number) {
+  async function handleAttempt(deliveryId: number) {
     if (!adminToken) return;
-    setRetryingId(deliveryId);
+    setAttemptingId(deliveryId);
     try {
-      await adminRetryWebhookDelivery(deliveryId, adminToken);
-      toast.success("Delivery re-queued");
+      const result = await adminAttemptWebhookDelivery(deliveryId, adminToken);
+      if (result.status === "SUCCESS") {
+        toast.success(`Delivered - HTTP ${result.http_status}`);
+      } else {
+        toast.error(
+          `Not delivered${result.http_status ? ` - HTTP ${result.http_status}` : ""}${
+            result.response_body ? `: ${result.response_body}` : ""
+          }`,
+        );
+      }
       reload();
     } catch (err) {
       setError(err);
       toast.error(err);
     } finally {
-      setRetryingId(null);
+      setAttemptingId(null);
     }
   }
 
@@ -137,8 +161,8 @@ export function AdminWebhooksPage() {
     <section>
       <h1>Webhook logs</h1>
       <p className="lede">
-        Outbound Everyticket webhook events and their delivery attempts. A retry only re-queues a delivery - the
-        actual dispatch runs on the next scheduled sweep.
+        Outbound Everyticket webhook events and their delivery attempts. Attempt makes one real delivery attempt
+        right now and shows the result immediately - it doesn't wait on the background dispatch sweep.
       </p>
 
       <ErrorBanner error={error} />
@@ -181,7 +205,11 @@ export function AdminWebhooksPage() {
 
       <div className="admin-panel">
         <h2>Deliveries</h2>
-        <p className="hint">Click a row to see the request/response headers and body (or error) that came back.</p>
+        <p className="hint">
+          Click a row to see the request/response headers and body (or error) that came back. Attempt sends the
+          delivery right now and reports back immediately, including a PENDING delivery that has never actually
+          been sent yet.
+        </p>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -206,16 +234,16 @@ export function AdminWebhooksPage() {
                     <td>{d.http_status ?? "-"}</td>
                     <td>{d.last_attempt_at ? new Date(d.last_attempt_at).toLocaleString() : "-"}</td>
                     <td>
-                      {(d.status === "FAILED" || d.status === "EXHAUSTED") && (
+                      {(d.status === "PENDING" || d.status === "FAILED" || d.status === "EXHAUSTED") && (
                         <button
                           className="button button-secondary"
-                          disabled={retryingId === d.id}
+                          disabled={attemptingId === d.id}
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleRetry(d.id);
+                            handleAttempt(d.id);
                           }}
                         >
-                          Retry
+                          {attemptingId === d.id ? "Attempting..." : "Attempt"}
                         </button>
                       )}
                     </td>

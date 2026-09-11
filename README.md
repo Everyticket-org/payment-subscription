@@ -144,7 +144,26 @@ database and exercises the full mock-payment subscription flow.
 | Seed dev data | `python -m app.core.seed` |
 | Run backend | `uvicorn app.main:app --reload` |
 | Run tests | `pytest tests/ -v` |
-| Run worker (once Celery tasks exist) | `celery -A app.core.celery_app worker --loglevel=info` |
+| Run worker | `celery -A app.core.celery_app worker --loglevel=info` |
+| Run scheduler (beat) | `celery -A app.core.celery_app beat --loglevel=info` |
+
+**Both the worker and the beat scheduler must be running** (alongside
+Redis and the backend) for any real, automatic webhook dispatch to ever
+happen - `app.webhooks.service.dispatch_pending` (the function that
+actually makes the outbound HTTP POST to Everyticket for a queued
+delivery) is only ever invoked by the `dispatch-pending-webhooks` beat
+schedule entry in `app/core/celery_app.py`, which fires every 60
+seconds. If only `uvicorn` is running (Option A above, without also
+starting these two processes in separate terminals), queued deliveries
+will sit at `PENDING` with no `http_status`/`response_body` forever -
+not because anything failed, but because they were never actually
+attempted. The admin Webhook Logs screen's "Attempt" button sidesteps
+this by making the real HTTP call immediately and synchronously from
+the request itself (the same way "Verify connectivity" already does),
+which is the quickest way to get a real result for one specific
+delivery without starting Celery at all - but the worker + beat
+processes above are still what's needed for dispatch to happen
+automatically, without an admin manually clicking Attempt every time.
 
 ## Documentation
 

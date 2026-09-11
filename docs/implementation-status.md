@@ -1855,6 +1855,96 @@ pre-existing count as before this pass (moving the new
 than exporting it from `RichTextEditor.tsx` avoided an otherwise-new
 `only-export-components` warning on that shared file).
 
+## 2026-09-11 (follow-up 6): "Attempt" button on webhook deliveries + root-caused why real deliveries stayed PENDING
+
+Vishal's follow-up, verbatim: "provide attempt button for each webhook
+log so we can try again from there. verify connectivity button get
+success for same API of webhook but webhook called from payment success
+to everyticket does not show response and show pending only. please
+review it properly."
+
+**Root cause** (this was the "review it properly" part - not a bug in
+the attempt logic itself, an operational/environment gap): a real
+webhook delivery - e.g. `subscription.activated` fired from
+`PaymentService` on a successful payment - is correctly queued by
+`queue_event()` (a pure DB write: `WebhookEvent` + `WebhookDelivery` at
+`PENDING`), but is only ever actually *attempted* (a real outbound HTTP
+POST made) by `webhook_service.dispatch_pending()`, and nothing in this
+codebase calls `dispatch_pending()` except the `dispatch-pending-webhooks`
+entry in `app/core/celery_app.py`'s Celery beat schedule (every 60s).
+That means real dispatch depends entirely on the Celery worker *and*
+beat processes running alongside the API - and the README's "Option A"
+manual/local-run instructions never mentioned starting either one, only
+the worker row existed at all ("once Celery tasks exist"), with no row
+for the beat scheduler specifically. If only `uvicorn` was ever started
+(the likely case here, since Docker Compose - which does start all of
+postgres/redis/backend/worker/scheduler - was still listed as "not yet
+verified in this pass" as of increment 13), a queued delivery sits at
+`PENDING` with `http_status`/`response_body` both `null` forever - it was
+never attempted, not failed. "Verify connectivity" never shows this
+symptom because it calls `send_ad_hoc_webhook()` synchronously from
+inside its own request handler (added in follow-up 3), with zero
+dependency on Celery.
+
+**Fix - two parts, deliberately not a change to the queue/dispatch
+architecture itself:**
+
+1. New `POST /admin/webhooks/deliveries/{id}/attempt` endpoint
+   (`app/api/v1/admin_webhooks.py`) - a second deliberate exception to
+   this module's "admin requests only queue, never block on an outbound
+   POST" rule (the first being `verify_connectivity`, follow-up 3, whose
+   docstring this one now cross-references). Calls
+   `webhook_service.attempt_delivery_with_client(db, delivery)` - the
+   exact same real-dispatch logic (`_attempt_one()`) `dispatch_pending()`
+   itself uses, including the provisioning-outcome handling for
+   `subscription.activated` events and the retry-schedule/EXHAUSTED
+   bookkeeping - directly from the request, so the response reflects a
+   real, immediate outcome (`http_status`/`response_body`/
+   `response_headers`/`status`/`attempt_count`/`next_retry_at` all
+   updated) instead of just resetting the row to `PENDING` for a future
+   sweep the way `/retry` does. Same `WEBHOOKS_MANAGE` permission gate
+   and already-SUCCESS refusal (`WebhookAlreadyDelivered`, HTTP 409) as
+   `/retry`; audit-logged as `WEBHOOK_DELIVERY_ATTEMPTED`. The existing
+   `/retry` endpoint is untouched and still exists.
+2. Webhook Logs admin screen (`AdminWebhooksPage.tsx`) - the per-delivery
+   action button now calls this new endpoint instead of `/retry`,
+   relabeled "Attempt", and now also shows for `PENDING` deliveries (not
+   only `FAILED`/`EXHAUSTED`) - a delivery that was never attempted at
+   all is exactly the case Vishal described. The resulting toast reflects
+   the real outcome ("Delivered - HTTP 200" / "Not delivered - HTTP 500:
+   ...") rather than the old generic "Delivery re-queued" message, which
+   no longer applies since this call already carries out the attempt.
+
+**Documentation fix**: `README.md`'s "Useful commands" table was missing
+a row for the Celery beat scheduler entirely (only listed the worker,
+captioned "once Celery tasks exist" - stale, since
+`app/webhooks/tasks.py` and three other scheduled tasks already exist).
+Added the missing `celery -A app.core.celery_app beat --loglevel=info`
+row and a paragraph directly under the table spelling out that both the
+worker and beat processes must be running for automatic dispatch to
+happen at all under the manual/local-run path (Option A) - Docker
+Compose's `scheduler` service already runs this, but that path is still
+unverified per increment 13's note, which is why the manual path's gap
+mattered here.
+
+New test file `tests/test_admin_webhooks_attempt.py` (6 tests): a
+`PENDING` delivery gets a real, populated response (not just a status
+flip) when attempted; a real failure is recorded the same way instead of
+staying blank; the `WEBHOOKS_MANAGE` permission gate; refusal to
+re-attempt an already-`SUCCESS` delivery; unknown delivery id -> 404; the
+audit log entry. Uses the same `httpx.Client` monkeypatch pattern
+`tests/test_webhooks.py`'s ad-hoc-send tests established (there's no
+`http_client` injection point reachable from an HTTP request, so the
+module-level `httpx.Client` reference itself has to be patched, capturing
+the real class first so the replacement factory doesn't recurse into
+itself).
+
+Verified: 168 total backend tests, 167 passing (same pre-existing,
+unrelated `/ready` DB-connectivity gap only - it needs a real Postgres
+connection this throwaway test environment doesn't have). Frontend
+`tsc -b && vite build` clean; `oxlint` 0 errors, 9 warnings (same
+pre-existing count as follow-up 5, no new warnings introduced).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
