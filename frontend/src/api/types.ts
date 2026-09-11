@@ -592,6 +592,14 @@ export interface RegistrationFormFieldOut {
   field_type: string;
   required: boolean;
   validation_rules?: Record<string, unknown> | null;
+  // Regex + custom message pair (Vishal's follow-up: "give one more
+  // option for validation by Regex and validation message fields to be
+  // set"). validation_pattern is checked with a whole-string match
+  // (matches HTML5 pattern attribute semantics) both here client-side
+  // (as a UX hint) and, as the actual source of truth, server-side on
+  // submit (see backend app.forms.validation).
+  validation_pattern?: string | null;
+  validation_message?: string | null;
   placeholder?: string | null;
   help_text?: string | null;
   options?: string[] | null;
@@ -608,6 +616,8 @@ export interface RegistrationFormFieldCreateInput {
   label: string;
   field_type: string;
   required?: boolean;
+  validation_pattern?: string;
+  validation_message?: string;
   placeholder?: string;
   help_text?: string;
   options?: string[];
@@ -617,6 +627,8 @@ export interface RegistrationFormFieldCreateInput {
 export interface RegistrationFormFieldUpdateInput {
   label?: string;
   required?: boolean;
+  validation_pattern?: string | null;
+  validation_message?: string | null;
   placeholder?: string;
   help_text?: string;
   options?: string[];

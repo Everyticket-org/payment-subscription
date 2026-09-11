@@ -391,6 +391,31 @@ select:focus {
   opacity: 1;
 }
 
+/* Inline field-level feedback (regex validation pattern editor on the
+   Registration Form admin page: invalid-regex error while typing, and
+   the "Test pattern" live match/no-match hint). */
+.field-error {
+  font-size: 13px;
+  color: var(--danger);
+  margin: -6px 0 0;
+}
+
+.field-hint-ok {
+  font-size: 13px;
+  color: var(--success);
+  font-weight: 600;
+}
+
+.field-hint-error {
+  font-size: 13px;
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.muted {
+  opacity: 0.6;
+}
+
 .banner {
   border-radius: 8px;
   padding: 12px 14px;

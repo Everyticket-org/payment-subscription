@@ -8,6 +8,16 @@
  * `file` fields render as a disabled placeholder - there's no file
  * upload/storage service yet (see docs/implementation-status.md), so
  * this deliberately doesn't pretend to support them.
+ *
+ * validation_pattern/validation_message (Vishal's follow-up: "give one
+ * more option for validation by Regex and validation message fields to
+ * be set") are wired in here as the native HTML5 pattern/title
+ * attributes on the input types that support `pattern` (text, email,
+ * tel, url) - a client-side convenience that lets the browser flag an
+ * invalid value before it's ever submitted. This is a UX nicety only:
+ * the backend re-checks the same pattern on every /subscribe call
+ * (app.forms.validation.validate_registration_data) regardless of what
+ * the browser did or didn't catch.
  */
 import { useEffect, useState } from "react";
 import { getRegistrationForm } from "../api/endpoints";
@@ -54,6 +64,15 @@ function renderInput(field: RegistrationFormFieldOut, value: string, onChange: (
     required: field.required,
     placeholder: field.placeholder ?? undefined,
     value,
+  };
+  // pattern/title only apply to the input types below that HTML5
+  // actually supports them on (text, email, tel, url) - passing pattern
+  // to a textarea/select/etc. would be silently ignored by the browser
+  // but is left off here for clarity.
+  const withPattern = {
+    ...common,
+    pattern: field.validation_pattern ?? undefined,
+    title: field.validation_message ?? undefined,
   };
 
   switch (field.field_type) {
@@ -106,12 +125,12 @@ function renderInput(field: RegistrationFormFieldOut, value: string, onChange: (
     case "number":
       return <input type="number" {...common} onChange={(e) => onChange(e.target.value)} />;
     case "email":
-      return <input type="email" {...common} onChange={(e) => onChange(e.target.value)} />;
+      return <input type="email" {...withPattern} onChange={(e) => onChange(e.target.value)} />;
     case "phone":
-      return <input type="tel" {...common} onChange={(e) => onChange(e.target.value)} />;
+      return <input type="tel" {...withPattern} onChange={(e) => onChange(e.target.value)} />;
     case "url":
-      return <input type="url" {...common} onChange={(e) => onChange(e.target.value)} />;
+      return <input type="url" {...withPattern} onChange={(e) => onChange(e.target.value)} />;
     default:
-      return <input type="text" {...common} onChange={(e) => onChange(e.target.value)} />;
+      return <input type="text" {...withPattern} onChange={(e) => onChange(e.target.value)} />;
   }
 }

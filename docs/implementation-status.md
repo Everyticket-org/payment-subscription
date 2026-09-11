@@ -1504,11 +1504,107 @@ gap) - `tests/test_webhook_payloads.py`'s onboarding-payload test
 updated to assert the new 9-key set including real `email`/`mobile`
 values. No new migration.
 
+## 2026-09-11: registration-form field Edit UI + regex validation + custom message
+
+Vishal's feedback, verbatim: "1. Registration form 1. Give option to
+Edit field feature, 2. For forms - give one more option for validation
+by Regex and validation message fields to be set."
+
+**Edit field (admin UI).** The backend `PUT /admin/registration-form/
+{id}` endpoint and `RegistrationFormFieldUpdate` schema already existed
+(increment 8) - the actual gap was purely on the frontend, which only
+exposed a create form plus two narrow quick-toggle buttons (Required/
+Active). `AdminRegistrationFormPage.tsx` now has a proper "Edit" button
+per row opening a popup (`Modal`, same component the Plans page's Add/
+Edit form uses) pre-filled with the field's label, placeholder, help
+text, options, display order, required, and the new validation pair.
+`field_key` and `field_type` are shown read-only in the modal - both
+remain immutable once a field is created, unchanged from the existing
+backend contract (`RegistrationFormFieldUpdate` never accepted either).
+
+**Regex validation + custom message.** Two new nullable columns on
+`registration_form_fields`: `validation_pattern` (String(500)) and
+`validation_message` (String(255)) - new migration
+`9f3a1c7d5e02_form_field_regex_validation`, additive/nullable, no data
+migration needed. Chosen as explicit typed columns rather than
+repurposing the pre-existing, completely-unused `validation_rules` JSON
+blob, for clarity in the admin UI and because Vishal asked for these as
+two distinct, nameable fields.
+
+- **Admin API boundary**: an invalid regex is rejected with 422 the
+  moment it's saved (`app.forms.schemas._check_regex`, wired via Pydantic
+  `field_validator` on both `RegistrationFormFieldCreate` and
+  `RegistrationFormFieldUpdate`) - never stored bad.
+- **Enforcement point**: `app.forms.validation.validate_registration_data()`,
+  called once at the top of `POST /subscribe` (before any customer/
+  subscription DB write, so it applies uniformly to new-customer and
+  repurchase flows alike). For each ACTIVE field with a configured
+  `validation_pattern`, if the customer submitted a non-blank value for
+  it and that value doesn't `re.fullmatch()` the pattern (whole-string
+  match, matching the HTML5 `pattern` attribute's own semantics), the
+  request is rejected 422 with the field's `validation_message` (or a
+  generic "`{label}` is not valid" fallback if none was set). A pattern
+  that somehow got stored invalid is skipped rather than ever 500ing a
+  real customer's request.
+- **Frontend**: `validation_pattern`/`validation_message` added to
+  `RegistrationFormFieldOut`/`Create`/`UpdateInput` in `api/types.ts`.
+  The admin create form and the new Edit modal both expose a "Validation
+  pattern" + "Validation message" pair, with a live regex-syntax check
+  and a "test this pattern against a sample value" helper so an admin
+  can sanity-check a regex before saving it. `DynamicRegistrationForm.tsx`
+  now also sets the native HTML5 `pattern`/`title` attributes on the
+  input types that support them (text/email/tel/url) as a client-side
+  UX hint - the backend re-check above remains the actual source of
+  truth regardless of what the browser catches.
+
+**Deliberately scoped out - "required" is still not enforced
+server-side.** The first draft of `validate_registration_data()` also
+enforced `required`, which broke ~60 pre-existing tests across nearly
+every test file: the seeded application has two required fields
+(`museum_name`, `contact_person`) that dozens of tests `/subscribe`
+without providing, since this was never checked before. Retrofitting
+every one of those call sites was assessed as a large, risky, unrelated
+chore well outside what was actually asked, and turning on `required`
+enforcement for real integrations already relying on today's lenient
+behavior would break them with no warning. So this pass enforces ONLY
+the new `validation_pattern`/`validation_message` pair; `required`
+remains enforced client-side only (HTML5 `required`, bypassable via a
+direct API call), exactly as before. **This is flagged to Vishal as its
+own open decision, not silently assumed** - see the note in the
+next chat message / project doc.
+
+Verified: 9 new tests in `tests/test_form_field_validation.py` (invalid
+regex rejected on create/update; a submission violating a configured
+pattern rejected with its custom message, or a generic fallback when no
+message is set; a matching submission accepted; every pre-existing
+seeded field - which has no pattern configured - never newly checked or
+required; first violation reported in the field's `display_order` when
+several are invalid). Full suite: 150 total backend tests, 148 passing -
+the same pre-existing `/ready` gap as prior entries, plus one other
+pre-existing, unrelated, environment-specific failure newly observed
+this pass (`test_get_or_render_pdf_caches_to_disk`: `os.remove()` denied
+by this dev sandbox's file-deletion restriction) - neither is caused by
+or related to this feature. Frontend: `tsc -b && vite build` and
+`oxlint` both clean (0 type errors, 0 new lint errors - the same
+pre-existing `setState`-in-`useEffect` warning pattern already present
+on the Plans page's edit modal, now also present on this one, following
+the same established convention).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
 called out in the relevant module's docstring too:
 
+- **"Required" registration-form fields are not enforced server-side**
+  (spec section 18). Only the frontend's HTML5 `required` attribute
+  checks this today - a direct API call bypasses it entirely, and this
+  was true before the 2026-09-11 regex-validation pass too, not
+  introduced by it. Deliberately not fixed as part of that pass: the
+  seeded application already has two required fields (`museum_name`,
+  `contact_person`) that dozens of existing tests, and potentially real
+  integrations, subscribe without providing - turning on enforcement now
+  would be a larger, separate breaking change. This is an open decision
+  for Vishal, not an assumed one.
 - **Duplicate customer detection / OTP verification** (sections 9-11):
   **done as of increment 2** (see above) for the core exact/conflict/none
   match cases and OTP-gated identity reveal; **real email OTP delivery

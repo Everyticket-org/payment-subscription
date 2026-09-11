@@ -15,7 +15,12 @@ class RegistrationFormField(Base, TimestampMixin):
     label: Mapped[str] = mapped_column(String(255), nullable=False)
     field_type: Mapped[str] = mapped_column(String(20), nullable=False)  # FormFieldType value
     required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    validation_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # e.g. {"pattern": "..."}
+    validation_rules: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # legacy, unused - see validation_pattern/validation_message below
+    # Regex a submitted value must fully match (re.fullmatch semantics,
+    # same as the HTML5 `pattern` attribute) + the message shown when it
+    # doesn't - see app.forms.validation.validate_registration_data().
+    validation_pattern: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    validation_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     placeholder: Mapped[str | None] = mapped_column(String(255), nullable=True)
     help_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     options: Mapped[list | None] = mapped_column(JSON, nullable=True)  # for dropdown/radio/checkbox

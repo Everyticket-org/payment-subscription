@@ -55,6 +55,7 @@ from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
 from app.forms.schemas import RegistrationFormFieldOut
+from app.forms.validation import validate_registration_data
 from app.notifications.email import service as email_service
 from app.customers.schemas import (
     CustomerOut,
@@ -232,6 +233,13 @@ def subscribe(
     )
     if plan is None:
         raise PlanNotFound(f"No active plan '{plan_code}'")
+
+    # Validated before any customer/subscription row is touched (spec
+    # section 18 follow-up: regex + required enforcement) - the public
+    # subscribe form always collects registration_data via the same
+    # DynamicRegistrationForm regardless of new-vs-returning customer, so
+    # this check applies uniformly rather than only on brand-new signups.
+    validate_registration_data(db, application_id=application.id, registration_data=body.registration_data)
 
     if customer_id_from_token:
         customer = db.query(Customer).filter(Customer.customer_id == customer_id_from_token).first()
