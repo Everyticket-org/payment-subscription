@@ -35,7 +35,16 @@
  * immediate-result path "Verify connectivity" already has, but for one
  * specific already-queued delivery instead of a fixed ping. The plain
  * /retry endpoint (reset to PENDING only, no HTTP call) still exists on
- * the backend but is no longer used by this screen. */
+ * the backend but is no longer used by this screen.
+ *
+ * Per Vishal's latest follow-up ("Log webhook call time and response
+ * completion time"): every delivery row and the Verify connectivity
+ * result now also show when the outbound HTTP call started
+ * (attempt_started_at / started_at) and how long it took
+ * (duration_ms / elapsed_ms) alongside the existing "Last attempt"
+ * completion timestamp - a new "Duration" column on the Deliveries
+ * table, and a "Call timing" block in the expanded delivery detail and
+ * the Verify connectivity result panel. */
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import {
@@ -57,6 +66,12 @@ function formatHeaders(headers: Record<string, string> | null | undefined): stri
     .join("\n");
 }
 
+function formatDuration(ms: number | null | undefined): string {
+  if (ms === null || ms === undefined) return "-";
+  if (ms < 1000) return `${ms} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryOut }) {
   const preStyle: CSSProperties = {
     whiteSpace: "pre-wrap",
@@ -67,6 +82,16 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryOut }) {
   };
   return (
     <div style={{ display: "grid", gap: 8 }}>
+      <div>
+        <p className="hint" style={{ marginBottom: 2 }}>
+          Call timing
+        </p>
+        <pre style={preStyle}>
+          {`Started:   ${delivery.attempt_started_at ? new Date(delivery.attempt_started_at).toLocaleString() : "-"}\nCompleted: ${
+            delivery.last_attempt_at ? new Date(delivery.last_attempt_at).toLocaleString() : "-"
+          }\nDuration:  ${formatDuration(delivery.duration_ms)}`}
+        </pre>
+      </div>
       <div>
         <p className="hint" style={{ marginBottom: 2 }}>
           Request headers sent
@@ -186,6 +211,11 @@ export function AdminWebhooksPage() {
                 <span className="field-hint-error">Not reached{verifyResult.error ? `: ${verifyResult.error}` : ""}</span>
               )}
             </p>
+            <p className="hint" style={{ marginTop: -8 }}>
+              {`Started ${verifyResult.started_at ? new Date(verifyResult.started_at).toLocaleString() : "-"}, took ${formatDuration(
+                verifyResult.elapsed_ms,
+              )}`}
+            </p>
             <pre
               style={{
                 whiteSpace: "pre-wrap",
@@ -218,6 +248,7 @@ export function AdminWebhooksPage() {
                 <th>Status</th>
                 <th className="numeric">Attempts</th>
                 <th>HTTP</th>
+                <th>Duration</th>
                 <th>Last attempt</th>
                 <th></th>
               </tr>
@@ -232,6 +263,7 @@ export function AdminWebhooksPage() {
                     </td>
                     <td className="numeric">{d.attempt_count}</td>
                     <td>{d.http_status ?? "-"}</td>
+                    <td>{formatDuration(d.duration_ms)}</td>
                     <td>{d.last_attempt_at ? new Date(d.last_attempt_at).toLocaleString() : "-"}</td>
                     <td>
                       {(d.status === "PENDING" || d.status === "FAILED" || d.status === "EXHAUSTED") && (
@@ -250,7 +282,7 @@ export function AdminWebhooksPage() {
                   </tr>
                   {expandedDeliveryId === d.id && (
                     <tr>
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <DeliveryDetail delivery={d} />
                       </td>
                     </tr>

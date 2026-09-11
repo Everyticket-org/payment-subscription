@@ -57,6 +57,19 @@ class WebhookDelivery(Base, TimestampMixin):
     request_headers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     response_headers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # Added per Vishal ("Log webhook call time and response completion
+    # time"): attempt_started_at is when this attempt's outbound HTTP
+    # call actually began (set the moment the attempt starts, before
+    # anything can go wrong); last_attempt_at below already doubles as
+    # the response completion time (it was already set right after the
+    # call finishes, success or failure); duration_ms is simply the
+    # elapsed time between the two, measured with a monotonic clock so
+    # it's never skewed by wall-clock adjustments. All three nullable -
+    # never set on a delivery that's still only PENDING and has never
+    # actually been attempted yet.
+    attempt_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 

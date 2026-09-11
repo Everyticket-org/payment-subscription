@@ -190,6 +190,31 @@ def test_dispatch_pending_captures_request_and_response_headers_on_success(db_se
     assert delivery.response_headers["x-custom-marker"] == "abc123"
 
 
+def test_dispatch_pending_records_call_time_and_duration(db_session):
+    """Vishal: "Log webhook call time and response completion time" -
+    attempt_started_at/duration_ms should be populated on a real attempt,
+    with started_at strictly before (or equal to, under a fast mock
+    transport) the existing last_attempt_at completion timestamp."""
+    app_row = _application(db_session)
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.activated",
+        entity_type="subscription", entity_id="SUB-TIMING-1", payload={"x": 1},
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"received": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    delivery = db_session.query(WebhookDelivery).one()
+    assert delivery.attempt_started_at is not None
+    assert delivery.duration_ms is not None
+    assert delivery.duration_ms >= 0
+    assert delivery.attempt_started_at <= delivery.last_attempt_at
+
+
 def test_dispatch_pending_leaves_response_headers_null_on_connection_error(db_session):
     app_row = _application(db_session)
     webhook_service.queue_event(
@@ -270,6 +295,38 @@ def test_record_ad_hoc_delivery_persists_request_and_response_headers(db_session
     assert delivery is not None
     assert delivery.request_headers["X-Webhook-Signature"].startswith("sha256=")
     assert delivery.response_headers["x-reply-marker"] == "pong"
+
+
+def test_send_ad_hoc_webhook_and_record_ad_hoc_delivery_capture_call_timing(db_session, monkeypatch):
+    """Vishal: "Log webhook call time and response completion time" -
+    covers the ad-hoc/Verify connectivity path (send_ad_hoc_webhook's own
+    return dict, and what record_ad_hoc_delivery persists from it), as a
+    complement to the real-dispatch-path timing test above."""
+    app_row = _application(db_session, webhook_url="http://mock-destination.invalid/hook")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="ok")
+
+    monkeypatch.setattr(webhook_service.httpx, "Client", _mock_client_factory(handler))
+
+    result = webhook_service.send_ad_hoc_webhook(application=app_row, payload={"ping": True})
+    assert result["started_at"] is not None
+    assert result["elapsed_ms"] is not None
+
+    delivery = webhook_service.record_ad_hoc_delivery(
+        db_session,
+        application=app_row,
+        event_type="webhook.connectivity_check",
+        entity_id="VERIFY-TIMING-1",
+        payload={"ping": True},
+        result=result,
+    )
+    db_session.commit()
+
+    assert delivery is not None
+    assert delivery.attempt_started_at is not None
+    assert delivery.duration_ms is not None
+    assert delivery.attempt_started_at <= delivery.last_attempt_at
 
 
 def test_record_ad_hoc_delivery_returns_none_when_no_destination_configured(db_session, monkeypatch):

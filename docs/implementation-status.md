@@ -2035,6 +2035,62 @@ unrelated `/ready` DB-connectivity gap only). Frontend unaffected by
 this pass (backend-only) - `tsc -b && vite build` and `oxlint` re-run
 anyway to confirm: clean, same 9 pre-existing warnings.
 
+## 2026-09-11 (follow-up 8): webhook call start time and response completion time now logged and shown
+
+Vishal's follow-up, verbatim: "Log webhook call time and response
+completion time."
+
+**What changed, both persisted on the delivery row and written to the
+application log, on every path that makes an outbound webhook call:**
+
+- `WebhookDelivery` gained two new nullable columns
+  (`e45b1604043b_webhook_delivery_timing.py`, off current head
+  `4b7d9e1f2a83`): `attempt_started_at` (wall-clock timestamp when the
+  outbound HTTP call began) and `duration_ms` (elapsed call time,
+  measured with `time.monotonic()` so it's never skewed by a wall-clock
+  adjustment mid-call). The pre-existing `last_attempt_at` column
+  already doubled as the completion timestamp (set right after the call
+  finishes) - no new column needed for that half, just documented in
+  code comments.
+- **Real dispatch** (`_attempt_one()`, shared by the Celery beat sweep,
+  the admin Attempt button, and follow-up 7's `attempt_soon()`): now
+  records `attempt_started_at` and `duration_ms` on every attempt
+  (success or failure) and logs a single INFO line per attempt with
+  delivery id, event type, destination, start/completion timestamps,
+  duration, HTTP status, and outcome. `duration_ms` is measured strictly
+  around the HTTP call itself, before any subsequent provisioning/
+  activation side-effect handling runs, so it reflects network time only.
+- **Ad-hoc path** (`send_ad_hoc_webhook()` / `record_ad_hoc_delivery()`,
+  used by the Testing module and "Verify connectivity"): `send_ad_hoc_webhook()`
+  now also returns `started_at`, and `record_ad_hoc_delivery()` persists
+  both new columns onto the `WebhookDelivery` row it writes, same as the
+  real-dispatch path. Both the success and failure branches log an INFO
+  line with url, start time, elapsed ms, and outcome.
+- Webhook Logs screen (`AdminWebhooksPage.tsx`): a new "Duration" column
+  on the Deliveries table; the expanded delivery detail (used by both
+  the Deliveries table and the Events list) gained a "Call timing" block
+  showing started/completed/duration alongside the existing request/
+  response header and body sections; the "Verify connectivity" result
+  panel now shows its own started/duration line the same way.
+
+New backend tests in `tests/test_webhooks.py`:
+`test_dispatch_pending_records_call_time_and_duration` (asserts
+`attempt_started_at`/`duration_ms` are populated and
+`attempt_started_at <= last_attempt_at` after a real dispatch attempt)
+and `test_send_ad_hoc_webhook_and_record_ad_hoc_delivery_capture_call_timing`
+(same assertions for the ad-hoc/Verify-connectivity path).
+
+Verified: `tests/test_webhooks.py` 13 passed (up from 11); full suite
+175 total, 174 passing (same single pre-existing, unrelated `/ready`
+DB-connectivity gap that predates this entire project). Frontend
+`tsc -b && vite build` clean; `oxlint` 0 errors, same 9 pre-existing
+warnings. New migration `e45b1604043b` still needs `alembic upgrade
+head` run against Vishal's real Postgres database before this reaches
+him in a running environment - it hasn't been applied there yet, only
+verified to chain correctly off the current head and to pass the test
+suite (which creates its schema straight from the ORM models, not via
+Alembic).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

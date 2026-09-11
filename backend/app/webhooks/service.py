@@ -65,6 +65,7 @@ import hmac
 import json
 import logging
 import threading
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -258,6 +259,13 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
     delivery.request_headers = headers
 
+    # Vishal: "Log webhook call time and response completion time" - the
+    # wall-clock start is recorded for display/audit, the monotonic clock
+    # is what actually measures elapsed time (never skewed by a wall-clock
+    # adjustment mid-attempt, unlike subtracting two datetime.now() calls).
+    delivery.attempt_started_at = datetime.now(timezone.utc)
+    _perf_start = time.monotonic()
+
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=_WEBHOOK_HTTP_TIMEOUT)
     try:
@@ -274,6 +282,8 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     finally:
         if owns_client:
             client.close()
+
+    delivery.duration_ms = round((time.monotonic() - _perf_start) * 1000)
 
     if event.event_type == _ACTIVATION_EVENT_TYPE and event.entity_type == "subscription":
         # May downgrade `succeeded` to False if Everyticket returned a 2xx
@@ -317,6 +327,18 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
             # an already-EXHAUSTED row, since dispatch_pending() only
             # re-attempts PENDING/FAILED deliveries).
             _notify_webhook_exhausted(db, delivery=delivery, application=application)
+
+    logger.info(
+        "Webhook delivery %s (%s) to %s: started %s, completed %s, took %dms, HTTP %s, %s",
+        delivery.id,
+        event.event_type,
+        delivery.destination_url,
+        delivery.attempt_started_at.isoformat(),
+        delivery.last_attempt_at.isoformat(),
+        delivery.duration_ms,
+        delivery.http_status,
+        delivery.status,
+    )
 
     db.add(delivery)
     db.commit()
@@ -571,6 +593,12 @@ def send_ad_hoc_webhook(
     if secret:
         headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
 
+    # Vishal: "Log webhook call time and response completion time" -
+    # started_at is the wall-clock moment this call began (returned so
+    # callers/record_ad_hoc_delivery() can persist it); elapsed_ms below
+    # was already measured with a monotonic clock (unaffected by this
+    # addition).
+    started_at = datetime.now(timezone.utc)
     started = _time.monotonic()
     try:
         # Same connect/read split as _WEBHOOK_HTTP_TIMEOUT above, scaled to
@@ -580,6 +608,13 @@ def send_ad_hoc_webhook(
         with httpx.Client(timeout=httpx.Timeout(connect=min(timeout, 3.0), read=timeout, write=timeout, pool=3.0)) as client:
             response = client.post(url, content=body, headers=headers)
         elapsed_ms = round((_time.monotonic() - started) * 1000, 1)
+        logger.info(
+            "Ad-hoc webhook send to %s: started %s, took %sms, HTTP %s",
+            url,
+            started_at.isoformat(),
+            elapsed_ms,
+            response.status_code,
+        )
         return {
             "sent": True,
             "request": {"url": url, "headers": headers, "body": payload},
@@ -587,9 +622,17 @@ def send_ad_hoc_webhook(
             "response_body": response.text[:4000],
             "response_headers": dict(response.headers),
             "elapsed_ms": elapsed_ms,
+            "started_at": started_at.isoformat(),
         }
     except httpx.HTTPError as exc:
         elapsed_ms = round((_time.monotonic() - started) * 1000, 1)
+        logger.info(
+            "Ad-hoc webhook send to %s: started %s, took %sms, failed: %s",
+            url,
+            started_at.isoformat(),
+            elapsed_ms,
+            exc,
+        )
         return {
             "sent": False,
             "request": {"url": url, "headers": headers, "body": payload},
@@ -597,6 +640,7 @@ def send_ad_hoc_webhook(
             "response_headers": None,
             "error": str(exc),
             "elapsed_ms": elapsed_ms,
+            "started_at": started_at.isoformat(),
         }
 
 
@@ -634,6 +678,8 @@ def record_ad_hoc_delivery(
     db.add(event)
     db.flush()
 
+    _completed_at = datetime.now(timezone.utc)
+    _started_at_raw = result.get("started_at")
     delivery = WebhookDelivery(
         webhook_event_id=event.id,
         destination_application_id=application.id,
@@ -644,7 +690,9 @@ def record_ad_hoc_delivery(
         request_headers=result["request"].get("headers"),
         response_headers=result.get("response_headers"),
         attempt_count=1,
-        last_attempt_at=datetime.now(timezone.utc),
+        attempt_started_at=(datetime.fromisoformat(_started_at_raw) if _started_at_raw else None),
+        duration_ms=(round(result["elapsed_ms"]) if result.get("elapsed_ms") is not None else None),
+        last_attempt_at=_completed_at,
         next_retry_at=None,
     )
     db.add(delivery)

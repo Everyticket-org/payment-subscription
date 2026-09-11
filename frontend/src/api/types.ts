@@ -129,6 +129,7 @@ export interface TestWebhookSendResult {
   response_headers?: Record<string, string> | null;
   error?: string;
   elapsed_ms?: number;
+  started_at?: string;
 }
 
 export interface TestEmailResult {
@@ -541,6 +542,8 @@ export interface WebhookDeliveryOut {
   response_body?: string | null;
   request_headers?: Record<string, string> | null;
   response_headers?: Record<string, string> | null;
+  attempt_started_at?: string | null;
+  duration_ms?: number | null;
   last_attempt_at?: string | null;
   next_retry_at?: string | null;
 }

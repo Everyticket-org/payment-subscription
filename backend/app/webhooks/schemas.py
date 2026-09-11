@@ -19,6 +19,12 @@ class WebhookDeliveryOut(BaseModel):
     # exchange, not just its body/status.
     request_headers: dict | None = None
     response_headers: dict | None = None
+    # Vishal: "Log webhook call time and response completion time" -
+    # attempt_started_at is when this attempt's outbound call began;
+    # last_attempt_at (below) doubles as when it completed;
+    # duration_ms is the elapsed time between the two.
+    attempt_started_at: datetime | None = None
+    duration_ms: int | None = None
     last_attempt_at: datetime | None = None
     next_retry_at: datetime | None = None
 
