@@ -50,6 +50,7 @@ import hashlib
 import hmac
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -167,6 +168,7 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     headers = {"Content-Type": "application/json"}
     if secret:
         headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
+    delivery.request_headers = headers
 
     owns_client = http_client is None
     client = http_client or httpx.Client(timeout=10.0)
@@ -174,10 +176,12 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         response = client.post(delivery.destination_url, content=body, headers=headers)
         delivery.http_status = response.status_code
         delivery.response_body = response.text[:4000]
+        delivery.response_headers = dict(response.headers)
         succeeded = 200 <= response.status_code < 300
     except httpx.HTTPError as exc:
         delivery.http_status = None
         delivery.response_body = str(exc)[:4000]
+        delivery.response_headers = None
         succeeded = False
     finally:
         if owns_client:
@@ -449,17 +453,22 @@ def attempt_delivery_with_client(
 def send_ad_hoc_webhook(
     *, application: Application, payload: dict, extra_headers: dict[str, str] | None = None, timeout: float = 10.0
 ) -> dict:
-    """TEST EVERYTICKET WEBHOOK (spec section 54): a one-off signed POST
-    of admin-supplied JSON to the application's configured webhook
-    destination. Unlike queue_event()/dispatch_pending(), this never
-    writes a WebhookEvent/WebhookDelivery row - it's a live diagnostic
-    tool for an admin to poke the destination directly, not a real
-    business event, so there is nothing here to retry or track. Returns
-    a dict of exactly what the spec asks the UI to show: the request that
-    was sent, the response (or error) that came back, the HTTP status,
-    and elapsed time - never raises, since a failed test send (including
-    "no destination configured", a connection error, or a timeout) is
-    itself a valid, informative test result rather than a 500."""
+    """A one-off signed POST of a given JSON payload to the application's
+    configured webhook destination - the actual HTTP send shared by the
+    admin Testing module's TEST EVERYTICKET WEBHOOK tool (spec section
+    54, arbitrary admin-edited payload/headers, TEST_MODE-only) and the
+    Webhook Logs screen's "Verify connectivity" action (a fixed ping
+    payload, no TEST_MODE gate - see verify_connectivity() below). This
+    function itself never writes a WebhookEvent/WebhookDelivery row -
+    callers that want the attempt recorded (both of the above do) use
+    record_ad_hoc_delivery() with the result this returns.
+
+    Returns a dict of exactly what the UI shows: the request that was
+    sent (url/headers/body), the response (or error) that came back, the
+    HTTP status, response headers, and elapsed time - never raises,
+    since a failed send (including "no destination configured", a
+    connection error, or a timeout) is itself a valid, informative
+    result rather than a 500."""
     import time as _time
 
     url, secret = _resolve_destination(application)
@@ -484,6 +493,7 @@ def send_ad_hoc_webhook(
             "request": {"url": url, "headers": headers, "body": payload},
             "http_status": response.status_code,
             "response_body": response.text[:4000],
+            "response_headers": dict(response.headers),
             "elapsed_ms": elapsed_ms,
         }
     except httpx.HTTPError as exc:
@@ -492,9 +502,91 @@ def send_ad_hoc_webhook(
             "sent": False,
             "request": {"url": url, "headers": headers, "body": payload},
             "http_status": None,
+            "response_headers": None,
             "error": str(exc),
             "elapsed_ms": elapsed_ms,
         }
+
+
+def record_ad_hoc_delivery(
+    db: Session, *, application: Application, event_type: str, entity_id: str, payload: dict, result: dict
+) -> WebhookDelivery | None:
+    """Records the result of an send_ad_hoc_webhook() attempt as a real
+    WebhookEvent + WebhookDelivery row, so it's visible on the admin
+    Webhook Logs screen exactly like a genuine delivery - response_body,
+    http_status, request/response headers included, success or failure.
+    Shared by both the Testing module's ad-hoc send and
+    verify_connectivity() below.
+
+    Returns None (and records nothing) when send_ad_hoc_webhook() never
+    actually attempted anything (its "no destination configured" early
+    return, identifiable by the absence of a "request" key) - a
+    WebhookDelivery represents an attempt, and none was made.
+
+    next_retry_at is deliberately left None: this is a one-off record for
+    visibility, not a queued delivery. dispatch_pending()'s retry sweep
+    only ever picks up rows with next_retry_at set, so this can never be
+    silently auto-resent through the standard {event_type, payload}
+    envelope - a different body than whatever was actually sent here
+    (the ad-hoc tool sends its payload raw, unwrapped)."""
+    if "request" not in result:
+        return None
+
+    event = WebhookEvent(
+        event_id=new_event_id(),
+        event_type=event_type,
+        entity_type="test",
+        entity_id=entity_id,
+        payload=payload,
+    )
+    db.add(event)
+    db.flush()
+
+    delivery = WebhookDelivery(
+        webhook_event_id=event.id,
+        destination_application_id=application.id,
+        destination_url=result["request"]["url"],
+        status=WebhookDeliveryStatus.SUCCESS.value if result.get("sent") else WebhookDeliveryStatus.FAILED.value,
+        http_status=result.get("http_status"),
+        response_body=(result.get("response_body") or result.get("error") or "")[:4000],
+        request_headers=result["request"].get("headers"),
+        response_headers=result.get("response_headers"),
+        attempt_count=1,
+        last_attempt_at=datetime.now(timezone.utc),
+        next_retry_at=None,
+    )
+    db.add(delivery)
+    db.flush()
+    return delivery
+
+
+_CONNECTIVITY_CHECK_PAYLOAD = {"ping": True, "source": "admin_webhook_logs_verify"}
+
+
+def verify_connectivity(db: Session, *, application: Application) -> dict:
+    """Webhook Logs screen's "Verify connectivity" button (per Vishal:
+    "please give button as well near log to click and verify that its
+    calling properly or not"). Sends a small, fixed, harmless ping
+    payload to the application's currently-configured destination -
+    signed exactly like a real delivery - and always records the
+    attempt via record_ad_hoc_delivery() (event_type
+    "webhook.connectivity_check") so the result is immediately visible
+    in the log, not just in this call's own return value.
+
+    Deliberately NOT gated by require_test_mode() (unlike the Testing
+    module's arbitrary-payload send) - an admin needs to be able to
+    check "is my real, live webhook destination reachable right now" in
+    production too, the same way retrying a delivery already is."""
+    result = send_ad_hoc_webhook(application=application, payload=_CONNECTIVITY_CHECK_PAYLOAD)
+    record_ad_hoc_delivery(
+        db,
+        application=application,
+        event_type="webhook.connectivity_check",
+        entity_id=f"VERIFY-{uuid.uuid4().hex[:10].upper()}",
+        payload=_CONNECTIVITY_CHECK_PAYLOAD,
+        result=result,
+    )
+    return result
 
 
 def dispatch_pending(db: Session, *, limit: int = 50, http_client: httpx.Client | None = None) -> int:

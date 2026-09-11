@@ -126,6 +126,7 @@ export interface TestWebhookSendResult {
   request?: { url: string; headers: Record<string, string>; body: unknown };
   http_status: number | null;
   response_body?: string;
+  response_headers?: Record<string, string> | null;
   error?: string;
   elapsed_ms?: number;
 }
@@ -538,6 +539,8 @@ export interface WebhookDeliveryOut {
   attempt_count: number;
   http_status?: number | null;
   response_body?: string | null;
+  request_headers?: Record<string, string> | null;
+  response_headers?: Record<string, string> | null;
   last_attempt_at?: string | null;
   next_retry_at?: string | null;
 }

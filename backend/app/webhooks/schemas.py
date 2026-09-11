@@ -13,6 +13,12 @@ class WebhookDeliveryOut(BaseModel):
     attempt_count: int
     http_status: int | None = None
     response_body: str | None = None
+    # Added per Vishal's follow-up ("not logging headers, statuscode,
+    # etc.. from API") - the exact headers sent and received on this
+    # attempt, so a delivery row is a complete record of the HTTP
+    # exchange, not just its body/status.
+    request_headers: dict | None = None
+    response_headers: dict | None = None
     last_attempt_at: datetime | None = None
     next_retry_at: datetime | None = None
 

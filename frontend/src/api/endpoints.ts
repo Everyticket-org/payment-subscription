@@ -257,6 +257,13 @@ export const adminListWebhookDeliveries = (params: { status?: string; limit?: nu
 export const adminRetryWebhookDelivery = (deliveryId: number, token: string) =>
   api.post<WebhookDeliveryOut>(`/api/v1/admin/webhooks/deliveries/${deliveryId}/retry`, {}, token);
 
+// Verify connectivity: same request/response shape as the Testing
+// module's ad-hoc TEST EVERYTICKET WEBHOOK send (TestWebhookSendResult) -
+// this endpoint shares send_ad_hoc_webhook() under the hood, it just
+// isn't TEST_MODE-gated and always sends a fixed ping payload.
+export const adminVerifyWebhookConnectivity = (token: string) =>
+  api.post<TestWebhookSendResult>("/api/v1/admin/webhooks/verify", {}, token);
+
 // --- Admin: notification templates / logs ---
 
 export const adminListNotificationTemplates = (token: string) =>

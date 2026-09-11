@@ -9,14 +9,69 @@
  * error message) in response_body, but this screen never showed it.
  * Click a delivery row (or an event's row) to expand it and see the
  * response text, same click-to-expand pattern the Audit Logs page
- * already uses for old/new values. */
+ * already uses for old/new values.
+ *
+ * Per Vishal's next follow-up ("Webhook API is not getting reached or
+ * logging headers, statuscode, etc.. from API... please give button as
+ * well near log to click and verify that its calling properly or
+ * not.."): the expanded view below now also shows the actual request
+ * and response HTTP headers for every delivery (real or ad-hoc), and a
+ * "Verify connectivity" button sends a small signed ping to the
+ * configured destination right now and reports back immediately -
+ * without needing TEST_MODE or the separate Testing module page - then
+ * reloads so the attempt is visible in the log below. */
 import { Fragment, useCallback, useEffect, useState } from "react";
-import { adminListWebhookDeliveries, adminListWebhookEvents, adminRetryWebhookDelivery } from "../../api/endpoints";
+import type { CSSProperties } from "react";
+import {
+  adminListWebhookDeliveries,
+  adminListWebhookEvents,
+  adminRetryWebhookDelivery,
+  adminVerifyWebhookConnectivity,
+} from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
+import type { TestWebhookSendResult, WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
+
+function formatHeaders(headers: Record<string, string> | null | undefined): string {
+  if (!headers || Object.keys(headers).length === 0) return "(none captured)";
+  return Object.entries(headers)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join("\n");
+}
+
+function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryOut }) {
+  const preStyle: CSSProperties = {
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-all",
+    overflowX: "auto",
+    fontSize: 12,
+    margin: 0,
+  };
+  return (
+    <div style={{ display: "grid", gap: 8 }}>
+      <div>
+        <p className="hint" style={{ marginBottom: 2 }}>
+          Request headers sent
+        </p>
+        <pre style={preStyle}>{formatHeaders(delivery.request_headers)}</pre>
+      </div>
+      <div>
+        <p className="hint" style={{ marginBottom: 2 }}>
+          Response headers received
+        </p>
+        <pre style={preStyle}>{formatHeaders(delivery.response_headers)}</pre>
+      </div>
+      <div>
+        <p className="hint" style={{ marginBottom: 2 }}>
+          Response body / error
+        </p>
+        <pre style={preStyle}>{delivery.response_body || "(no response body was returned)"}</pre>
+      </div>
+    </div>
+  );
+}
 
 export function AdminWebhooksPage() {
   const { adminToken } = useAuth();
@@ -27,6 +82,8 @@ export function AdminWebhooksPage() {
   const [retryingId, setRetryingId] = useState<number | null>(null);
   const [expandedDeliveryId, setExpandedDeliveryId] = useState<number | null>(null);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<TestWebhookSendResult | null>(null);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
@@ -55,6 +112,27 @@ export function AdminWebhooksPage() {
     }
   }
 
+  async function handleVerify() {
+    if (!adminToken) return;
+    setVerifying(true);
+    setVerifyResult(null);
+    try {
+      const result = await adminVerifyWebhookConnectivity(adminToken);
+      setVerifyResult(result);
+      if (result.sent) {
+        toast.success(`Reached destination (HTTP ${result.http_status})`);
+      } else {
+        toast.error(`Could not reach destination${result.error ? `: ${result.error}` : ""}`);
+      }
+      reload();
+    } catch (err) {
+      setError(err);
+      toast.error(err);
+    } finally {
+      setVerifying(false);
+    }
+  }
+
   return (
     <section>
       <h1>Webhook logs</h1>
@@ -66,8 +144,44 @@ export function AdminWebhooksPage() {
       <ErrorBanner error={error} />
 
       <div className="admin-panel">
+        <h2>Connectivity check</h2>
+        <p className="hint">
+          Sends a small, harmless signed ping to the currently-configured webhook destination right now and reports
+          back immediately - useful when deliveries aren't showing up and you want to know if the destination is
+          even reachable. The attempt is also recorded below like any other delivery.
+        </p>
+        <button className="button button-secondary" disabled={verifying} onClick={handleVerify}>
+          {verifying ? "Verifying..." : "Verify connectivity"}
+        </button>
+        {verifyResult && (
+          <div style={{ marginTop: 12 }}>
+            <p>
+              {verifyResult.sent ? (
+                <span className="field-hint-ok">Reached - HTTP {verifyResult.http_status}</span>
+              ) : (
+                <span className="field-hint-error">Not reached{verifyResult.error ? `: ${verifyResult.error}` : ""}</span>
+              )}
+            </p>
+            <pre
+              style={{
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-all",
+                overflowX: "auto",
+                fontSize: 12,
+                margin: 0,
+              }}
+            >
+              {`Request headers:\n${formatHeaders(verifyResult.request?.headers)}\n\nResponse headers:\n${formatHeaders(
+                verifyResult.response_headers,
+              )}`}
+            </pre>
+          </div>
+        )}
+      </div>
+
+      <div className="admin-panel">
         <h2>Deliveries</h2>
-        <p className="hint">Click a row to see the response body (or error) that came back.</p>
+        <p className="hint">Click a row to see the request/response headers and body (or error) that came back.</p>
         <div className="table-wrap">
           <table className="data-table">
             <thead>
@@ -109,9 +223,7 @@ export function AdminWebhooksPage() {
                   {expandedDeliveryId === d.id && (
                     <tr>
                       <td colSpan={6}>
-                        <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto", fontSize: 12, margin: 0 }}>
-                          {d.response_body || "(no response body was returned)"}
-                        </pre>
+                        <DeliveryDetail delivery={d} />
                       </td>
                     </tr>
                   )}
@@ -160,9 +272,7 @@ export function AdminWebhooksPage() {
                             <p className="hint">
                               Attempt to {d.destination_url} - <StatusBadge value={d.status} /> - HTTP {d.http_status ?? "-"}
                             </p>
-                            <pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", overflowX: "auto", fontSize: 12, margin: 0 }}>
-                              {d.response_body || "(no response body was returned)"}
-                            </pre>
+                            <DeliveryDetail delivery={d} />
                           </div>
                         ))}
                       </td>

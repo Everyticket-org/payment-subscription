@@ -50,9 +50,8 @@ from app.audit import service as audit_service
 from app.auth.deps import require_permission, require_test_mode
 from app.auth.models import AdminUser
 from app.core.config import get_settings
-from app.core.enums import PaymentType, SubscriptionEventType, WebhookDeliveryStatus
+from app.core.enums import PaymentType, SubscriptionEventType
 from app.core.exceptions import CustomerNotFound, PlanNotFound, SubscriptionNotFound
-from app.core.ids import new_event_id
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
@@ -333,35 +332,20 @@ def test_webhook_send(
     WebhookDelivery represents an actual attempt, and none was made."""
     result = webhook_service.send_ad_hoc_webhook(application=application, payload=body.payload, extra_headers=body.headers)
 
-    if "request" in result:
-        # An attempt was actually made (a destination was resolved) -
-        # record it as a real WebhookEvent + WebhookDelivery so it shows
-        # up in Webhook Logs alongside genuine deliveries, response/error
-        # included either way.
-        event = WebhookEvent(
-            event_id=new_event_id(),
-            event_type="test.manual_send",
-            entity_type="test",
-            entity_id=f"TEST-SEND-{_short_suffix()}",
-            payload=body.payload,
-        )
-        db.add(event)
-        db.flush()
-
-        now = datetime.now(timezone.utc)
-        delivery = WebhookDelivery(
-            webhook_event_id=event.id,
-            destination_application_id=application.id,
-            destination_url=result["request"]["url"],
-            status=WebhookDeliveryStatus.SUCCESS.value if result.get("sent") else WebhookDeliveryStatus.FAILED.value,
-            http_status=result.get("http_status"),
-            response_body=(result.get("response_body") or result.get("error") or "")[:4000],
-            attempt_count=1,
-            last_attempt_at=now,
-            next_retry_at=None,
-        )
-        db.add(delivery)
-        db.flush()
+    # Records a real WebhookEvent + WebhookDelivery (event_type
+    # "test.manual_send") for every attempt actually made, so it shows up
+    # on the Webhook Logs screen alongside genuine deliveries - request/
+    # response headers, body, and status included either way. See
+    # webhook_service.record_ad_hoc_delivery()'s own docstring for why
+    # next_retry_at is left None.
+    webhook_service.record_ad_hoc_delivery(
+        db,
+        application=application,
+        event_type="test.manual_send",
+        entity_id=f"TEST-SEND-{_short_suffix()}",
+        payload=body.payload,
+        result=result,
+    )
 
     # Store the full result - including response_body/error on a failed
     # send, not just sent/http_status - so a test send that errors is

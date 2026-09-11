@@ -46,6 +46,16 @@ class WebhookDelivery(Base, TimestampMixin):
     attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     http_status: Mapped[int | None] = mapped_column(Integer, nullable=True)
     response_body: Mapped[str | None] = mapped_column(String(4000), nullable=True)
+    # Added per Vishal's follow-up ("not logging headers, statuscode, etc..
+    # from API"): the exact headers this app sent (Content-Type,
+    # X-Webhook-Signature, any admin-supplied extras) and the destination's
+    # response headers, captured on every attempt - real dispatch, the
+    # admin ad-hoc test send, and the connectivity-check verify action -
+    # so a delivery row is a complete record of the actual HTTP exchange,
+    # not just its body/status. Both nullable (never set on an attempt
+    # that raised before a response came back, e.g. a connection error).
+    request_headers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    response_headers: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

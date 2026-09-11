@@ -1676,6 +1676,95 @@ tests, 151 passing (same pre-existing `/ready` gap only). Frontend
 `tsc -b && vite build` clean; `oxlint` 0 errors (same 9 pre-existing
 warnings, none new).
 
+## 2026-09-11 (follow-up 3): webhook request/response headers captured + Verify connectivity button
+
+Vishal's follow-up, verbatim: "Webhook API is not getting reached or
+logging headers, statuscode, etc.. from API... please give button as
+well near log to click and verify that its calling properly or
+not.." - two real gaps:
+
+1. **No headers were ever captured at all.** `WebhookDelivery` stored
+   `http_status`/`response_body` (since increment 5) but never the
+   actual HTTP headers exchanged - so a signature mismatch, a proxy/WAF
+   rejection, or a content-type problem on the destination's response
+   meant guessing, not looking. New nullable JSON columns
+   `request_headers`/`response_headers` on `webhook_deliveries`
+   (migration `4b7d9e1f2a83`, additive, both nullable - no data
+   migration, existing rows simply have neither populated). Populated on
+   every delivery path:
+   - `_attempt_one()` (the real dispatch/retry path, spec sections
+     34-37): `request_headers` set right before the attempt (so it's
+     known even if the request itself then fails to get a response);
+     `response_headers = dict(response.headers)` on a real response,
+     `None` on an `httpx.HTTPError` (connection error/timeout - no
+     response ever came back).
+   - `send_ad_hoc_webhook()` (the shared one-off signed-POST helper
+     behind both the Testing module's TEST EVERYTICKET WEBHOOK tool and
+     the new Verify connectivity action below): its result dict now also
+     carries `response_headers`.
+   - A new shared helper, `record_ad_hoc_delivery()`, factors out the
+     WebhookEvent/WebhookDelivery-creation logic that used to be inlined
+     directly in `admin_testing.py`'s `test_webhook_send()` - now both
+     that endpoint and `verify_connectivity()` persist
+     request/response headers through one code path instead of two
+     copies that could drift. Returns `None` (records nothing) when
+     `send_ad_hoc_webhook()` never actually attempted anything (no
+     destination configured at all).
+
+2. **No quick, always-available way to test connectivity from the
+   Webhook Logs screen itself.** The existing TEST EVERYTICKET WEBHOOK
+   tool lives in the admin Testing/Developer Tools module, which is
+   entirely gated by `require_test_mode()` (spec section 55) - useless
+   for checking a real, live production destination. New endpoint
+   `POST /admin/webhooks/verify` (`app.api.v1.admin_webhooks.
+   verify_connectivity`) sends a small, fixed, harmless ping payload
+   (`{"ping": true, "source": "admin_webhook_logs_verify"}`) to the
+   application's currently-configured destination, signed exactly like a
+   real delivery, and always records the attempt via
+   `record_ad_hoc_delivery()` (`event_type
+   "webhook.connectivity_check"`) so the result is immediately visible
+   in the log below, not just in the live response. Deliberately **NOT**
+   gated by `require_test_mode()` - unlike every tool in the Testing
+   module - the same way the existing delivery Retry action isn't;
+   gated instead only by the existing `WEBHOOKS_MANAGE` permission. The
+   one-off record is kept out of `dispatch_pending()`'s retry sweep the
+   same way the ad-hoc test tool's rows already are: `next_retry_at` is
+   left `None`.
+
+**Frontend** (`AdminWebhooksPage.tsx`): a new "Connectivity check" panel
+at the top of the Webhook Logs page with a "Verify connectivity" button
+- shows an immediate Reached/Not reached result (HTTP status or error)
+plus the request/response headers from that one call, and reloads the
+page's lists below so the recorded attempt shows up right away. The
+existing click-to-expand delivery/event rows (added in the previous
+follow-up for `response_body`) now also show "Request headers sent" and
+"Response headers received" sections alongside the response body/error -
+same pattern for both the Deliveries table and each Event's delivery
+list, via a small shared `DeliveryDetail` component. `WebhookDeliveryOut`
+and `TestWebhookSendResult` (reused as the verify endpoint's response
+type, since `send_ad_hoc_webhook()`'s result shape is exactly what both
+share) both gained `request_headers`/`response_headers` in
+`src/api/types.ts`; new `adminVerifyWebhookConnectivity()` in
+`src/api/endpoints.ts`.
+
+Verified: 9 new backend tests - `tests/test_webhooks.py` covers headers
+being captured (and `response_headers` staying `None` on a connection
+error) through the real `dispatch_pending()`/`_attempt_one()` path, and
+through `send_ad_hoc_webhook()`/`record_ad_hoc_delivery()` (including
+the "no destination configured at all" case, which needed
+`EVERYTICKET_WEBHOOK_URL` cleared too, not just the application's own
+`webhook_url` - the settings fallback otherwise still resolves a URL);
+new `tests/test_admin_webhooks_verify.py` covers the endpoint itself -
+succeeds under `TEST_MODE=false` (contrasting with the Testing module's
+403 under the same condition), 403s for an admin without
+`WEBHOOKS_MANAGE`, and that a call is visible via `GET
+/admin/webhooks/events?event_type=webhook.connectivity_check` with an
+audit log entry alongside it. Full suite: 161 total backend tests, 160
+passing (same pre-existing, unrelated `/ready` DB-connectivity gap
+only - confirmed unrelated again this pass, no change to `app/main.py`
+or the DB layer). Frontend `tsc -b && vite build` clean; `oxlint` 0
+errors (same 9 pre-existing warnings, none in the changed file).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
