@@ -1167,6 +1167,31 @@ textarea {
   padding-left: 24px;
 }
 
+.rte-content h2,
+.rte-content h3 {
+  margin: 8px 0 4px;
+}
+
+.rte-button-source {
+  margin-left: auto;
+}
+
+.rte-source {
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border: none;
+  border-radius: 0;
+  font-family: var(--mono);
+  font-size: 13px;
+}
+
+.rte-source:focus {
+  outline: none;
+}
+
 .plan-description ul,
 .plan-description ol {
   margin: 6px 0;

@@ -1810,6 +1810,51 @@ value. `tests/test_admin_config.py`'s sample-JSON test updated to match.
 Full suite: 163 total backend tests, 162 passing (same pre-existing,
 unrelated `/ready` DB-connectivity gap only).
 
+## 2026-09-11 (follow-up 5): Notification Templates - Edit opens as a popup, Body (HTML) is a rich-text editor
+
+Vishal's follow-up, verbatim: "notifications email template should 1.
+Open in popup for edit 2. body html should be editor" - two frontend-only
+gaps on the admin Notifications screen (`AdminNotificationsPage.tsx`);
+no backend change needed, `PUT /admin/notifications/templates/{code}`
+already accepted subject/body_html/active as-is.
+
+1. Edit used to toggle an inline form expanding below the templates
+   table. It now opens in a `Modal` popup (`wide` variant), the same
+   component and pattern the Plans Add/Edit form already established -
+   consistent with the rest of the admin console rather than a one-off.
+2. Body (HTML) used to be a plain `<textarea>`. It's now the same
+   `RichTextEditor` component the plan description field already uses
+   (`frontend/src/components/RichTextEditor.tsx`), reused rather than a
+   second component built from scratch - extended with two new optional
+   props so the plan-description call site is completely unaffected:
+   - `toolbar` - lets a caller override the default 4-command toolbar
+     (bold/italic/bullet/numbered). The Notifications page passes a
+     broader one (`EMAIL_BODY_TOOLBAR`, defined locally in
+     `AdminNotificationsPage.tsx`): bold/italic/underline/H2/H3/
+     paragraph/bullet/numbered/link/clear-formatting - since, unlike a
+     plan description, there's no server-side sanitizer trimming a
+     template's body_html back down (`app.notifications.email.service`
+     renders it through Jinja2 verbatim), so a template can legitimately
+     use headings, underline, and links.
+   - `allowSourceToggle` - adds a "HTML source" / "Back to visual"
+     button that swaps the contentEditable view for a plain `<textarea>`
+     bound to the exact same underlying HTML string. Needed because
+     these bodies carry Jinja2 template syntax (`{{ code }}`,
+     `{% if failure_reason %}...{% endif %}`) that a WYSIWYG-only editor
+     risks mangling if an admin needs to add or adjust a variable - the
+     source view is the safety net for exact control, always kept in
+     sync with the visual view through the same hidden `<input>` both
+     modes write to.
+
+No migration, no new backend endpoint or schema change. Verified:
+existing `tests/test_admin_api.py`'s notification-template test still
+passes unchanged (backend contract untouched). Frontend
+`tsc -b && vite build` clean; `oxlint` 0 errors, 9 warnings - same
+pre-existing count as before this pass (moving the new
+`EMAIL_BODY_TOOLBAR` constant into `AdminNotificationsPage.tsx` rather
+than exporting it from `RichTextEditor.tsx` avoided an otherwise-new
+`only-export-components` warning on that shared file).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is
