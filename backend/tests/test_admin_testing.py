@@ -212,6 +212,40 @@ def test_webhook_send_returns_request_response_shape(client, seeded_db):
         assert "error" in body
 
 
+def test_webhook_send_result_appears_in_webhook_logs(client, seeded_db):
+    """Per Vishal's follow-up ("I want to have response into webhook
+    logs"): a Test Everyticket Webhook send - success or failure - must
+    show up on the admin Webhook Logs screen (GET /admin/webhooks/events
+    and /deliveries), with the real response/error captured on the
+    delivery row, not just in the live API response or Audit Logs."""
+    headers = _admin_headers(client)
+    resp = client.post(
+        "/api/v1/admin/testing/webhook/send",
+        json={"payload": {"marker": "webhook-logs-check"}},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    live_result = resp.json()
+    assert live_result["sent"] is False  # nothing listens at the fallback URL in this test env
+    assert "error" in live_result
+
+    events = client.get(
+        "/api/v1/admin/webhooks/events", params={"event_type": "test.manual_send"}, headers=headers
+    )
+    assert events.status_code == 200, events.text
+    matching = [e for e in events.json()["items"] if e["payload"] == {"marker": "webhook-logs-check"}]
+    assert len(matching) == 1
+    event = matching[0]
+    assert len(event["deliveries"]) == 1
+    delivery = event["deliveries"][0]
+    assert delivery["status"] == "FAILED"
+    assert delivery["response_body"] == live_result["error"]
+
+    deliveries = client.get("/api/v1/admin/webhooks/deliveries", params={"status": "FAILED"}, headers=headers)
+    assert deliveries.status_code == 200, deliveries.text
+    assert any(d["response_body"] == live_result["error"] for d in deliveries.json()["items"])
+
+
 def test_webhook_send_result_is_stored_in_audit_log_even_on_failure(client, seeded_db):
     """A test send that fails (nothing is listening at the fallback
     EVERYTICKET_WEBHOOK_URL in this test environment) must still be

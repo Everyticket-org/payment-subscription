@@ -1632,6 +1632,50 @@ other, unrelated PDF-cache environment failure noted in the previous
 entry did not recur this run, consistent with it being an environment
 flake rather than a real regression). No frontend changes needed.
 
+## 2026-09-11 (follow-up 2): TEST EVERYTICKET WEBHOOK now recorded on the Webhook Logs screen too
+
+Vishal's feedback, verbatim: "I want to have response into webhook
+logs" - a follow-up on the previous entry (which stored the test send's
+result in the Audit Logs trail). That was the wrong home for it: Vishal
+wants it on the dedicated **Webhook Logs** screen (`GET /admin/webhooks/
+events` and `/deliveries`) alongside real deliveries, not buried in
+Audit Logs.
+
+`POST /admin/testing/webhook/send` (`app.api.v1.admin_testing.
+test_webhook_send`) now records a real `WebhookEvent` (`event_type
+"test.manual_send"`, `entity_type "test"`) + `WebhookDelivery` row for
+every attempt actually made (skipped only when no destination is
+configured at all, since then nothing was attempted) - `http_status`,
+`response_body` (or the error message on a network/timeout failure),
+`status` (SUCCESS/FAILED), and `attempt_count=1` are all populated
+exactly like a real delivery's. `next_retry_at` is deliberately left
+`None` so this one-off diagnostic row is never picked up by
+`dispatch_pending()`'s retry sweep - retrying it would resend through
+the standard `{event_type, payload}` envelope, which is a different
+body than the raw JSON this tool intentionally sends byte-for-byte
+(see the endpoint's own docstring for the full reasoning). The Audit
+Logs entry from the previous pass is unchanged/kept - both are useful,
+for different audiences.
+
+**Also fixed while in there**: the Webhook Logs screen itself
+(`AdminWebhooksPage.tsx`) never actually displayed `response_body`
+anywhere, for ANY delivery - real or test. `WebhookDeliveryOut` has
+carried this field since increment 5, but the admin UI only ever showed
+status/HTTP code/attempt count. Both the Deliveries table and each
+Event's delivery list are now click-to-expand rows (same interaction
+pattern the Audit Logs page already uses for old/new values) revealing
+the actual response text or error message.
+
+Verified: new `test_webhook_send_result_appears_in_webhook_logs` in
+`tests/test_admin_testing.py`, asserting the failed test send (nothing
+listens at the fallback URL in this test environment) surfaces via both
+`GET /admin/webhooks/events?event_type=test.manual_send` and `GET
+/admin/webhooks/deliveries?status=FAILED`, with `response_body` matching
+the live response's `error` exactly. Full suite: 152 total backend
+tests, 151 passing (same pre-existing `/ready` gap only). Frontend
+`tsc -b && vite build` clean; `oxlint` 0 errors (same 9 pre-existing
+warnings, none new).
+
 ## Explicitly NOT implemented yet
 
 These are real gaps against the full spec, not hidden shortcuts - each is

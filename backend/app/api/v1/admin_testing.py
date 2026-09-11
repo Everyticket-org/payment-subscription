@@ -50,8 +50,9 @@ from app.audit import service as audit_service
 from app.auth.deps import require_permission, require_test_mode
 from app.auth.models import AdminUser
 from app.core.config import get_settings
-from app.core.enums import PaymentType, SubscriptionEventType
+from app.core.enums import PaymentType, SubscriptionEventType, WebhookDeliveryStatus
 from app.core.exceptions import CustomerNotFound, PlanNotFound, SubscriptionNotFound
+from app.core.ids import new_event_id
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
@@ -307,13 +308,64 @@ def test_webhook_send(
     """Spec section 54 TEST EVERYTICKET WEBHOOK: admin-edited JSON body +
     optional extra headers, signed exactly like a real dispatch and sent
     directly to the application's configured webhook destination. Shows
-    the request, response, HTTP status, and elapsed time - never queues a
-    WebhookEvent/WebhookDelivery row, since this is a live diagnostic
-    send, not a real business event."""
+    the request, response, HTTP status, and elapsed time in the live API
+    response, AND (per Vishal's follow-up: "I want to have response into
+    webhook logs") records a real WebhookEvent/WebhookDelivery row so the
+    same response/error is also visible later from the admin Webhook
+    Logs screen, exactly like a real delivery - not just in Audit Logs
+    or the admin's browser for as long as this page stays open.
+
+    Deliberately NOT wired through queue_event()/dispatch_pending(): this
+    tool intentionally sends the admin's JSON body byte-for-byte, with
+    whatever extra headers they typed, rather than wrapping it in the
+    standard {event_type, payload} envelope every real event uses - that
+    raw-send behavior is the whole point of a webhook diagnostic tool
+    (e.g. testing how the destination handles a malformed or
+    non-standard body). So the recorded WebhookDelivery's next_retry_at
+    is always left None - it's a finished, one-off record for visibility,
+    not something the retry sweep (dispatch_pending) should ever pick up
+    and resend through the real envelope-wrapping path (which would send
+    a different body than what was actually tested). An admin can still
+    press "Send test webhook" again any time to re-test.
+
+    No row is recorded when there's no destination configured at all
+    (send_ad_hoc_webhook's early "nothing to attempt" case) - a
+    WebhookDelivery represents an actual attempt, and none was made."""
     result = webhook_service.send_ad_hoc_webhook(application=application, payload=body.payload, extra_headers=body.headers)
+
+    if "request" in result:
+        # An attempt was actually made (a destination was resolved) -
+        # record it as a real WebhookEvent + WebhookDelivery so it shows
+        # up in Webhook Logs alongside genuine deliveries, response/error
+        # included either way.
+        event = WebhookEvent(
+            event_id=new_event_id(),
+            event_type="test.manual_send",
+            entity_type="test",
+            entity_id=f"TEST-SEND-{_short_suffix()}",
+            payload=body.payload,
+        )
+        db.add(event)
+        db.flush()
+
+        now = datetime.now(timezone.utc)
+        delivery = WebhookDelivery(
+            webhook_event_id=event.id,
+            destination_application_id=application.id,
+            destination_url=result["request"]["url"],
+            status=WebhookDeliveryStatus.SUCCESS.value if result.get("sent") else WebhookDeliveryStatus.FAILED.value,
+            http_status=result.get("http_status"),
+            response_body=(result.get("response_body") or result.get("error") or "")[:4000],
+            attempt_count=1,
+            last_attempt_at=now,
+            next_retry_at=None,
+        )
+        db.add(delivery)
+        db.flush()
+
     # Store the full result - including response_body/error on a failed
     # send, not just sent/http_status - so a test send that errors is
-    # still reviewable later from Audit Logs, not only visible in the
+    # still reviewable later from Audit Logs too, not only visible in the
     # admin's browser for as long as this page stays open. response_body
     # is already truncated to 4000 chars by send_ad_hoc_webhook(); the
     # request dict (url/headers/payload) is included too since a
