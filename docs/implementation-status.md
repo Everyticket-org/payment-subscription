@@ -2089,7 +2089,7 @@ head` run against Vishal's real Postgres database before this reaches
 him in a running environment - it hasn't been applied there yet, only
 verified to chain correctly off the current head and to pass the test
 suite (which creates its schema straight from the ORM models, not via
-Alembic).
+Alembic). Committed as `de31a17`.
 
 ## Explicitly NOT implemented yet
 
