@@ -214,15 +214,18 @@ export function PortalPage() {
           {registration_data.length > 0 && (
             <>
               <h3>Registration details</h3>
+              {/* Only the most recent submission is shown - multiple
+                  historical rows can exist across separate subscribe
+                  attempts (each preserved for history), and the backend
+                  already orders these newest-first, so showing every row
+                  here would display old fields as if duplicated/current. */}
               <dl className="summary-list">
-                {registration_data.flatMap((entry) =>
-                  Object.entries(entry.data).map(([key, value]) => (
-                    <Fragment key={`${entry.created_at}-${key}`}>
-                      <dt>{fieldLabels.get(key) ?? key}</dt>
-                      <dd>{String(value ?? "-")}</dd>
-                    </Fragment>
-                  )),
-                )}
+                {Object.entries(registration_data[0].data).map(([key, value]) => (
+                  <Fragment key={key}>
+                    <dt>{fieldLabels.get(key) ?? key}</dt>
+                    <dd>{String(value ?? "-")}</dd>
+                  </Fragment>
+                ))}
               </dl>
             </>
           )}

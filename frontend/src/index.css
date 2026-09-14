@@ -689,6 +689,35 @@ select:focus {
   margin: 0;
   color: var(--text-h);
   font-weight: 600;
+  /* .summary-list is a 2-column grid (auto 1fr) - like any grid item, a
+     dd's default min-width is `auto`, so one long unbroken value (a long
+     email address, GSTIN, etc) refused to shrink below its own
+     min-content width and forced the whole grid - and everything sharing
+     its row - wider than the viewport on narrow screens. min-width: 0
+     lets the column shrink; break-word is just a safety net for a single
+     token still wider than the (now much roomier, see the max-width:560px
+     rule below) column once it does. */
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+/* Below ~560px the "auto" dt column (sized to fit its widest label, e.g.
+   "Contact Person") leaves too little room for the 1fr value column - a
+   long value like an email or GSTIN would otherwise need break-word to
+   fracture it character-by-character just to fit. Stacking label above
+   value instead (single column) gives the value the full row width, the
+   same "label on its own line" pattern most responsive forms use. */
+@media (max-width: 560px) {
+  .summary-list {
+    grid-template-columns: 1fr;
+    gap: 2px 0;
+  }
+  .summary-list dt {
+    margin-top: 8px;
+  }
+  .summary-list dt:first-child {
+    margin-top: 0;
+  }
 }
 
 .portal-actions {
@@ -950,6 +979,16 @@ select:focus {
   box-shadow: var(--shadow-sm);
   padding: 22px 24px;
   margin-bottom: 20px;
+  /* A CSS grid item's default min-width is `auto`, meaning it refuses to
+     shrink below its content's min-content size (e.g. a wide data-table)
+     even though that content has its own overflow-x:auto scroller
+     (.table-wrap) - without this, an .admin-panel used inside
+     .detail-grid/.detail-grid-3col (Subscriptions/Payments/Invoices on
+     the admin Customer detail page) forced the whole page wider than the
+     viewport on narrow screens instead of collapsing to one column and
+     letting its own table scroll horizontally. Harmless when .admin-panel
+     is used standalone (not a grid/flex item), which is most places. */
+  min-width: 0;
 }
 
 .admin-toolbar {

@@ -146,11 +146,19 @@ def queue_event(
     entity_type: str,
     entity_id: str,
     payload: dict,
+    customer_reference: str | None = None,
 ) -> WebhookEvent | None:
     """Durable, DB-only enqueue - never makes a network call. Returns
     None (and queues nothing) if there's no destination configured at
     all (neither the application's own webhook_url nor the
-    EVERYTICKET_WEBHOOK_URL fallback), since there's nowhere to send it."""
+    EVERYTICKET_WEBHOOK_URL fallback), since there's nowhere to send it.
+
+    customer_reference: which customer this webhook call concerns, e.g.
+    the customer_id (Vishal: "Keep reference of why that webhook called
+    and show in logs - like for which customer it has been called").
+    Passed explicitly by callers who already have the relevant
+    subscription/customer in scope, rather than derived from payload -
+    left as None for synthetic/test events with no real customer."""
     url, _secret = _resolve_destination(application)
     if not url:
         logger.info(
@@ -166,6 +174,7 @@ def queue_event(
         entity_type=entity_type,
         entity_id=entity_id,
         payload=payload,
+        customer_reference=customer_reference,
     )
     db.add(event)
     db.flush()
@@ -272,6 +281,28 @@ def build_wire_body(*, event_type: str, payload: dict) -> dict:
     return {"event_type": event_type, "payload": payload}
 
 
+def _json_status_is_fail(response_body: str | None) -> bool:
+    """True iff response_body parses as a JSON object whose top-level
+    "status" field is (case-insensitively) "fail". Vishal: "Any response
+    with JSON, check status - if 'fail' then trigger 'Escalation on
+    failure' email." Applied generically to every webhook event type
+    (unlike the activation-only success:false convention handled by
+    _handle_activation_outcome above) - a destination can report a
+    business-level failure in its body even while returning HTTP 2xx, and
+    that must count as a failed delivery for retry/escalation purposes
+    just as much as a non-2xx HTTP status does."""
+    if not response_body:
+        return False
+    try:
+        parsed = json.loads(response_body)
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(parsed, dict):
+        return False
+    status = parsed.get("status")
+    return isinstance(status, str) and status.strip().lower() == "fail"
+
+
 def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.Client | None = None) -> bool:
     """Makes one delivery attempt and updates the row in place. Returns
     True iff it succeeded (2xx). Owns its own short-lived httpx.Client
@@ -288,6 +319,10 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
     if secret:
         headers["X-Webhook-Signature"] = f"sha256={_sign(secret, body)}"
     delivery.request_headers = headers
+    # Vishal: "Show request data as well where currently showing response
+    # data only" - persisted genuinely (not reconstructed from
+    # event.payload at read time) since this is the exact envelope sent.
+    delivery.request_body = body.decode("utf-8")[:4000]
 
     # Vishal: "Log webhook call time and response completion time" - the
     # wall-clock start is recorded for display/audit, the monotonic clock
@@ -304,6 +339,15 @@ def _attempt_one(db: Session, delivery: WebhookDelivery, *, http_client: httpx.C
         delivery.response_body = response.text[:4000]
         delivery.response_headers = dict(response.headers)
         succeeded = 200 <= response.status_code < 300
+        if succeeded and _json_status_is_fail(delivery.response_body):
+            # HTTP-level 2xx but the destination's own JSON body reports a
+            # business failure - treat as a failed delivery so it feeds
+            # into the normal retry/EXHAUSTED/escalation-email pipeline
+            # below exactly like any other failure, rather than a
+            # separate immediate-trigger path (which would risk firing
+            # the escalation email on every attempt instead of once, on
+            # exhaustion).
+            succeeded = False
     except httpx.HTTPError as exc:
         delivery.http_status = None
         delivery.response_body = str(exc)[:4000]
@@ -687,7 +731,14 @@ def send_ad_hoc_webhook(
 
 
 def record_ad_hoc_delivery(
-    db: Session, *, application: Application, event_type: str, entity_id: str, payload: dict, result: dict
+    db: Session,
+    *,
+    application: Application,
+    event_type: str,
+    entity_id: str,
+    payload: dict,
+    result: dict,
+    customer_reference: str | None = None,
 ) -> WebhookDelivery | None:
     """Records the result of an send_ad_hoc_webhook() attempt as a real
     WebhookEvent + WebhookDelivery row, so it's visible on the admin
@@ -716,12 +767,14 @@ def record_ad_hoc_delivery(
         entity_type="test",
         entity_id=entity_id,
         payload=payload,
+        customer_reference=customer_reference,
     )
     db.add(event)
     db.flush()
 
     _completed_at = datetime.now(timezone.utc)
     _started_at_raw = result.get("started_at")
+    _request_body_raw = result["request"].get("body")
     delivery = WebhookDelivery(
         webhook_event_id=event.id,
         destination_application_id=application.id,
@@ -731,6 +784,15 @@ def record_ad_hoc_delivery(
         response_body=(result.get("response_body") or result.get("error") or "")[:4000],
         request_headers=result["request"].get("headers"),
         response_headers=result.get("response_headers"),
+        # Ad-hoc sends transmit the raw payload unwrapped (no
+        # {event_type, payload} envelope) - persist exactly that, not a
+        # reconstruction, so it matches what send_ad_hoc_webhook() actually
+        # put on the wire.
+        request_body=(
+            json.dumps(_request_body_raw, separators=(",", ":"), default=str)[:4000]
+            if _request_body_raw is not None
+            else None
+        ),
         attempt_count=1,
         attempt_started_at=(datetime.fromisoformat(_started_at_raw) if _started_at_raw else None),
         duration_ms=(round(result["elapsed_ms"]) if result.get("elapsed_ms") is not None else None),

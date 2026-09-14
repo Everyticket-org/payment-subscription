@@ -81,6 +81,7 @@ def _to_event_out(event: WebhookEvent) -> WebhookEventOut:
         payload=event.payload,
         created_at=event.created_at,
         deliveries=[WebhookDeliveryOut.model_validate(d) for d in event.deliveries],
+        customer_reference=event.customer_reference,
     )
 
 
@@ -121,7 +122,11 @@ def list_deliveries(
     db: Session = Depends(get_db),
     _admin: AdminUser = Depends(require_permission("WEBHOOKS_VIEW")),
 ):
-    query = db.query(WebhookDelivery)
+    # Eager-load .event - WebhookDeliveryOut's event_type/entity_type/
+    # entity_id/customer_reference fields are proxied @property methods
+    # that read delivery.event, so without this every row here would
+    # trigger its own separate lazy-load query (N+1).
+    query = db.query(WebhookDelivery).options(joinedload(WebhookDelivery.event))
     if status_filter:
         query = query.filter(WebhookDelivery.status == status_filter.upper())
     query = query.order_by(WebhookDelivery.created_at.desc())

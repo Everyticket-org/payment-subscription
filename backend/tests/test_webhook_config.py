@@ -108,6 +108,46 @@ def test_escalation_email_sent_once_delivery_becomes_exhausted(db_session, fake_
     assert "Failed after 2 attempts" in message
 
 
+def test_escalation_email_sent_when_json_status_is_fail_despite_http_200(db_session, fake_smtp_success):
+    """Vishal: "Any response with JSON, check status - if 'fail' then
+    trigger 'Escalation on failure' email." A destination that always
+    returns HTTP 200 but reports {"status": "fail"} in its body must still
+    exhaust and escalate exactly like a non-2xx response would - the JSON
+    check feeds into the same `succeeded` flag the existing retry/
+    exhaustion/escalation pipeline already uses, so no separate
+    notification path is introduced."""
+    app_row = _application(
+        db_session,
+        webhook_retry_limit=1,
+        webhook_escalation_emails="ops@example.com",
+        webhook_escalation_email_subject="Webhook down for {{ event_type }}",
+        webhook_escalation_email_body="<p>Failed after {{ attempt_count }} attempts.</p>",
+    )
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.renewed",
+        entity_type="subscription", entity_id="SUB-JSONFAIL-ESCALATE", payload={},
+    )
+    db_session.commit()
+    delivery = db_session.query(WebhookDelivery).one()
+    delivery.attempt_count = 1
+    delivery.status = WebhookDeliveryStatus.FAILED.value
+    delivery.next_retry_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "fail", "reason": "duplicate customer"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    db_session.refresh(delivery)
+    assert delivery.http_status == 200
+    assert delivery.status == WebhookDeliveryStatus.EXHAUSTED.value
+    assert len(fake_smtp_success) == 1
+    _from, _to, message = fake_smtp_success[0]
+    assert "Webhook down for subscription.renewed" in message
+
+
 def test_escalation_email_not_sent_when_no_recipients_configured(db_session, fake_smtp_success):
     app_row = _application(db_session, webhook_retry_limit=1)  # no webhook_escalation_emails set
     webhook_service.queue_event(

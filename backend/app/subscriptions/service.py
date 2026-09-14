@@ -338,6 +338,7 @@ def expire_due_subscriptions(db: Session) -> int:
                 event_type="subscription.expired",
                 entity_type="subscription",
                 entity_id=subscription.subscription_id,
+                customer_reference=subscription.customer.customer_id,
                 payload=expiry_payload(
                     subscription_id=subscription.subscription_id,
                     plan_code=subscription.plan.plan_code,
@@ -437,6 +438,7 @@ def archive_stale_subscriptions(db: Session) -> int:
             event_type="subscription.archived",
             entity_type="subscription",
             entity_id=subscription.subscription_id,
+            customer_reference=subscription.customer.customer_id,
             payload=archive_payload(
                 subscription_id=subscription.subscription_id,
                 plan_code=subscription.plan.plan_code,
@@ -569,6 +571,7 @@ def cancel_subscription(
             event_type="subscription.cancelled",
             entity_type="subscription",
             entity_id=subscription.subscription_id,
+            customer_reference=subscription.customer.customer_id,
             payload=cancelled_payload(
                 subscription_id=subscription.subscription_id,
                 plan_code=subscription.plan.plan_code,

@@ -19,6 +19,9 @@ class WebhookDeliveryOut(BaseModel):
     # exchange, not just its body/status.
     request_headers: dict | None = None
     response_headers: dict | None = None
+    # Vishal: "Show request data as well where currently showing response
+    # data only" - the exact request body sent on this attempt.
+    request_body: str | None = None
     # Vishal: "Log webhook call time and response completion time" -
     # attempt_started_at is when this attempt's outbound call began;
     # last_attempt_at (below) doubles as when it completed;
@@ -27,6 +30,14 @@ class WebhookDeliveryOut(BaseModel):
     duration_ms: int | None = None
     last_attempt_at: datetime | None = None
     next_retry_at: datetime | None = None
+    # Vishal: "Keep reference of why that webhook called and show in logs -
+    # like for which customer it has been called" - proxied from the
+    # parent WebhookEvent via a model @property, so this flat delivery row
+    # already carries its own event context without a manual join.
+    event_type: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    customer_reference: str | None = None
 
 
 class WebhookEventOut(BaseModel):
@@ -38,3 +49,4 @@ class WebhookEventOut(BaseModel):
     payload: dict
     created_at: datetime
     deliveries: list[WebhookDeliveryOut] = []
+    customer_reference: str | None = None

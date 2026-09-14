@@ -263,6 +263,7 @@ def process_gateway_result(
                     event_type="subscription.activated",
                     entity_type="subscription",
                     entity_id=subscription.subscription_id,
+                    customer_reference=subscription.customer.customer_id,
                     payload=onboarding_payload(
                         subscription_id=subscription.subscription_id,
                         email=subscription.customer.email,
@@ -304,6 +305,7 @@ def process_gateway_result(
                     event_type="subscription.renewed",
                     entity_type="subscription",
                     entity_id=subscription.subscription_id,
+                    customer_reference=subscription.customer.customer_id,
                     payload=renewed_payload(
                         subscription_id=subscription.subscription_id,
                         plan_code=subscription.plan.plan_code,
@@ -348,6 +350,7 @@ def process_gateway_result(
                     event_type=webhook_event_type,
                     entity_type="subscription",
                     entity_id=subscription.subscription_id,
+                    customer_reference=subscription.customer.customer_id,
                     payload=payload_builder(
                         subscription_id=subscription.subscription_id,
                         customer_id=subscription.customer.customer_id,

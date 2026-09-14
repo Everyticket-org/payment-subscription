@@ -114,6 +114,12 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryOut }) {
       </div>
       <div>
         <p className="hint" style={{ marginBottom: 2 }}>
+          Request body sent
+        </p>
+        <pre style={preStyle}>{delivery.request_body || "(no request body was recorded)"}</pre>
+      </div>
+      <div>
+        <p className="hint" style={{ marginBottom: 2 }}>
           Response body / error
         </p>
         <pre style={preStyle}>{delivery.response_body || "(no response body was returned)"}</pre>
@@ -197,6 +203,8 @@ export function AdminWebhooksPage() {
             <thead>
               <tr>
                 <th>Destination</th>
+                <th>Event</th>
+                <th>Customer</th>
                 <th>Status</th>
                 <th className="numeric">Attempts</th>
                 <th>HTTP</th>
@@ -210,6 +218,8 @@ export function AdminWebhooksPage() {
                 <Fragment key={d.id}>
                   <tr className="clickable" onClick={() => setExpandedDeliveryId(expandedDeliveryId === d.id ? null : d.id)}>
                     <td>{d.destination_url}</td>
+                    <td>{d.event_type ?? "-"}</td>
+                    <td>{d.customer_reference ?? "-"}</td>
                     <td>
                       <StatusBadge value={d.status} />
                     </td>
@@ -234,7 +244,7 @@ export function AdminWebhooksPage() {
                   </tr>
                   {expandedDeliveryId === d.id && (
                     <tr>
-                      <td colSpan={7}>
+                      <td colSpan={9}>
                         <DeliveryDetail delivery={d} />
                       </td>
                     </tr>
@@ -268,6 +278,7 @@ export function AdminWebhooksPage() {
               <tr>
                 <th>Event</th>
                 <th>Entity</th>
+                <th>Customer</th>
                 <th>When</th>
                 <th>Deliveries</th>
               </tr>
@@ -280,6 +291,7 @@ export function AdminWebhooksPage() {
                     <td>
                       {e.entity_type} {e.entity_id}
                     </td>
+                    <td>{e.customer_reference ?? "-"}</td>
                     <td>{new Date(e.created_at).toLocaleString()}</td>
                     <td>
                       {e.deliveries.map((d) => (
@@ -289,7 +301,7 @@ export function AdminWebhooksPage() {
                   </tr>
                   {expandedEventId === e.event_id && (
                     <tr>
-                      <td colSpan={4}>
+                      <td colSpan={5}>
                         {e.deliveries.length === 0 && <p className="hint">No delivery attempts recorded.</p>}
                         {e.deliveries.map((d) => (
                           <div key={d.id} style={{ marginBottom: 8 }}>

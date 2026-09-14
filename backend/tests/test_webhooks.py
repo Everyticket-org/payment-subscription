@@ -21,7 +21,7 @@ from app.webhooks.models import WebhookDelivery, WebhookEvent
 
 def _application(db_session, **overrides):
     app_row = Application(
-        code="TESTAPP",
+        code=overrides.get("code", "TESTAPP"),
         name="Test App",
         application_url="http://localhost:9999",
         webhook_url=overrides.get("webhook_url", "http://localhost:9999/webhooks"),
@@ -235,6 +235,143 @@ def test_dispatch_pending_leaves_response_headers_null_on_connection_error(db_se
     assert delivery.request_headers is not None
     assert delivery.request_headers["X-Webhook-Signature"].startswith("sha256=")
     assert delivery.response_headers is None
+
+
+def test_dispatch_pending_captures_request_body_sent(db_session):
+    """Vishal: "Show request data as well where currently showing
+    response data only" - the exact wire body (the {event_type, payload}
+    envelope build_wire_body() constructs) must be persisted on the
+    delivery row, not just the response."""
+    app_row = _application(db_session)
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.activated",
+        entity_type="subscription", entity_id="SUB-REQBODY", payload={"plan_code": "PRO"},
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"received": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    delivery = db_session.query(WebhookDelivery).one()
+    assert delivery.request_body is not None
+    assert '"event_type":"subscription.activated"' in delivery.request_body
+    assert '"plan_code":"PRO"' in delivery.request_body
+
+
+def test_queue_event_stores_customer_reference(db_session):
+    """Vishal: "Keep reference of why that webhook called and show in
+    logs - like for which customer it has been called."""
+    app_row = _application(db_session)
+    event = webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.activated",
+        entity_type="subscription", entity_id="SUB-CUSTREF", payload={},
+        customer_reference="CUS-ABC123",
+    )
+    db_session.commit()
+
+    assert event.customer_reference == "CUS-ABC123"
+    delivery = db_session.query(WebhookDelivery).filter(WebhookDelivery.webhook_event_id == event.id).one()
+    # Proxied straight from the parent event via a model @property, so a
+    # flat delivery row already carries its own event context.
+    assert delivery.customer_reference == "CUS-ABC123"
+    assert delivery.event_type == "subscription.activated"
+    assert delivery.entity_type == "subscription"
+    assert delivery.entity_id == "SUB-CUSTREF"
+
+
+def test_queue_event_customer_reference_defaults_to_none(db_session):
+    """Synthetic/test events (e.g. the admin webhook failure simulator)
+    have no real customer to reference - must stay None, not error."""
+    app_row = _application(db_session)
+    event = webhook_service.queue_event(
+        db_session, application=app_row, event_type="test.webhook_failure_simulation",
+        entity_type="test", entity_id="TEST-SIM-1", payload={},
+    )
+    db_session.commit()
+    assert event.customer_reference is None
+
+
+def test_json_status_fail_marks_delivery_failed_despite_http_200(db_session):
+    """Vishal: "Any response with JSON, check status - if 'fail' then
+    trigger 'Escalation on failure' email." A 2xx HTTP response whose JSON
+    body reports {"status": "fail"} must be treated as a failed delivery
+    (scheduled for retry), not a success - this is a generic check across
+    every event type, unlike the activation-only success:false
+    convention."""
+    app_row = _application(db_session)
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.renewed",
+        entity_type="subscription", entity_id="SUB-JSONFAIL", payload={},
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "fail", "reason": "unknown customer"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    delivery = db_session.query(WebhookDelivery).one()
+    assert delivery.http_status == 200
+    assert delivery.status == WebhookDeliveryStatus.FAILED.value
+    assert delivery.next_retry_at is not None
+
+
+def test_json_status_fail_is_case_insensitive_and_ignores_non_matching_bodies(db_session):
+    app_row = _application(db_session)
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.renewed",
+        entity_type="subscription", entity_id="SUB-JSONFAIL-CASE", payload={},
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "FAIL"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    delivery = db_session.query(WebhookDelivery).one()
+    assert delivery.status == WebhookDeliveryStatus.FAILED.value
+
+
+def test_json_status_ok_or_non_json_body_still_succeeds(db_session):
+    app_row = _application(db_session)
+    webhook_service.queue_event(
+        db_session, application=app_row, event_type="subscription.renewed",
+        entity_type="subscription", entity_id="SUB-JSONOK", payload={},
+    )
+    db_session.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "ok"})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(db_session, http_client=client)
+
+    delivery = db_session.query(WebhookDelivery).one()
+    assert delivery.status == WebhookDeliveryStatus.SUCCESS.value
+
+    # A non-JSON (plain text) 2xx body must never be treated as a failure
+    # either - only a JSON object with status=="fail" counts.
+    app_row2 = _application(db_session, code="TESTAPP-PLAINTEXT", webhook_url="http://localhost:9999/webhooks-2")
+    webhook_service.queue_event(
+        db_session, application=app_row2, event_type="subscription.renewed",
+        entity_type="subscription", entity_id="SUB-PLAINTEXT", payload={},
+    )
+    db_session.commit()
+
+    def handler2(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="OK")
+
+    client2 = httpx.Client(transport=httpx.MockTransport(handler2))
+    webhook_service.dispatch_pending(db_session, http_client=client2)
+
+    delivery2 = db_session.query(WebhookDelivery).filter(WebhookDelivery.destination_url.like("%webhooks-2")).one()
+    assert delivery2.status == WebhookDeliveryStatus.SUCCESS.value
 
 
 _REAL_HTTPX_CLIENT = httpx.Client

@@ -595,10 +595,21 @@ export interface WebhookDeliveryOut {
   response_body?: string | null;
   request_headers?: Record<string, string> | null;
   response_headers?: Record<string, string> | null;
+  // Vishal: "Show request data as well where currently showing response
+  // data only" - the exact wire body sent on this attempt.
+  request_body?: string | null;
   attempt_started_at?: string | null;
   duration_ms?: number | null;
   last_attempt_at?: string | null;
   next_retry_at?: string | null;
+  // Vishal: "Keep reference of why that webhook called and show in logs -
+  // like for which customer it has been called" - proxied from this
+  // delivery's parent event so a flat delivery row already carries its
+  // own event context.
+  event_type?: string | null;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  customer_reference?: string | null;
 }
 
 export interface WebhookEventOut {
@@ -609,6 +620,7 @@ export interface WebhookEventOut {
   payload: Record<string, unknown>;
   created_at: string;
   deliveries: WebhookDeliveryOut[];
+  customer_reference?: string | null;
 }
 
 export interface NotificationTemplateOut {

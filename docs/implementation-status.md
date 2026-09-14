@@ -4081,3 +4081,132 @@ already flagged on the Registration Form page in follow-up 21 - confirmed
 unrelated to this follow-up's changes (neither the label lookup nor the
 grid class touches that row) and left as-is rather than fixed as a side
 effect of an unrelated request.
+
+## 2026-09-14 (follow-up 26): Webhook JSON status=fail escalation, webhook logs customer/request context, registration data duplicate display fixed
+
+Three requests in one message:
+
+```
+For webhook call to everyticket
+1. Any response with JSON, check status - if "fail" then trigger
+   "Escalation on failure" email
+2. For any webhook call - Keep reference of why that webhook called and
+   show in logs - like for which customer it has been called. and show
+   as column. => Show request data as well where currently showing
+   response data only.
+
+Registration form data - shows 2 times as label value into customer page
+in admin and also for customer portal. please fix.
+```
+
+**1. JSON `status: fail` now counts as a delivery failure, generically.**
+Everyticket can return HTTP 200 while its own JSON body reports a
+business-level failure - previously only the activation event's
+`success: false` convention was checked (`_handle_activation_outcome`,
+unchanged). A new `_json_status_is_fail(response_body)` helper in
+`app/webhooks/service.py` parses the response body as JSON and checks for
+a top-level `"status"` field equal to `"fail"` (case-insensitive); when
+true, `_attempt_one()` downgrades `succeeded` to `False` regardless of
+event type, right after the HTTP-status check. This deliberately feeds
+into the *existing* `succeeded` flag rather than adding a separate
+notify-immediately path, so the already-correct retry/backoff/EXHAUSTED
+bookkeeping and the "fires exactly once, on exhaustion"
+`_notify_webhook_exhausted()` escalation email apply unchanged - no risk
+of spamming the escalation email on every retry attempt. A non-JSON body,
+a JSON body that isn't an object, or any `status` value other than
+`"fail"` all still count as a normal success on 2xx, same as before.
+
+**2. Webhook Logs: Customer + Event columns, and the request body.** Two
+new columns, `customer_reference` (`WebhookEvent`, e.g. a customer_id -
+synthetic/test events like the admin Testing tools leave it `None`) and
+`request_body` (`WebhookDelivery`, the exact wire body sent - persisted
+for real, not reconstructed from `event.payload` at read time, since
+ad-hoc/test sends transmit the raw payload unwrapped while real
+dispatches wrap it in `{event_type, payload}` via `build_wire_body()` -
+reconstruction would be wrong for ad-hoc rows specifically). New Alembic
+migration `7c8790dc6bcf` adds both columns. `queue_event()` gained an
+optional `customer_reference` parameter, threaded through from the 6 real
+call sites that already have the relevant subscription/customer in scope
+(`payments/service.py` x3, `subscriptions/service.py` x3 - activated,
+renewed, upgraded/downgraded, expired, archived, cancelled); the admin
+Testing module's ad-hoc send and failure-simulator call sites deliberately
+leave it unset (no real customer involved). `WebhookDelivery` gained
+`event_type`/`entity_type`/`entity_id`/`customer_reference` as read-only
+`@property` proxies onto its parent `WebhookEvent`, picked up
+automatically by Pydantic's `from_attributes=True` schemas - so the flat
+`GET /admin/webhooks/deliveries` list needed no new hand-written mapping
+function, just the new schema fields plus a `joinedload(WebhookDelivery.
+event)` in `admin_webhooks.list_deliveries` to avoid an N+1. The frontend
+Deliveries table gained "Event" and "Customer" columns; the Events table
+gained a "Customer" column; the shared `DeliveryDetail` expanded view
+gained a new "Request body sent" section (previously only "Response body
+/ error" was shown, per Vishal's exact framing "showing response data
+only").
+
+**3. Registration data no longer shown twice.** Root cause: a customer
+can legitimately accumulate more than one `CustomerRegistrationData` row
+over time (by design - "kept as its own row per submission... so history
+is preserved", e.g. cancelling and later re-subscribing fresh creates a
+second row for the same customer_id), and both `admin_customers.
+get_customer()` and `customer.get_portal()` already order these
+`created_at.desc()` but return every row, un-deduplicated - both
+`AdminCustomerDetailPage.tsx` and `PortalPage.tsx` then rendered *every*
+row's fields in sequence, which reads as the same labels/fields appearing
+twice (or more) once a customer has more than one row. Fixed at the
+display layer on both pages: render only `registration_data[0]` (the
+single most recent submission, since the backend already sorts
+newest-first) instead of looping/flatmapping across the whole array. This
+was verified against a genuinely reproduced case, not a guess: the
+original test customer only had one row (so the bug wasn't visible there
+until reproduced), so a second, real `CustomerRegistrationData` row was
+produced for the same customer by cancelling their active subscription
+and subscribing again fresh via the real public API + mock payment
+flow - confirmed the bug on both pages beforehand, then confirmed the fix
+after.
+
+**Bonus fix - a real, pre-existing 480px overflow found during this
+follow-up's own verification pass.** While confirming the above changes
+at 480px width, the admin Customer detail page (follow-up 25's `.page-
+header-row`/`.detail-grid-3col` work) was found to genuinely overflow the
+viewport - not just the identity header row not wrapping (`.page-header-
+row` given `flexWrap: "wrap"` in its inline override, since only its
+`max-width: 480px` cap was previously overridden), but two deeper CSS
+grid issues shared sitewide: (a) a CSS grid item's default `min-width` is
+`auto`, so `.admin-panel` cards inside `.detail-grid`/`.detail-grid-3col`
+(Subscriptions/Payments/Invoices) refused to shrink below their table's
+content width even though the table has its own `.table-wrap { overflow-
+x: auto }` scroller - fixed by adding `min-width: 0` to `.admin-panel`
+itself (harmless when used standalone, which is most places); (b) the
+same `min-width: auto` default on `.summary-list`'s `dd` grid cells meant
+one long unbroken value (an email, a GSTIN) forced the whole 2-column
+`dt`/`auto 1fr` grid wider than the viewport - fixed generally (this
+class is used across many admin + portal pages) by stacking `dt` above
+`dd` in a single column below 560px instead of attempting to squeeze the
+value into an ever-narrower second column. All three admin-panel/summary-
+list-heavy pages checked (`/admin/customers/{id}`, `/admin/webhooks`,
+`/admin/payments`) plus the customer portal now measure `scrollWidth ==
+480` at a 480px viewport, with no visual regression at 1400px desktop
+width (screenshots compared before/after).
+
+**Verification**: `npx tsc -b`, `npm run build`, `npm run lint` all clean
+(same pre-existing warnings only). Backend: 7 new pytest tests added
+(`_json_status_is_fail` case-insensitivity/non-JSON/non-fail-status
+behavior, request_body persistence, customer_reference propagation and
+its `WebhookDelivery` property proxies, and a full escalation-email test
+that a JSON `status: fail` on HTTP 200 still exhausts-and-escalates
+exactly like a non-2xx response), full suite 217/217 passing (was
+210/210 before this follow-up). Live end-to-end verification (not just
+unit tests): started a tiny local HTTP server returned `{"status":
+"fail", ...}` with HTTP 200, pointed the application's `webhook_url` at
+it, then drove a real subscribe + mock-payment-success through the
+actual public API - confirmed via direct DB query and the admin UI
+(Playwright screenshots) that the resulting `subscription.activated`
+delivery recorded `http_status=200`, `status=FAILED`, the real customer_id
+in `customer_reference`, the exact `{event_type, payload}` envelope in
+`request_body`, and the JSON error body in `response_body`; then clicked
+Attempt again to drive it to EXHAUSTED and confirmed (via the backend log)
+a real escalation-email send was attempted to the configured recipient
+(failing only on "connection refused" since this sandbox has no real SMTP
+server - the attempt itself, at the right moment, is what was being
+verified). Test webhook_url/escalation config was reset to NULL on the
+application afterward so this dev database is left production-clean.

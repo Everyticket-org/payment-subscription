@@ -116,7 +116,12 @@ export function AdminCustomerDetailPage() {
       {detail && (
         <>
           <div className="admin-panel">
-            <div className="page-header-row" style={{ maxWidth: "none" }}>
+            {/* flexWrap added alongside the maxWidth override - without
+                it, the identity summary list and the Suspend/Generate SSO
+                link buttons never drop to their own line, forcing the
+                whole panel wider than the viewport at narrow (~480px)
+                widths, unlike every other admin page. */}
+            <div className="page-header-row" style={{ maxWidth: "none", flexWrap: "wrap", gap: 12 }}>
               <dl className="summary-list">
                 <dt>Email</dt>
                 <dd>{detail.customer.email}</dd>
@@ -166,16 +171,20 @@ export function AdminCustomerDetailPage() {
           {detail.registration_data.length > 0 && (
             <div className="admin-panel">
               <h2>Registration data</h2>
-              {detail.registration_data.map((r, i) => (
-                <dl className="summary-list" key={i}>
-                  {Object.entries(r.data).map(([k, v]) => (
-                    <Fragment key={k}>
-                      <dt>{fieldLabel(k)}</dt>
-                      <dd>{String(v)}</dd>
-                    </Fragment>
-                  ))}
-                </dl>
-              ))}
+              {/* Only the most recent submission is shown - a customer can
+                  accumulate multiple historical rows over separate subscribe
+                  attempts (each preserved for history, see
+                  CustomerRegistrationData model), but the backend already
+                  orders these newest-first, so rendering every row here
+                  would show old fields as if they were all current/duplicated. */}
+              <dl className="summary-list">
+                {Object.entries(detail.registration_data[0].data).map(([k, v]) => (
+                  <Fragment key={k}>
+                    <dt>{fieldLabel(k)}</dt>
+                    <dd>{String(v)}</dd>
+                  </Fragment>
+                ))}
+              </dl>
             </div>
           )}
 
