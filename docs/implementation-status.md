@@ -3725,3 +3725,103 @@ checkboxes are ticked, and - the specific regression check - no element
 on any of the three pages overflows the viewport at 480px (all four
 Configuration pages, including Communication from follow-up 17, now
 pass this check). No migration needed - purely CSS/JSX.
+
+## 2026-09-14 (follow-up 19): "Rows per page" (10/25/50/100) added to every admin grid
+
+"All page having GRID - apply paginations - default 10, then options
+for 25, 50, 100". No backend change needed: every admin list endpoint's
+`limit` query param has always accepted 1-100 (`DEFAULT_LIMIT`/
+`MAX_LIMIT` in `app/api/v1/admin_common.py`) - only the frontend was
+hardcoding a fixed page size (20, or 25 on two screens) with no way for
+an admin to change it. Plans, registration form fields, notification
+templates, and every nested table on a customer/subscription/invoice/
+payment detail page were deliberately left alone - none of those are
+backed by a paginated (`PageOut`) endpoint; they're small, bounded lists
+the backend already returns in full, so "pages of 10/25/50/100" doesn't
+apply to them.
+
+**`components/Pagination.tsx`**: now also renders a "Rows per page"
+`<select>` (10/25/50/100) via a new optional `onLimitChange` prop, next
+to the existing Prev/Next/count controls. Previously the whole component
+hid itself once a list fit on one page (`total <= limit && offset ===
+0`); now Prev/Next/count still hide in that case, but the size picker
+stays visible whenever `onLimitChange` is passed, since the choice of
+page size doesn't depend on how many pages currently exist. New shared
+`utils/pagination.ts` exports `DEFAULT_PAGE_LIMIT` (10) and
+`PAGE_SIZE_OPTIONS` ([10, 25, 50, 100]), plus a `parsePageLimit()` helper
+every page uses to read `limit` back out of its URL/state - it falls
+back to 10 for anything missing, non-numeric, or outside those four
+options (e.g. a hand-edited `?limit=7` URL), so the backend is never
+asked for a page size the picker itself doesn't offer.
+
+**Five pages that already had `Pagination` + a hardcoded `LIMIT`
+constant and URL-persisted `offset`** (Customers, Subscriptions,
+Payments, Invoices, Audit Logs): the constant is gone, `limit` is now
+read from (and written back to) the same `useSearchParams` state as
+`offset`, defaulting to 10. Every existing `setSearchParams(...)` call on
+each page (status/search/filter changes, Prev/Next) now explicitly
+carries the current `limit` through, since `setSearchParams` replaces
+the whole query string rather than merging - without that, changing a
+filter would have silently reset the page size back to 10. Choosing a
+new page size resets `offset` to 0, same as changing any other filter.
+
+**Two pages that had no pagination at all before this** (fixed
+`limit: 20`/`limit: 25`, `offset: 0`, no Prev/Next, no size control):
+Webhook Logs' Deliveries and Events tables (two independent `PageOut`
+collections on the one page, so each now has its own limit/offset -
+resizing or paging one has no effect on the other) and Notifications'
+"Recent sends" log. These didn't have a `useSearchParams`-based pattern
+to extend, so their limit/offset live in local component state instead
+(`DEFAULT_PAGE_LIMIT` initial value) - reasonable for log-style screens
+nobody deep-links into a specific page of.
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint`
+(oxlint) all clean - no new warnings introduced. Full backend suite
+still 210/210 (this was a frontend-only change). Verified in a real
+browser (Playwright): every one of the 8 grids (Customers, Subscriptions,
+Payments, Invoices, Audit Logs, Notifications' Recent sends, Webhook
+Deliveries, Webhook Events) renders a "Rows per page" selector with
+exactly `10/25/50/100` and defaults to 10; selecting a different page
+size updates the URL/state and persists across a subsequent filter
+change; and, using 40 real audit log rows (15 inserted for this check,
+then deleted again afterward - the database was left exactly as found),
+confirmed the full real behavior end-to-end: page 1 shows "1-10 of 40"
+with Prev disabled, Next advances to "11-20 of 40" with the offset
+reflected in the URL, Prev returns to offset 0, and switching to 25 rows
+per page resets to offset 0 while correctly keeping Next enabled (40 >
+25). Also re-confirmed no horizontal overflow at 480px with the new
+"Rows per page" control added to the pagination row (it wraps onto its
+own line under Prev/Next/count on narrow viewports). No migration
+needed - purely frontend.
+
+## 2026-09-14 (follow-up 20): "Rows per page" moved to the left, Prev/Next/count to the right
+
+"Keep records per page dropdown at left and navigation on right side" -
+follow-up 19 had the size picker pushed to the right of the row (via
+`margin-left: auto` on `.pagination-size`) with Prev/Next/count on the
+left. `components/Pagination.tsx` now renders the two groups in the
+opposite order - the "Rows per page" picker first, then a new
+`.pagination-nav` wrapper div around Prev/Next/count - and the
+push-to-the-far-end margin moved from `.pagination-size` onto
+`.pagination-nav`, so the nav group is what now sits flush right while
+the size picker anchors the left edge. Every one of the 8 grids from
+follow-up 19 picks this up automatically since they all render through
+the shared `Pagination` component - no page-level changes needed.
+
+**Bug caught and fixed during verification**: the first version of this
+reorder introduced a narrow-viewport (480px) horizontal-overflow
+regression - grouping Prev/Next/count into one `.pagination-nav` flex
+container without `flex-wrap: wrap` on that container meant, once it
+wrapped onto its own line under the (now left-anchored) size picker, its
+three children could no longer individually drop onto separate lines
+the way they could when they were direct children of the already-
+wrapping `.pagination` row - so "1-10 of 44" was cut off past the card's
+right edge. Fixed by adding `flex-wrap: wrap` to `.pagination-nav` too.
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint` all
+clean. Re-ran the same real-browser (Playwright) check as follow-up 19 -
+temporarily inserted, then deleted again, 15 real audit log rows -
+confirming visually and via a scrollWidth check at both 1400px and
+480px that "Rows per page" now sits at the left, Prev/Next/count at the
+right, and neither width overflows. No migration needed - purely CSS/
+JSX.

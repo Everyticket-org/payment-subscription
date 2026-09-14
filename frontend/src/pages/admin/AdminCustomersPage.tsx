@@ -9,9 +9,8 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { parsePageLimit } from "../../utils/pagination";
 import type { CustomerAdminListItem, PageOut } from "../../api/types";
-
-const LIMIT = 20;
 
 export function AdminCustomersPage() {
   const { adminToken } = useAuth();
@@ -21,12 +20,13 @@ export function AdminCustomersPage() {
   const [error, setError] = useState<unknown>(null);
 
   const q = searchParams.get("q") ?? "";
+  const limit = parsePageLimit(searchParams.get("limit"));
   const offset = Number(searchParams.get("offset") ?? "0");
 
   const reload = useCallback(() => {
     if (!adminToken) return;
-    adminListCustomers({ q: q || undefined, limit: LIMIT, offset }, adminToken).then(setPage).catch(setError);
-  }, [adminToken, q, offset]);
+    adminListCustomers({ q: q || undefined, limit, offset }, adminToken).then(setPage).catch(setError);
+  }, [adminToken, q, limit, offset]);
 
   useEffect(reload, [reload]);
 
@@ -42,7 +42,7 @@ export function AdminCustomersPage() {
           onSubmit={(e) => {
             e.preventDefault();
             const value = new FormData(e.currentTarget).get("q");
-            setSearchParams({ q: String(value ?? ""), offset: "0" });
+            setSearchParams({ q: String(value ?? ""), limit: String(limit), offset: "0" });
           }}
         >
           <label>
@@ -87,7 +87,8 @@ export function AdminCustomersPage() {
             total={page.total}
             limit={page.limit}
             offset={page.offset}
-            onOffsetChange={(next) => setSearchParams({ q, offset: String(next) })}
+            onOffsetChange={(next) => setSearchParams({ q, limit: String(limit), offset: String(next) })}
+            onLimitChange={(next) => setSearchParams({ q, limit: String(next), offset: "0" })}
           />
         )}
       </div>

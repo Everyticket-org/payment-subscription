@@ -7,9 +7,8 @@ import { adminListAuditLogs } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { useAuth } from "../../context/AuthContext";
+import { parsePageLimit } from "../../utils/pagination";
 import type { AuditLogOut, PageOut } from "../../api/types";
-
-const LIMIT = 25;
 
 export function AdminAuditLogsPage() {
   const { adminToken } = useAuth();
@@ -20,17 +19,18 @@ export function AdminAuditLogsPage() {
 
   const action = searchParams.get("action") ?? "";
   const entityType = searchParams.get("entity_type") ?? "";
+  const limit = parsePageLimit(searchParams.get("limit"));
   const offset = Number(searchParams.get("offset") ?? "0");
 
   const reload = useCallback(() => {
     if (!adminToken) return;
     adminListAuditLogs(
-      { action: action || undefined, entity_type: entityType || undefined, limit: LIMIT, offset },
+      { action: action || undefined, entity_type: entityType || undefined, limit, offset },
       adminToken,
     )
       .then(setPage)
       .catch(setError);
-  }, [adminToken, action, entityType, offset]);
+  }, [adminToken, action, entityType, limit, offset]);
 
   useEffect(reload, [reload]);
 
@@ -47,7 +47,7 @@ export function AdminAuditLogsPage() {
             <input
               defaultValue={action}
               placeholder="e.g. PLAN_UPDATED"
-              onBlur={(e) => setSearchParams({ action: e.target.value, entity_type: entityType, offset: "0" })}
+              onBlur={(e) => setSearchParams({ action: e.target.value, entity_type: entityType, limit: String(limit), offset: "0" })}
             />
           </label>
           <label>
@@ -55,7 +55,7 @@ export function AdminAuditLogsPage() {
             <input
               defaultValue={entityType}
               placeholder="e.g. plan, customer"
-              onBlur={(e) => setSearchParams({ action, entity_type: e.target.value, offset: "0" })}
+              onBlur={(e) => setSearchParams({ action, entity_type: e.target.value, limit: String(limit), offset: "0" })}
             />
           </label>
         </div>
@@ -102,7 +102,10 @@ export function AdminAuditLogsPage() {
             total={page.total}
             limit={page.limit}
             offset={page.offset}
-            onOffsetChange={(next) => setSearchParams({ action, entity_type: entityType, offset: String(next) })}
+            onOffsetChange={(next) =>
+              setSearchParams({ action, entity_type: entityType, limit: String(limit), offset: String(next) })
+            }
+            onLimitChange={(next) => setSearchParams({ action, entity_type: entityType, limit: String(next), offset: "0" })}
           />
         )}
       </div>

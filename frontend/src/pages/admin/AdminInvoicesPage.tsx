@@ -8,9 +8,8 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { parsePageLimit } from "../../utils/pagination";
 import type { InvoiceAdminOut, PageOut, TaxConfigOut } from "../../api/types";
-
-const LIMIT = 20;
 
 function TaxConfigPanel() {
   const { adminToken } = useAuth();
@@ -102,12 +101,13 @@ export function AdminInvoicesPage() {
   const [page, setPage] = useState<PageOut<InvoiceAdminOut> | null>(null);
   const [error, setError] = useState<unknown>(null);
 
+  const limit = parsePageLimit(searchParams.get("limit"));
   const offset = Number(searchParams.get("offset") ?? "0");
 
   const reload = useCallback(() => {
     if (!adminToken) return;
-    adminListInvoices({ limit: LIMIT, offset }, adminToken).then(setPage).catch(setError);
-  }, [adminToken, offset]);
+    adminListInvoices({ limit, offset }, adminToken).then(setPage).catch(setError);
+  }, [adminToken, limit, offset]);
 
   useEffect(reload, [reload]);
 
@@ -151,7 +151,8 @@ export function AdminInvoicesPage() {
             total={page.total}
             limit={page.limit}
             offset={page.offset}
-            onOffsetChange={(next) => setSearchParams({ offset: String(next) })}
+            onOffsetChange={(next) => setSearchParams({ limit: String(limit), offset: String(next) })}
+            onLimitChange={(next) => setSearchParams({ limit: String(next), offset: "0" })}
           />
         )}
       </div>

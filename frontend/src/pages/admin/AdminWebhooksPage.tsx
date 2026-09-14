@@ -60,10 +60,12 @@ import { Fragment, useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { adminAttemptWebhookDelivery, adminListWebhookDeliveries, adminListWebhookEvents } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
+import { Pagination } from "../../components/Pagination";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
+import { DEFAULT_PAGE_LIMIT } from "../../utils/pagination";
+import type { PageOut, WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
 
 function formatHeaders(headers: Record<string, string> | null | undefined): string {
   if (!headers || Object.keys(headers).length === 0) return "(none captured)";
@@ -123,8 +125,18 @@ function DeliveryDetail({ delivery }: { delivery: WebhookDeliveryOut }) {
 export function AdminWebhooksPage() {
   const { adminToken } = useAuth();
   const toast = useToast();
-  const [events, setEvents] = useState<WebhookEventOut[] | null>(null);
-  const [deliveries, setDeliveries] = useState<WebhookDeliveryOut[] | null>(null);
+  // 2026-09-14 follow-up ("All page having GRID - apply paginations -
+  // default 10, then options for 25, 50, 100"): Deliveries and Events are
+  // two independent PageOut collections on this one page, so each gets
+  // its own limit/offset - paging or resizing one has no effect on the
+  // other. Neither was paginated at all before this (both were a fixed
+  // first-20-rows, non-paged fetch).
+  const [events, setEvents] = useState<PageOut<WebhookEventOut> | null>(null);
+  const [eventsLimit, setEventsLimit] = useState(DEFAULT_PAGE_LIMIT);
+  const [eventsOffset, setEventsOffset] = useState(0);
+  const [deliveries, setDeliveries] = useState<PageOut<WebhookDeliveryOut> | null>(null);
+  const [deliveriesLimit, setDeliveriesLimit] = useState(DEFAULT_PAGE_LIMIT);
+  const [deliveriesOffset, setDeliveriesOffset] = useState(0);
   const [error, setError] = useState<unknown>(null);
   const [attemptingId, setAttemptingId] = useState<number | null>(null);
   const [expandedDeliveryId, setExpandedDeliveryId] = useState<number | null>(null);
@@ -132,13 +144,11 @@ export function AdminWebhooksPage() {
 
   const reload = useCallback(() => {
     if (!adminToken) return;
-    adminListWebhookEvents({ limit: 20, offset: 0 }, adminToken)
-      .then((page) => setEvents(page.items))
+    adminListWebhookEvents({ limit: eventsLimit, offset: eventsOffset }, adminToken).then(setEvents).catch(setError);
+    adminListWebhookDeliveries({ limit: deliveriesLimit, offset: deliveriesOffset }, adminToken)
+      .then(setDeliveries)
       .catch(setError);
-    adminListWebhookDeliveries({ limit: 20, offset: 0 }, adminToken)
-      .then((page) => setDeliveries(page.items))
-      .catch(setError);
-  }, [adminToken]);
+  }, [adminToken, eventsLimit, eventsOffset, deliveriesLimit, deliveriesOffset]);
 
   useEffect(reload, [reload]);
 
@@ -196,7 +206,7 @@ export function AdminWebhooksPage() {
               </tr>
             </thead>
             <tbody>
-              {deliveries?.map((d) => (
+              {deliveries?.items.map((d) => (
                 <Fragment key={d.id}>
                   <tr className="clickable" onClick={() => setExpandedDeliveryId(expandedDeliveryId === d.id ? null : d.id)}>
                     <td>{d.destination_url}</td>
@@ -235,7 +245,19 @@ export function AdminWebhooksPage() {
           </table>
         </div>
         {deliveries === null && !error && <p>Loading...</p>}
-        {deliveries && deliveries.length === 0 && <p className="hint">No webhook deliveries yet.</p>}
+        {deliveries && deliveries.items.length === 0 && <p className="hint">No webhook deliveries yet.</p>}
+        {deliveries && (
+          <Pagination
+            total={deliveries.total}
+            limit={deliveries.limit}
+            offset={deliveries.offset}
+            onOffsetChange={setDeliveriesOffset}
+            onLimitChange={(next) => {
+              setDeliveriesLimit(next);
+              setDeliveriesOffset(0);
+            }}
+          />
+        )}
       </div>
 
       <div className="admin-panel">
@@ -251,7 +273,7 @@ export function AdminWebhooksPage() {
               </tr>
             </thead>
             <tbody>
-              {events?.map((e) => (
+              {events?.items.map((e) => (
                 <Fragment key={e.event_id}>
                   <tr className="clickable" onClick={() => setExpandedEventId(expandedEventId === e.event_id ? null : e.event_id)}>
                     <td>{e.event_type}</td>
@@ -286,7 +308,19 @@ export function AdminWebhooksPage() {
           </table>
         </div>
         {events === null && !error && <p>Loading...</p>}
-        {events && events.length === 0 && <p className="hint">No webhook events yet.</p>}
+        {events && events.items.length === 0 && <p className="hint">No webhook events yet.</p>}
+        {events && (
+          <Pagination
+            total={events.total}
+            limit={events.limit}
+            offset={events.offset}
+            onOffsetChange={setEventsOffset}
+            onLimitChange={(next) => {
+              setEventsLimit(next);
+              setEventsOffset(0);
+            }}
+          />
+        )}
       </div>
     </section>
   );

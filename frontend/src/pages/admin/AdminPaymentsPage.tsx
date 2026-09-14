@@ -6,9 +6,9 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { parsePageLimit } from "../../utils/pagination";
 import type { PageOut, PaymentAdminOut } from "../../api/types";
 
-const LIMIT = 20;
 const STATUSES = ["", "INITIATED", "PENDING", "SUCCESS", "FAILED", "CANCELLED"];
 
 export function AdminPaymentsPage() {
@@ -19,12 +19,13 @@ export function AdminPaymentsPage() {
   const [error, setError] = useState<unknown>(null);
 
   const status = searchParams.get("status") ?? "";
+  const limit = parsePageLimit(searchParams.get("limit"));
   const offset = Number(searchParams.get("offset") ?? "0");
 
   const reload = useCallback(() => {
     if (!adminToken) return;
-    adminListPayments({ status: status || undefined, limit: LIMIT, offset }, adminToken).then(setPage).catch(setError);
-  }, [adminToken, status, offset]);
+    adminListPayments({ status: status || undefined, limit, offset }, adminToken).then(setPage).catch(setError);
+  }, [adminToken, status, limit, offset]);
 
   useEffect(reload, [reload]);
 
@@ -38,7 +39,7 @@ export function AdminPaymentsPage() {
         <div className="admin-toolbar">
           <label>
             Status
-            <select value={status} onChange={(e) => setSearchParams({ status: e.target.value, offset: "0" })}>
+            <select value={status} onChange={(e) => setSearchParams({ status: e.target.value, limit: String(limit), offset: "0" })}>
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {s || "All"}
@@ -85,7 +86,8 @@ export function AdminPaymentsPage() {
             total={page.total}
             limit={page.limit}
             offset={page.offset}
-            onOffsetChange={(next) => setSearchParams({ status, offset: String(next) })}
+            onOffsetChange={(next) => setSearchParams({ status, limit: String(limit), offset: String(next) })}
+            onLimitChange={(next) => setSearchParams({ status, limit: String(next), offset: "0" })}
           />
         )}
       </div>

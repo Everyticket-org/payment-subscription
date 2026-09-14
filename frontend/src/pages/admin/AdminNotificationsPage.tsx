@@ -16,11 +16,13 @@ import { useCallback, useEffect, useState } from "react";
 import { adminListNotificationLogs, adminListNotificationTemplates, adminUpdateNotificationTemplate } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { Modal } from "../../components/Modal";
+import { Pagination } from "../../components/Pagination";
 import { RichTextEditor, type RichTextToolbarItem } from "../../components/RichTextEditor";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { NotificationLogOut, NotificationTemplateOut } from "../../api/types";
+import { DEFAULT_PAGE_LIMIT } from "../../utils/pagination";
+import type { NotificationLogOut, PageOut, NotificationTemplateOut } from "../../api/types";
 
 /** Broader toolbar than the plan-description editor's default - headings
  * and inline styling show up in the seeded default templates (e.g. the
@@ -45,7 +47,9 @@ export function AdminNotificationsPage() {
   const { adminToken } = useAuth();
   const toast = useToast();
   const [templates, setTemplates] = useState<NotificationTemplateOut[] | null>(null);
-  const [logs, setLogs] = useState<NotificationLogOut[] | null>(null);
+  const [logsPage, setLogsPage] = useState<PageOut<NotificationLogOut> | null>(null);
+  const [logsLimit, setLogsLimit] = useState(DEFAULT_PAGE_LIMIT);
+  const [logsOffset, setLogsOffset] = useState(0);
   const [editingCode, setEditingCode] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -53,8 +57,8 @@ export function AdminNotificationsPage() {
   const reload = useCallback(() => {
     if (!adminToken) return;
     adminListNotificationTemplates(adminToken).then(setTemplates).catch(setError);
-    adminListNotificationLogs({ limit: 25, offset: 0 }, adminToken).then((page) => setLogs(page.items)).catch(setError);
-  }, [adminToken]);
+    adminListNotificationLogs({ limit: logsLimit, offset: logsOffset }, adminToken).then(setLogsPage).catch(setError);
+  }, [adminToken, logsLimit, logsOffset]);
 
   useEffect(reload, [reload]);
 
@@ -174,7 +178,7 @@ export function AdminNotificationsPage() {
               </tr>
             </thead>
             <tbody>
-              {logs?.map((log, i) => (
+              {logsPage?.items.map((log, i) => (
                 <tr key={i}>
                   <td>{new Date(log.created_at).toLocaleString()}</td>
                   <td>{log.template_code}</td>
@@ -187,8 +191,20 @@ export function AdminNotificationsPage() {
             </tbody>
           </table>
         </div>
-        {logs === null && !error && <p>Loading...</p>}
-        {logs && logs.length === 0 && <p className="hint">No sends yet.</p>}
+        {logsPage === null && !error && <p>Loading...</p>}
+        {logsPage && logsPage.items.length === 0 && <p className="hint">No sends yet.</p>}
+        {logsPage && (
+          <Pagination
+            total={logsPage.total}
+            limit={logsPage.limit}
+            offset={logsPage.offset}
+            onOffsetChange={setLogsOffset}
+            onLimitChange={(next) => {
+              setLogsLimit(next);
+              setLogsOffset(0);
+            }}
+          />
+        )}
       </div>
     </section>
   );

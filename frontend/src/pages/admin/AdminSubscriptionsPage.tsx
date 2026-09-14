@@ -7,9 +7,9 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { Pagination } from "../../components/Pagination";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
+import { parsePageLimit } from "../../utils/pagination";
 import type { PageOut, SubscriptionAdminOut } from "../../api/types";
 
-const LIMIT = 20;
 const STATUSES = ["", "PENDING_PAYMENT", "ACTIVE", "PAYMENT_FAILED", "CANCELLED", "EXPIRED"];
 
 export function AdminSubscriptionsPage() {
@@ -21,17 +21,18 @@ export function AdminSubscriptionsPage() {
 
   const status = searchParams.get("status") ?? "";
   const customerId = searchParams.get("customer_id") ?? "";
+  const limit = parsePageLimit(searchParams.get("limit"));
   const offset = Number(searchParams.get("offset") ?? "0");
 
   const reload = useCallback(() => {
     if (!adminToken) return;
     adminListSubscriptions(
-      { status: status || undefined, customer_id: customerId || undefined, limit: LIMIT, offset },
+      { status: status || undefined, customer_id: customerId || undefined, limit, offset },
       adminToken,
     )
       .then(setPage)
       .catch(setError);
-  }, [adminToken, status, customerId, offset]);
+  }, [adminToken, status, customerId, limit, offset]);
 
   useEffect(reload, [reload]);
 
@@ -47,7 +48,7 @@ export function AdminSubscriptionsPage() {
             Status
             <select
               value={status}
-              onChange={(e) => setSearchParams({ status: e.target.value, customer_id: customerId, offset: "0" })}
+              onChange={(e) => setSearchParams({ status: e.target.value, customer_id: customerId, limit: String(limit), offset: "0" })}
             >
               {STATUSES.map((s) => (
                 <option key={s} value={s}>
@@ -61,7 +62,7 @@ export function AdminSubscriptionsPage() {
             <input
               defaultValue={customerId}
               placeholder="CUS-xxxx"
-              onBlur={(e) => setSearchParams({ status, customer_id: e.target.value, offset: "0" })}
+              onBlur={(e) => setSearchParams({ status, customer_id: e.target.value, limit: String(limit), offset: "0" })}
             />
           </label>
         </div>
@@ -99,7 +100,10 @@ export function AdminSubscriptionsPage() {
             total={page.total}
             limit={page.limit}
             offset={page.offset}
-            onOffsetChange={(next) => setSearchParams({ status, customer_id: customerId, offset: String(next) })}
+            onOffsetChange={(next) =>
+              setSearchParams({ status, customer_id: customerId, limit: String(limit), offset: String(next) })
+            }
+            onLimitChange={(next) => setSearchParams({ status, customer_id: customerId, limit: String(next), offset: "0" })}
           />
         )}
       </div>

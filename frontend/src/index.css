@@ -987,10 +987,42 @@ select:focus {
   gap: 12px;
   margin-top: 16px;
   font-size: 13px;
+  flex-wrap: wrap;
 }
 
 .pagination .hint {
   margin: 0;
+}
+
+.pagination-size {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pagination-size select {
+  width: auto;
+}
+
+.pagination-nav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  /* flex-wrap: wrap - without it, Prev/Next/count are one rigid
+     non-wrapping unit; at a narrow viewport (this group landing alone on
+     its own wrapped line under the page-size picker) that unit's own
+     content width could exceed the line's available space and overflow
+     past the card edge instead of the three pieces dropping onto their
+     own lines, the way they could before they were grouped into this
+     nested flex container. */
+  flex-wrap: wrap;
+  /* 2026-09-14 follow-up ("Keep records per page dropdown at left and
+     navigation on right side"): Prev/Next/count now live in their own
+     flex group so this margin can push just that group to the far end
+     of the row, leaving the page-size picker at the start. On its own
+     (no size picker passed to this Pagination instance) it just sits at
+     the start instead, same as before. */
+  margin-left: auto;
 }
 
 .badge {
