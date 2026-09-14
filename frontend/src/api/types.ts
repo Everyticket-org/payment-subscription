@@ -71,6 +71,13 @@ export interface PaymentTransactionOut {
   amount: number;
   currency: string;
   status: string;
+  /** NEW | RENEWAL | UPGRADE | DOWNGRADE - added 2026-09-13 so the
+   * frontend can tell a brand-new subscription's first payment (NEW)
+   * apart from a renewal/upgrade/downgrade. Used by SubscribePage's mock
+   * "done" step and PaymentReturnPage (PayU flow) to gate the
+   * configurable post-subscription confirmation message on NEW only -
+   * an existing customer changing plans already has their credentials. */
+  payment_type: string;
   failure_reason?: string | null;
   /** Present only for a PENDING PayU payment - the hosted-checkout form
    * the browser must POST to PayU's own page. Absent for the mock
@@ -385,12 +392,24 @@ export interface ApplicationGeneralOut {
   name: string;
   currency: string;
   gateway_mode: string; // test | live - "Live/Test Mode"
+  /** 2026-09-13 follow-up: shown on the public thank-you screen after a
+   * first-time subscription's payment succeeds. null means "use the
+   * built-in default text" - see PublicMessagesOut. */
+  post_subscription_message?: string | null;
 }
 
 export interface ApplicationGeneralUpdateInput {
   name: string;
   currency: string;
   gateway_mode: string;
+  post_subscription_message?: string | null;
+}
+
+/** GET /public/messages - small set of admin-configurable public-facing
+ * UI strings (currently just one). Always resolved (never null) - the
+ * backend applies its own default text when the admin hasn't set one. */
+export interface PublicMessagesOut {
+  post_subscription_message: string;
 }
 
 export interface PayUCredentialsOut {
@@ -426,6 +445,11 @@ export interface EveryticketWebhookSampleOut {
   payload: Record<string, unknown>;
 }
 
+export interface EveryticketWebhookFieldCatalogEntry {
+  field: string;
+  label: string;
+}
+
 export interface EveryticketIntegrationOut {
   secret_key_is_set: boolean;
   webhook_url: string | null;
@@ -436,6 +460,30 @@ export interface EveryticketIntegrationOut {
   escalation_email_body: string | null;
   archive_after_days: number | null;
   webhook_samples: EveryticketWebhookSampleOut[];
+  // 2026-09-14 follow-up 3: "when select checkbox for parameters, it
+  // should reflect into sample JSON as well" - same shape as
+  // webhook_samples, but built as if every optional field were selected
+  // for every event, so it carries a real sample value for every
+  // possible field. Used for an instant, no-round-trip live preview as
+  // checkboxes are ticked (even before Save) - see AdminConfigPage.tsx.
+  webhook_samples_all_fields: EveryticketWebhookSampleOut[];
+  // 2026-09-14 follow-up: "allow to configure, more data to be passed for
+  // webhook call like plan details including name, amount, expiry etc.."
+  // webhook_field_catalog is every OPTIONAL field selectable per event
+  // (event_type -> checklist entries, in display order);
+  // webhook_field_selection is this application's current selection
+  // (event_type -> selected field names). webhook_fixed_fields
+  // (2026-09-14 follow-up 2: "activated does not have plan name, code,
+  // price... where it has to be... keep consistency") is the
+  // complementary always-sent field list per event, display-only.
+  webhook_field_catalog: Record<string, EveryticketWebhookFieldCatalogEntry[]>;
+  webhook_fixed_fields: Record<string, EveryticketWebhookFieldCatalogEntry[]>;
+  webhook_field_selection: Record<string, string[]>;
+  // 2026-09-13 follow-up 3: credentials Everyticket's own backend uses to
+  // call POST /api/v1/integration/sso/generate-link (X-Api-Key/X-Api-Secret
+  // headers) - the real production SSO handoff, see AdminConfigPage.tsx.
+  api_key: string | null;
+  api_secret_is_set: boolean;
 }
 
 export interface EveryticketIntegrationUpdateInput {
@@ -446,9 +494,13 @@ export interface EveryticketIntegrationUpdateInput {
   escalation_email_subject?: string | null;
   escalation_email_body?: string | null;
   archive_after_days?: number | null;
+  webhook_field_selection?: Record<string, string[]> | null;
+  api_key?: string | null;
+  api_secret?: string | null;
 }
 
 export interface NotificationConfigOut {
+  notifications_enabled: boolean;
   smtp_host: string | null;
   smtp_port: number | null;
   smtp_username: string | null;
@@ -460,6 +512,7 @@ export interface NotificationConfigOut {
 }
 
 export interface NotificationConfigUpdateInput {
+  notifications_enabled: boolean;
   smtp_host?: string | null;
   smtp_port?: number | null;
   smtp_username?: string | null;
@@ -606,6 +659,17 @@ export interface RegistrationFormFieldOut {
   // submit (see backend app.forms.validation).
   validation_pattern?: string | null;
   validation_message?: string | null;
+  // Duplicate-value check + custom message pair (Vishal's follow-up:
+  // "Add one more checkbox to validate duplication... & Validation
+  // message for that duplication also should be configured"). When
+  // check_duplicate is set, a submitted value for this field is rejected
+  // if it already exists on another customer's registration data for
+  // this application - enforced server-side on submit (see backend
+  // app.forms.validation.check_duplicate_registration_data); there is no
+  // client-side pre-check for this one since it requires looking at
+  // other customers' data.
+  check_duplicate: boolean;
+  duplicate_message?: string | null;
   placeholder?: string | null;
   help_text?: string | null;
   options?: string[] | null;
@@ -624,6 +688,8 @@ export interface RegistrationFormFieldCreateInput {
   required?: boolean;
   validation_pattern?: string;
   validation_message?: string;
+  check_duplicate?: boolean;
+  duplicate_message?: string;
   placeholder?: string;
   help_text?: string;
   options?: string[];
@@ -635,6 +701,8 @@ export interface RegistrationFormFieldUpdateInput {
   required?: boolean;
   validation_pattern?: string | null;
   validation_message?: string | null;
+  check_duplicate?: boolean;
+  duplicate_message?: string | null;
   placeholder?: string;
   help_text?: string;
   options?: string[];

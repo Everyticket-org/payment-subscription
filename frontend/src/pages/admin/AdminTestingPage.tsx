@@ -9,16 +9,29 @@
  * TEST SSO deliberately has no section here - it reuses the existing
  * "Generate test SSO link" action on AdminCustomerDetailPage (built in
  * increment 9) rather than duplicating it.
+ *
+ * 2026-09-13 follow-up ("Remove Test Payment section, Remove Test
+ * Subscription Events section"): both UI sections are gone from this
+ * page. Their backend endpoints (/testing/payment, /testing/subscription-
+ * event) are deliberately left untouched - same "dead UI, live backend"
+ * precedent this codebase already uses elsewhere - so direct API use and
+ * their existing tests are unaffected.
+ *
+ * "Test Everyticket webhook" gained an Event dropdown ("Give dropdown of
+ * Events like activate etc.. Based on selection JSON editor automatically
+ * should be filled with required structure") - selecting one fills the
+ * JSON editor with the exact wire body (GET /testing/webhook/samples,
+ * the same five samples the admin Configuration screen previews) a real
+ * delivery of that event would send, ready to edit or send as-is.
  */
 import { useEffect, useState, type ReactNode } from "react";
 import {
+  adminGetWebhookSamples,
   cleanupTestData,
   generateTestData,
   getTestModeStatus,
   setOtpMfaBypass,
   testEmail,
-  testPayment,
-  testSubscriptionEvent,
   testWebhookFailureSimulate,
   testWebhookSend,
 } from "../../api/endpoints";
@@ -26,18 +39,15 @@ import { ErrorBanner } from "../../components/ErrorBanner";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import type {
+  EveryticketWebhookSampleOut,
   TestDataCleanupOut,
   TestDataGeneratedOut,
   TestEmailResult,
   TestModeStatusOut,
-  TestPaymentResult,
   TestWebhookSendResult,
-  SubscriptionAdminOut,
   WebhookDeliveryOut,
 } from "../../api/types";
 
-const PAYMENT_SCENARIOS = ["SUCCESS", "FAILED", "PENDING", "TIMEOUT", "DUPLICATE_CALLBACK"];
-const SUBSCRIPTION_EVENTS = ["ACTIVATE", "RENEW", "UPGRADE", "DOWNGRADE", "CANCEL", "EXPIRE", "PAYMENT_FAILED"];
 const WEBHOOK_FAILURE_CODES = ["400", "401", "404", "500", "timeout"];
 const EMAIL_TEMPLATES = ["otp_verification", "payment_success", "payment_failed", "subscription_cancelled", "renewal_reminder"];
 
@@ -59,19 +69,9 @@ export function AdminTestingPage() {
   // TEST MODE status
   const [status, setStatus] = useState<TestModeStatusOut | null>(null);
 
-  // TEST PAYMENT
-  const [payCustomerId, setPayCustomerId] = useState("");
-  const [payPlanCode, setPayPlanCode] = useState("BASIC");
-  const [payScenario, setPayScenario] = useState("SUCCESS");
-  const [payResult, setPayResult] = useState<TestPaymentResult | null>(null);
-
-  // TEST SUBSCRIPTION EVENTS
-  const [eventSubId, setEventSubId] = useState("");
-  const [event, setEvent] = useState("RENEW");
-  const [eventTargetPlan, setEventTargetPlan] = useState("");
-  const [eventResult, setEventResult] = useState<SubscriptionAdminOut | null>(null);
-
   // TEST EVERYTICKET WEBHOOK
+  const [webhookSamples, setWebhookSamples] = useState<EveryticketWebhookSampleOut[]>([]);
+  const [webhookEvent, setWebhookEvent] = useState("");
   const [webhookJson, setWebhookJson] = useState('{\n  "event_type": "test.manual",\n  "message": "hello from admin testing"\n}');
   const [webhookResult, setWebhookResult] = useState<TestWebhookSendResult | null>(null);
 
@@ -91,6 +91,7 @@ export function AdminTestingPage() {
   useEffect(() => {
     if (!adminToken) return;
     getTestModeStatus(adminToken).then(setStatus).catch(setError);
+    adminGetWebhookSamples(adminToken).then(setWebhookSamples).catch(setError);
   }, [adminToken]);
 
   async function run<T>(fn: () => Promise<T>, onResult: (r: T) => void, successMessage?: string) {
@@ -165,102 +166,35 @@ export function AdminTestingPage() {
         </div>
       )}
 
-      <Section title="Test payment">
+      <Section title="Test Everyticket webhook">
         <div className="inline-form">
-          <label>
-            Customer ID
-            <input value={payCustomerId} onChange={(e) => setPayCustomerId(e.target.value)} placeholder="CUS-..." />
-          </label>
-          <label>
-            Plan code
-            <input value={payPlanCode} onChange={(e) => setPayPlanCode(e.target.value.toUpperCase())} placeholder="BASIC" />
-          </label>
-          <label>
-            Scenario
-            <select value={payScenario} onChange={(e) => setPayScenario(e.target.value)}>
-              {PAYMENT_SCENARIOS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="button button-primary"
-            disabled={busy || !payCustomerId || !payPlanCode}
-            onClick={() =>
-              run(
-                () => testPayment({ customer_id: payCustomerId, plan_code: payPlanCode, scenario: payScenario }, adminToken!),
-                setPayResult,
-                "Test payment simulated",
-              )
-            }
-          >
-            Simulate payment
-          </button>
-        </div>
-        {payResult && (
-          <p className="hint">
-            {payResult.note} Payment status: <strong>{payResult.payment.status}</strong>, subscription status:{" "}
-            <strong>{payResult.subscription.status}</strong>
-            {payResult.invoice_id ? `, invoice: ${payResult.invoice_id}` : ""}.
-          </p>
-        )}
-      </Section>
-
-      <Section title="Test subscription events">
-        <div className="inline-form">
-          <label>
-            Subscription ID
-            <input value={eventSubId} onChange={(e) => setEventSubId(e.target.value)} placeholder="SUB-..." />
-          </label>
           <label>
             Event
-            <select value={event} onChange={(e) => setEvent(e.target.value)}>
-              {SUBSCRIPTION_EVENTS.map((s) => (
-                <option key={s} value={s}>
-                  {s}
+            <select
+              value={webhookEvent}
+              onChange={(e) => {
+                const eventType = e.target.value;
+                setWebhookEvent(eventType);
+                const sample = webhookSamples.find((s) => s.event === eventType);
+                if (sample) setWebhookJson(JSON.stringify(sample.payload, null, 2));
+              }}
+            >
+              <option value="">Custom / manual JSON...</option>
+              {webhookSamples.map((s) => (
+                <option key={s.event} value={s.event} title={s.trigger}>
+                  {s.event}
                 </option>
               ))}
             </select>
           </label>
-          {(event === "UPGRADE" || event === "DOWNGRADE") && (
-            <label>
-              Target plan code
-              <input value={eventTargetPlan} onChange={(e) => setEventTargetPlan(e.target.value.toUpperCase())} placeholder="PROFESSIONAL" />
-            </label>
-          )}
-          <button
-            className="button button-primary"
-            disabled={busy || !eventSubId}
-            onClick={() =>
-              run(
-                () =>
-                  testSubscriptionEvent(
-                    { subscription_id: eventSubId, event, target_plan_code: eventTargetPlan || undefined },
-                    adminToken!,
-                  ),
-                setEventResult,
-                "Test event sent",
-              )
-            }
-          >
-            Send test event
-          </button>
         </div>
-        {eventResult && (
-          <p className="hint">
-            Subscription {eventResult.subscription_id} is now <strong>{eventResult.status}</strong> on plan{" "}
-            {eventResult.plan_code}.
-          </p>
+        {webhookEvent && (
+          <p className="hint">{webhookSamples.find((s) => s.event === webhookEvent)?.trigger}</p>
         )}
-      </Section>
-
-      <Section title="Test Everyticket webhook">
         <div className="inline-form">
           <label style={{ width: "100%" }}>
             JSON body
-            <textarea rows={6} value={webhookJson} onChange={(e) => setWebhookJson(e.target.value)} />
+            <textarea rows={10} value={webhookJson} onChange={(e) => setWebhookJson(e.target.value)} />
           </label>
           <button
             className="button button-primary"
@@ -362,6 +296,11 @@ export function AdminTestingPage() {
           Open a customer's detail page (Customers → pick a customer) and use the "Generate test SSO link" action
           there - it reuses this same TEST_MODE gate and lets you open the customer portal through a real signed SSO
           link.
+        </p>
+        <p className="hint">
+          In production, Everyticket's own backend generates this link itself by calling{" "}
+          <code>POST /api/v1/integration/sso/generate-link</code> - see the "SSO API access" fields on Configuration
+          → Everyticket Integration for the API key/secret it authenticates with.
         </p>
       </Section>
 

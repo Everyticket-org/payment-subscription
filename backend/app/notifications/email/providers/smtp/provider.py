@@ -10,6 +10,20 @@ against any real SMTP server, and just as well against a local dev
 catch-all like MailHog/Mailpit (SMTP_HOST=localhost, SMTP_PORT=1025,
 matching this app's existing SMTP_* defaults) so email can be seen
 without ever sending anything real in development.
+
+2026-09-13 bugfix ("Test email not going even after configured correctly
+SMTP" -> provider_response came back "timed out"): this previously always
+opened a plaintext smtplib.SMTP connection and, only if smtp_use_tls was
+on, upgraded it with STARTTLS - the port-587-style flow. Port 465 (used
+by Gmail, Office365, and most hosting-provider SMTP-over-SSL setups) is
+a DIFFERENT convention: the server expects a TLS handshake immediately
+on connect ("implicit SSL"), and speaks nothing in plaintext first - so
+smtplib.SMTP against port 465 just sits waiting for a plaintext banner
+that never comes, until it times out. That is almost certainly what
+"timed out" means here if SMTP_PORT is 465. Now: port 465 always goes
+through smtplib.SMTP_SSL (implicit SSL) regardless of the use_tls
+toggle; every other port keeps the existing plain-then-optional-STARTTLS
+behavior unchanged.
 """
 import logging
 import smtplib
@@ -18,6 +32,15 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 from app.core.config import Settings
+
+# Implicit-SSL SMTP port (Gmail, Office365, and most hosting providers'
+# "SSL" mode) - the client must open a TLS connection immediately, unlike
+# STARTTLS ports (587, 25) where the conversation starts in plaintext and
+# upgrades in-band. Not configurable today; matches the near-universal
+# real-world convention (mirrors Django's/other frameworks' EMAIL_USE_SSL
+# port-465 default) rather than adding a second admin-facing toggle for a
+# single well-known port.
+SMTP_SSL_PORT = 465
 
 logger = logging.getLogger("subscription")
 
@@ -65,11 +88,17 @@ def send(
         message.attach(MIMEText(html_body, "html"))
 
     try:
-        with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
-            if settings.SMTP_USE_TLS:
-                smtp.starttls()
-            if settings.SMTP_USER:
-                smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-            smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, [to], message.as_string())
-    except (smtplib.SMTPException, OSError) as exc:
+        if settings.SMTP_PORT == SMTP_SSL_PORT:
+            with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
+                if settings.SMTP_USER:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, [to], message.as_string())
+        else:
+            with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
+                if settings.SMTP_USE_TLS:
+                    smtp.starttls()
+                if settings.SMTP_USER:
+                    smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
+                smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, [to], message.as_string())
+    except (smtplib.SMTPException, OSError, TimeoutError) as exc:
         raise SMTPSendError(str(exc)) from exc

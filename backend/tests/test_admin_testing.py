@@ -13,6 +13,7 @@ the OTP/MFA bypass status+toggle endpoints, and the TEST DATA GENERATOR +
 cleanup round trip. Also covers the require_test_mode / require_permission
 gates shared with every other TEST_MODE-only admin action.
 """
+from app.applications.models import Application
 from app.core.config import get_settings
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
@@ -197,6 +198,53 @@ def test_webhook_failure_simulator_rejects_unknown_status(client, seeded_db):
     assert resp.status_code == 422
 
 
+def test_webhook_samples_match_config_preview_and_cover_all_seven_events(client, seeded_db):
+    """2026-09-13 follow-up: "Give dropdown of Events like activate etc..
+    Based on selection JSON editor automatically should be filled with
+    required structure." Backs the Testing page's new event dropdown -
+    same sample bodies (app.webhooks.payloads.build_webhook_samples) the
+    admin Configuration screen already previews, so this endpoint must
+    return the same shape/content, not a second copy. 2026-09-14
+    follow-up brought subscription.upgraded/downgraded into this same
+    sample list (previously only the five events on Vishal's original
+    numbered list were covered). (require_test_mode/require_permission
+    gating on this router is already covered generically above via
+    /testing/status - same shared dependencies, no need to re-check per
+    endpoint.)"""
+    headers = _admin_headers(client)
+    resp = client.get("/api/v1/admin/testing/webhook/samples", headers=headers)
+    assert resp.status_code == 200, resp.text
+    samples = resp.json()
+    events = {s["event"] for s in samples}
+    assert events == {
+        "subscription.activated",
+        "subscription.renewed",
+        "subscription.upgraded",
+        "subscription.downgraded",
+        "subscription.expired",
+        "subscription.cancelled",
+        "subscription.archived",
+    }
+    onboarding = next(s for s in samples if s["event"] == "subscription.activated")
+    assert onboarding["payload"]["event_type"] == "subscription.activated"
+    assert "subscription_id" in onboarding["payload"]["payload"]
+
+    # Matches the admin Configuration screen's own preview - one shared
+    # source of truth (build_webhook_samples), never two builders that
+    # could quietly drift apart. expires_at is excluded from the
+    # comparison since it's a fresh "now + 30 days" computed independently
+    # on each call - the only field that can legitimately differ by a few
+    # microseconds between these two separate requests.
+    def _without_expires_at(samples_list):
+        return [
+            {**s, "payload": {**s["payload"], "payload": {k: v for k, v in s["payload"]["payload"].items() if k != "expires_at"}}}
+            for s in samples_list
+        ]
+
+    config_resp = client.get("/api/v1/admin/config/application", headers=headers)
+    assert _without_expires_at(config_resp.json()["integration"]["webhook_samples"]) == _without_expires_at(samples)
+
+
 def test_webhook_send_returns_request_response_shape(client, seeded_db):
     headers = _admin_headers(client)
     resp = client.post(
@@ -291,6 +339,98 @@ def test_test_email_sends_via_faked_smtp(client, seeded_db, monkeypatch):
     body = resp.json()
     assert body["sent"] is True
     assert body["status"] == "SENT"
+
+
+def test_test_email_failure_reason_is_visible_in_audit_logs(client, seeded_db):
+    """2026-09-13 bugfix: TEST_EMAIL_SENT's audit entry used to be just
+    {"to", "sent": false} on a failure - no way to tell WHY short of
+    catching the live response at the moment it happened, unlike
+    TEST_WEBHOOK_SENT (which already stores the full result). A
+    template_code with no active NotificationTemplate row is a clean,
+    deterministic way to force a FAILED send without touching SMTP at
+    all, and proves the reason now survives into Audit Logs."""
+    headers = _admin_headers(client)
+    resp = client.post(
+        "/api/v1/admin/testing/email",
+        json={"template_code": "no-such-template-configured", "to": "test-email-failure@example.com"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sent"] is False
+    assert body["status"] == "FAILED"
+    assert body["provider_response"]
+
+    logs = client.get("/api/v1/admin/audit-logs", params={"action": "TEST_EMAIL_SENT"}, headers=headers)
+    assert logs.status_code == 200, logs.text
+    entries = logs.json()["items"]
+    assert len(entries) >= 1
+    stored = entries[0]["new_value"]
+    assert stored["sent"] is False
+    assert stored["status"] == "FAILED"
+    assert stored["provider_response"] == body["provider_response"]
+
+
+class _RecordingFakeSMTP(_FakeSMTP):
+    """Same fake, but remembers the host/port it was constructed with and
+    the username it was logged in with, so a test can assert on which
+    settings a send actually used."""
+
+    calls: list[dict] = []
+
+    def __init__(self, host, port, timeout=10):
+        super().__init__(host, port, timeout=timeout)
+        self._call = {"host": host, "port": port, "user": None}
+        _RecordingFakeSMTP.calls.append(self._call)
+
+    def login(self, user, password):
+        self._call["user"] = user
+
+
+def test_test_email_uses_the_configured_application_smtp_override_not_global_defaults(
+    client, seeded_db, db_session, monkeypatch
+):
+    """2026-09-13 bugfix regression test: TEST EMAIL used to call
+    send_templated_email() without `application=`, so it always sent
+    through the global SMTP_*/EMAIL_* env defaults (SMTP_HOST=localhost,
+    SMTP_PORT=1025, no user) instead of whatever an admin had just saved
+    on Configuration -> Notifications (Application.smtp_host/port/
+    username/password) - the same per-application override every real
+    send site (payments, subscriptions, webhooks, OTP, invoices) already
+    honors. This proves the fix: a distinctive per-application override,
+    clearly different from the global defaults, is what the SMTP
+    conversation actually used."""
+    _RecordingFakeSMTP.calls = []
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP", _RecordingFakeSMTP)
+
+    global_settings = get_settings()
+    assert global_settings.SMTP_HOST != "mail.configured-by-admin.example.com"
+
+    application = db_session.query(Application).filter(Application.code == "EVERYTICKET").first()
+    application.smtp_host = "mail.configured-by-admin.example.com"
+    application.smtp_port = 2525
+    application.smtp_username = "configured-admin-user"
+    application.smtp_password = "configured-admin-password"
+    application.smtp_use_tls = True
+    db_session.add(application)
+    db_session.commit()
+
+    headers = _admin_headers(client)
+    resp = client.post(
+        "/api/v1/admin/testing/email",
+        json={"template_code": "payment_success", "to": "test-email-recipient@example.com"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["sent"] is True
+    assert body["status"] == "SENT"
+
+    assert len(_RecordingFakeSMTP.calls) == 1
+    call = _RecordingFakeSMTP.calls[0]
+    assert call["host"] == "mail.configured-by-admin.example.com"
+    assert call["port"] == 2525
+    assert call["user"] == "configured-admin-user"
 
 
 def test_test_mode_status_and_bypass_toggle_round_trip(client, seeded_db):

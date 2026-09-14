@@ -11,6 +11,14 @@ class PaymentTransactionOut(BaseModel):
     amount: float
     currency: str
     status: str
+    # NEW | RENEWAL | UPGRADE | DOWNGRADE (app.core.enums.PaymentType) -
+    # a real ORM column, so this auto-populates via model_validate() like
+    # every other plain field here. Added 2026-09-13 so the frontend can
+    # tell a brand-new subscription's first payment (NEW) apart from a
+    # renewal/upgrade/downgrade - see SubscribePage.tsx's "done" step and
+    # PaymentReturnPage.tsx, which gate the configurable post-subscription
+    # confirmation message on this being exactly "NEW".
+    payment_type: str
     failure_reason: str | None = None
     # Populated only for redirect-based gateways (PayU) whose payment is
     # PENDING and needs the browser to POST to a hosted checkout page -

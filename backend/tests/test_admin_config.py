@@ -7,7 +7,9 @@ Notifications (SMTP transport + sender overrides). "Subscription rules"
 and "Security" configuration are unchanged - their own tests continue
 below, verifying REAL effect not just storage, same as before this pass.
 """
+from app.core.enums import NotificationStatus
 from app.notifications.email.providers.smtp import provider as smtp_provider
+from app.notifications.models import NotificationLog
 
 from tests.test_admin_api import _admin_headers
 
@@ -96,6 +98,83 @@ def test_update_general_config_round_trips(client, seeded_db):
     )
 
 
+def test_post_subscription_message_configurable_and_saved(client, seeded_db):
+    """2026-09-13 follow-up: "show message '...you will get your
+    credentials in sometime' for first time subscription... This message
+    also should be configurable." """
+    headers = _admin_headers(client)
+    resp = client.put(
+        "/api/v1/admin/config/application/general",
+        json={
+            "name": "Everyticket Subscriptions",
+            "currency": "INR",
+            "gateway_mode": "test",
+            "post_subscription_message": "Thanks! Your Everyticket login will arrive by email shortly.",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["post_subscription_message"] == "Thanks! Your Everyticket login will arrive by email shortly."
+
+    refetched = client.get("/api/v1/admin/config/application", headers=headers)
+    assert (
+        refetched.json()["general"]["post_subscription_message"]
+        == "Thanks! Your Everyticket login will arrive by email shortly."
+    )
+
+    public = client.get("/api/v1/public/messages")
+    assert public.status_code == 200
+    assert public.json()["post_subscription_message"] == "Thanks! Your Everyticket login will arrive by email shortly."
+
+    # Restore the seeded default so other tests (and the dedicated
+    # fallback test in test_end_to_end.py) see the app's normal state.
+    from app.applications.config_schemas import DEFAULT_POST_SUBSCRIPTION_MESSAGE
+
+    client.put(
+        "/api/v1/admin/config/application/general",
+        json={
+            "name": "Everyticket Subscriptions",
+            "currency": "INR",
+            "gateway_mode": "test",
+            "post_subscription_message": DEFAULT_POST_SUBSCRIPTION_MESSAGE,
+        },
+        headers=headers,
+    )
+
+
+def test_post_subscription_message_falls_back_to_default_text_when_unset(client, seeded_db):
+    """An admin clearing the field (or an application that never set it)
+    must not leave the public thank-you screen blank - falls back to
+    DEFAULT_POST_SUBSCRIPTION_MESSAGE, same convention as validation_
+    message/duplicate_message on registration form fields."""
+    from app.applications.config_schemas import DEFAULT_POST_SUBSCRIPTION_MESSAGE
+
+    headers = _admin_headers(client)
+    client.put(
+        "/api/v1/admin/config/application/general",
+        json={"name": "Everyticket Subscriptions", "currency": "INR", "gateway_mode": "test", "post_subscription_message": None},
+        headers=headers,
+    )
+    refetched = client.get("/api/v1/admin/config/application", headers=headers)
+    assert refetched.json()["general"]["post_subscription_message"] is None
+
+    public = client.get("/api/v1/public/messages")
+    assert public.status_code == 200
+    assert public.json()["post_subscription_message"] == DEFAULT_POST_SUBSCRIPTION_MESSAGE
+
+    # Restore the seeded default as a real stored value for other tests.
+    client.put(
+        "/api/v1/admin/config/application/general",
+        json={
+            "name": "Everyticket Subscriptions",
+            "currency": "INR",
+            "gateway_mode": "test",
+            "post_subscription_message": DEFAULT_POST_SUBSCRIPTION_MESSAGE,
+        },
+        headers=headers,
+    )
+
+
 def test_update_integration_config_secret_never_echoed_back(client, seeded_db):
     headers = _admin_headers(client)
     resp = client.put(
@@ -120,6 +199,46 @@ def test_update_integration_config_secret_never_echoed_back(client, seeded_db):
     # sanitized the same way Plan.description is - onclick/attributes stripped.
     assert "onclick" not in body["escalation_email_body"]
     assert "<strong>Everyticket</strong>" in body["escalation_email_body"]
+
+
+def test_update_integration_config_api_credentials_round_trip_and_clear(client, seeded_db):
+    """2026-09-13 follow-up 3: Everyticket -> this app API key/secret
+    (authenticates POST /api/v1/integration/sso/generate-link, see
+    tests/test_integration_sso.py) - same None=unchanged/""=clear
+    convention, stored in the same api_credentials JSON column that
+    already existed but was previously unused."""
+    headers = _admin_headers(client)
+
+    resp = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "api_key": "et-key-123", "api_secret": "et-secret-456"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["api_key"] == "et-key-123"  # key is an identifier, not itself masked
+    assert "api_secret" not in body
+    assert body["api_secret_is_set"] is True
+
+    # Omitted entirely on a later PUT (webhook_url only) -> unchanged.
+    resp2 = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": "https://everyticket.example.com/hooks"},
+        headers=headers,
+    )
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["api_key"] == "et-key-123"
+    assert resp2.json()["api_secret_is_set"] is True
+
+    # Explicit "" clears both.
+    resp3 = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "api_key": "", "api_secret": ""},
+        headers=headers,
+    )
+    assert resp3.status_code == 200, resp3.text
+    assert resp3.json()["api_key"] is None
+    assert resp3.json()["api_secret_is_set"] is False
 
 
 def test_update_payment_gateway_config_changes_gateway_for_new_payments_and_stores_credentials(client, seeded_db, monkeypatch):
@@ -231,15 +350,139 @@ def test_update_integration_config_stores_archive_after_days(client, seeded_db):
     assert cleared.json()["archive_after_days"] is None
 
 
-def test_application_config_webhook_samples_cover_all_five_events_with_trimmed_payloads(client, seeded_db):
+def test_integration_config_exposes_webhook_field_catalog_and_round_trips_selection(client, seeded_db):
+    """2026-09-14 follow-up: "allow to configure, more data to be passed
+    for webhook call like plan details including name, amount, expiry
+    etc.. so if admin select those parameters then it will be passed to
+    webhook". GET must expose the full selectable-field catalog (for the
+    Configuration screen's checklist) and this application's current
+    selection (empty by default); PUT must persist a new selection,
+    sanitizing away anything the catalog doesn't recognize rather than
+    rejecting the request outright."""
+    headers = _admin_headers(client)
+
+    initial = client.get("/api/v1/admin/config/application", headers=headers)
+    catalog = initial.json()["integration"]["webhook_field_catalog"]
+    assert initial.json()["integration"]["webhook_field_selection"] == {}
+    # Every one of the seven events has its own catalog entry, each a
+    # list of {field, label} objects.
+    assert set(catalog) == {
+        "subscription.activated", "subscription.renewed", "subscription.upgraded", "subscription.downgraded",
+        "subscription.expired", "subscription.cancelled", "subscription.archived",
+    }
+    assert {"field": "currency", "label": "Currency"} in catalog["subscription.activated"]
+    # No payment/invoice fields ever offered for expired/cancelled/archived
+    # (nothing was actually charged at that moment).
+    archived_fields = {entry["field"] for entry in catalog["subscription.archived"]}
+    assert archived_fields.isdisjoint({"transaction_id", "amount", "invoice_id", "gateway", "payment_type", "total_amount", "tax_amount"})
+
+    # 2026-09-14 follow-up 2: "activated does not have plan name, code,
+    # price etc.. where it has to be, same for renewed event there is no
+    # plan code, please keep consistency" - webhook_fixed_fields makes
+    # every event's ALWAYS-sent fields visible too, so plan_code/
+    # plan_name/price aren't just missing from activated's checklist
+    # (they're fixed there, not optional) and renewed's plan_code is
+    # clearly an optional extra (fixed there is subscription_id only) -
+    # nothing looks inconsistent once both groups are shown together.
+    fixed = initial.json()["integration"]["webhook_fixed_fields"]
+    assert set(fixed) == set(catalog)
+    activated_fixed = {entry["field"] for entry in fixed["subscription.activated"]}
+    assert {"plan_code", "plan_name", "price", "subscription_id", "email", "phone_number"} <= activated_fixed
+    # plan_code must not ALSO appear as a selectable optional field for
+    # activated (it's always sent, ticking it would be meaningless).
+    assert "plan_code" not in {entry["field"] for entry in catalog["subscription.activated"]}
+    assert fixed["subscription.renewed"] == [{"field": "subscription_id", "label": "Subscription ID"}]
+    # ...but IS a real selectable optional field for renewed (Vishal's
+    # own follow-up 3: renewed's fixed shape is subscription_id only).
+    assert "plan_code" in {entry["field"] for entry in catalog["subscription.renewed"]}
+
+    resp = client.put(
+        "/api/v1/admin/config/application/integration",
+        json={
+            "webhook_url": None,
+            "webhook_field_selection": {
+                "subscription.activated": ["currency", "customer_id"],
+                # "amount" is real for renewed but "not_a_real_field" isn't -
+                # must be silently dropped, not rejected.
+                "subscription.renewed": ["amount", "not_a_real_field"],
+                # Not a real event at all - the whole entry must be dropped.
+                "subscription.not_a_real_event": ["plan_name"],
+            },
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["webhook_field_selection"] == {
+        "subscription.activated": ["currency", "customer_id"],
+        "subscription.renewed": ["amount"],
+    }
+
+    refetched = client.get("/api/v1/admin/config/application", headers=headers)
+    assert refetched.json()["integration"]["webhook_field_selection"] == {
+        "subscription.activated": ["currency", "customer_id"],
+        "subscription.renewed": ["amount"],
+    }
+
+    # Restore defaults so later tests aren't affected.
+    client.put(
+        "/api/v1/admin/config/application/integration",
+        json={"webhook_url": None, "webhook_field_selection": None},
+        headers=headers,
+    )
+
+
+def test_webhook_samples_all_fields_shows_every_optional_field_regardless_of_saved_selection(client, seeded_db):
+    """2026-09-14 follow-up 3: "when select checkbox for parameters, it
+    should reflect into sample JSON as well" - the Configuration screen
+    updates its JSON preview live, as each checkbox is ticked, without a
+    round trip to the server. That only works if webhook_samples_all_fields
+    always carries a real sample value for every optional field of every
+    event, independent of whatever selection is actually saved right now
+    (webhook_samples, by contrast, reflects only the saved selection) - the
+    frontend filters this maximal set down to whatever's currently ticked,
+    it never invents a value itself."""
+    headers = _admin_headers(client)
+
+    # Saved selection is empty by default (see the round-trip test above).
+    resp = client.get("/api/v1/admin/config/application", headers=headers)
+    integration = resp.json()["integration"]
+    assert integration["webhook_field_selection"] == {}
+
+    plain = {s["event"]: s for s in integration["webhook_samples"]}
+    maximal = {s["event"]: s for s in integration["webhook_samples_all_fields"]}
+    assert set(plain) == set(maximal)
+
+    # With nothing saved, subscription.renewed's plain sample carries only
+    # its fixed field...
+    assert set(plain["subscription.renewed"]["payload"]["payload"]) == {"subscription_id"}
+    # ...but the "all fields" sample must still show every optional field
+    # from the catalog (plan_code included) with a real value, so the
+    # frontend has something to reveal the instant that box is ticked -
+    # not just after a Save round-trip.
+    renewed_all = maximal["subscription.renewed"]["payload"]["payload"]
+    optional_renewed = {
+        entry["field"] for entry in integration["webhook_field_catalog"]["subscription.renewed"]
+    }
+    assert optional_renewed <= set(renewed_all)
+    assert "plan_code" in renewed_all
+    assert renewed_all["plan_code"]  # a real, non-empty sample value, not a placeholder
+
+
+def test_application_config_webhook_samples_cover_all_seven_events_with_trimmed_payloads(client, seeded_db):
     """2026-09 follow-up: 'Webhook for everyticket app are as below...
     show JSON with all data passing / show sample JSON with unique
     information'; follow-up 3: 'Add one more webhook for renew' plus an
-    explicit trim of every payload. The onboarding sample uses this
-    application's real, already-seeded registration-form field keys
-    (museum_name, contact_person - see app.core.seed); the other four
-    events carry nothing but subscription_id, so there's no
-    application-specific data left for them to reflect."""
+    explicit trim of every payload; 2026-09-14 follow-up: upgraded/
+    downgraded brought into the same sample list, and every event now
+    ALSO exposes admin-selectable OPTIONAL extra fields - but with no
+    selection saved (this application's default state), every sample
+    below must still show exactly today's fixed payload shape, nothing
+    more. The onboarding sample uses this application's real,
+    already-seeded registration-form field keys (museum_name,
+    contact_person - see app.core.seed); the other five non-onboarding
+    events carry nothing but their fixed fields by default, so there's
+    no application-specific data left for them to reflect until an admin
+    opts in to extra fields."""
     headers = _admin_headers(client)
 
     client.put(
@@ -253,6 +496,8 @@ def test_application_config_webhook_samples_cover_all_five_events_with_trimmed_p
     assert set(samples) == {
         "subscription.activated",
         "subscription.renewed",
+        "subscription.upgraded",
+        "subscription.downgraded",
         "subscription.expired",
         "subscription.cancelled",
         "subscription.archived",
@@ -273,6 +518,13 @@ def test_application_config_webhook_samples_cover_all_five_events_with_trimmed_p
         wire_body = samples[event_type]["payload"]
         assert wire_body["event_type"] == event_type
         assert set(wire_body["payload"]) == {"subscription_id"}
+
+    for event_type in ("subscription.upgraded", "subscription.downgraded"):
+        wire_body = samples[event_type]["payload"]
+        assert wire_body["event_type"] == event_type
+        assert set(wire_body["payload"]) == {
+            "subscription_id", "customer_id", "plan_code", "status", "expires_at", "transaction_id",
+        }
 
     # Restore defaults so later tests aren't affected.
     client.put(
@@ -321,6 +573,54 @@ def test_update_notification_config_changes_outbound_sender_and_smtp_host(client
         },
         headers=headers,
     )
+
+
+def test_notification_config_defaults_to_enabled(client, seeded_db):
+    """2026-09-13 follow-up: "add one more field... 'Enable
+    Notifications?'" - every existing/freshly-seeded application must
+    default to notifications_enabled=True so nothing changes for anyone
+    who hasn't touched this new field."""
+    headers = _admin_headers(client)
+    resp = client.get("/api/v1/admin/config/application", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["notification"]["notifications_enabled"] is True
+
+
+def test_disabling_notifications_skips_email_send_without_touching_smtp(client, seeded_db, monkeypatch):
+    """The whole point of the toggle: once turned off, an email that would
+    otherwise have been sent (here, the OTP email a /public/identify call
+    triggers) is skipped before the SMTP provider is ever invoked, and
+    logged as SKIPPED (not FAILED - this isn't an error) rather than SENT."""
+    _FakeSMTP.sent.clear()
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP", _FakeSMTP)
+    headers = _admin_headers(client)
+
+    resp = client.put(
+        "/api/v1/admin/config/application/notification",
+        json={"notifications_enabled": False, "email_provider": "smtp"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["notifications_enabled"] is False
+
+    client.post(
+        "/api/v1/public/plans/basic/subscribe",
+        json={"email": "notifs-off@example.com", "mobile": "9833300003", "registration_data": {}},
+    )
+    client.post("/api/v1/public/identify", json={"email": "notifs-off@example.com", "mobile": "9833300003"})
+
+    # Nothing was actually sent - the fake SMTP transport was never touched.
+    assert _FakeSMTP.sent == []
+
+    log = (
+        seeded_db.query(NotificationLog)
+        .filter(NotificationLog.recipient == "notifs-off@example.com")
+        .order_by(NotificationLog.id.desc())
+        .first()
+    )
+    assert log is not None
+    assert log.status == NotificationStatus.SKIPPED.value
+    assert "disabled" in log.provider_response.lower()
 
 
 def test_subscription_rules_disable_actually_blocks_the_action(client, seeded_db):

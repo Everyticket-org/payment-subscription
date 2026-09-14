@@ -6,7 +6,14 @@ validation_pattern/validation_message (added per Vishal's follow-up:
 fields to be set") are validated here at the API boundary - an invalid
 regex is rejected with a clear 422 the moment an admin tries to save it,
 rather than only failing later, silently, the first time a customer's
-submission is checked against it (app.forms.validation)."""
+submission is checked against it (app.forms.validation).
+
+check_duplicate/duplicate_message (added per Vishal's follow-up: "Add
+one more checkbox to validate duplication... & Validation message for
+that duplication also should be configured") need no schema-level
+validation of their own - check_duplicate is a plain boolean and
+duplicate_message a plain string - the actual duplicate lookup happens
+at submit time in app.forms.validation.check_duplicate_registration_data()."""
 import re
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -26,7 +33,11 @@ class RegistrationFormFieldOut(BaseModel):
     fields only, no internal id. validation_pattern/validation_message
     are included so the public form can also validate client-side (a
     convenience for the customer, not the source of truth - the backend
-    always re-checks on submit)."""
+    always re-checks on submit). check_duplicate/duplicate_message are
+    included too for the same reason, though the frontend has no way to
+    pre-check duplication itself (that requires querying other
+    customers' data) - the backend's check_duplicate_registration_data()
+    is the actual source of truth for this one."""
     model_config = ConfigDict(from_attributes=True)
     field_key: str
     label: str
@@ -35,6 +46,8 @@ class RegistrationFormFieldOut(BaseModel):
     validation_rules: dict | None = None
     validation_pattern: str | None = None
     validation_message: str | None = None
+    check_duplicate: bool = False
+    duplicate_message: str | None = None
     placeholder: str | None = None
     help_text: str | None = None
     options: list | None = None
@@ -56,6 +69,8 @@ class RegistrationFormFieldCreate(BaseModel):
     validation_rules: dict | None = None
     validation_pattern: str | None = Field(default=None, max_length=500)
     validation_message: str | None = Field(default=None, max_length=255)
+    check_duplicate: bool = False
+    duplicate_message: str | None = Field(default=None, max_length=255)
     placeholder: str | None = Field(default=None, max_length=255)
     help_text: str | None = Field(default=None, max_length=500)
     options: list | None = None
@@ -70,6 +85,8 @@ class RegistrationFormFieldUpdate(BaseModel):
     validation_rules: dict | None = None
     validation_pattern: str | None = Field(default=None, max_length=500)
     validation_message: str | None = Field(default=None, max_length=255)
+    check_duplicate: bool | None = None
+    duplicate_message: str | None = Field(default=None, max_length=255)
     placeholder: str | None = Field(default=None, max_length=255)
     help_text: str | None = Field(default=None, max_length=500)
     options: list | None = None

@@ -38,8 +38,9 @@ success:false body) sets the subscription's provisioning_status to
 FAILED, retries automatically on the same webhook backoff schedule, and
 emails the customer once - all without ever touching the
 payment/subscription's own status (spec section 30) - all backed by a
-real Postgres schema and a 105-test automated suite (`pytest tests/ -v`),
-plus hand-verified via curl against real Postgres. Plan descriptions are
+real MySQL schema (switched from PostgreSQL 2026-09-13) and an automated
+test suite (`pytest tests/ -v` - see docs/implementation-status.md for
+the current count), plus hand-verified via curl against real MySQL. Plan descriptions are
 now rich text (a bullet-point-capable editor, sanitized server-side with
 a `bleach` allowlist and rendered formatted on the public plan listing),
 plans support drag-and-drop-or-arrow-button reordering that's persisted
@@ -60,17 +61,29 @@ before assuming any given feature works.
 
 ## Architecture
 
-Modular monolith: FastAPI + SQLAlchemy + Alembic + PostgreSQL backend,
-React + TypeScript + Vite frontend (`frontend/` - corrected from Angular
-on 2026-08-27, scaffolded and built in increment 3), Celery/Redis for
-background jobs, Docker Compose for local development. See
-`backend/app/` for the module layout (customers, plans, subscriptions,
-payments, invoices, notifications, webhooks, integrations, sso, audit,
-auth [admin auth + customer OTP], admin/customer/public API routers).
+Modular monolith: FastAPI + SQLAlchemy + Alembic + MySQL backend (switched
+from PostgreSQL 2026-09-13 - see docs/implementation-status.md for the
+full rationale and what changed), React + TypeScript + Vite frontend
+(`frontend/` - corrected from Angular on 2026-08-27, scaffolded and built
+in increment 3), Celery/Redis for background jobs. See `backend/app/`
+for the module layout (customers, plans, subscriptions, payments,
+invoices, notifications, webhooks, integrations, sso, audit, auth [admin
+auth + customer OTP], admin/customer/public API routers).
 
 ## Local development
 
-### Option A: bare Python + your own Postgres
+### Option A: bare Python + your own MySQL
+
+Any MySQL 8.0+ works - a XAMPP install, a standalone `mysqld`, or a
+managed cloud instance. Create the database and a user for the app first
+(skip this if you're just pointing at XAMPP's default `root` user):
+
+```sql
+CREATE DATABASE subscription CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'subscription'@'localhost' IDENTIFIED BY 'subscription';
+GRANT ALL PRIVILEGES ON subscription.* TO 'subscription'@'localhost';
+FLUSH PRIVILEGES;
+```
 
 ```bash
 cd backend
@@ -78,7 +91,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 cp ../.env.example ../.env   # then edit DATABASE_URL etc. if needed
-export DATABASE_URL="postgresql+psycopg2://subscription:subscription@localhost:5432/subscription"
+export DATABASE_URL="mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4"
 export ENVIRONMENT=development
 # Dev-only conveniences - never true in production (enforced backend-side
 # regardless of these values, see app/core/config.py):
@@ -91,12 +104,45 @@ python -m app.core.seed       # create EVERYTICKET application, Basic/Profession
 uvicorn app.main:app --reload
 ```
 
+Using XAMPP's bundled MySQL instead: its default is user `root` with no
+password, so `DATABASE_URL` is usually
+`mysql+pymysql://root:@localhost:3306/subscription?charset=utf8mb4` -
+just create the `subscription` database first (in phpMyAdmin, or the
+`CREATE DATABASE ...` line above via XAMPP's "Shell" button).
+
 `python -m app.core.seed` prints the dev admin login
 (`admin@example.com` / `ChangeMe123!`) and its MFA secret/provisioning
 URI to stdout - use those, or submit `"BYPASS"` as the MFA code, against
 `POST /api/v1/admin/auth/login` then `POST /api/v1/admin/auth/mfa/verify`.
+To keep a specific admin login across a fresh database instead of the
+dev default, set `ADMIN_BOOTSTRAP_EMAIL`/`ADMIN_BOOTSTRAP_PASSWORD` in
+your `.env` before running the seed script (see app/core/config.py) -
+neither value is ever printed or logged.
 
 API docs: http://localhost:8000/docs (Swagger) or /redoc.
+
+### Option A2: MySQL via Docker instead of installing it locally
+
+If you'd rather not install MySQL directly, run just the database in a
+container and still run the backend itself with plain Python as above:
+
+```bash
+docker run -d --name subscription-mysql \
+  -e MYSQL_DATABASE=subscription \
+  -e MYSQL_USER=subscription \
+  -e MYSQL_PASSWORD=subscription \
+  -e MYSQL_ROOT_PASSWORD=root-change-me \
+  -p 3306:3306 \
+  mysql:8.0
+```
+
+Then use the same `DATABASE_URL` as Option A
+(`mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4`)
+and continue with `alembic upgrade head` etc. above. (This repo doesn't
+currently have a `docker-compose.yml` covering the whole stack, despite
+Option B below describing one - see docs/implementation-status.md; this
+one-container command is the accurate, verified way to get MySQL running
+in Docker today.)
 
 ### Option B: Docker Compose
 
@@ -105,11 +151,12 @@ cp .env.example .env
 docker compose up --build
 ```
 
-Brings up postgres, redis, backend, worker, scheduler, and the real
-frontend (built in increment 3 - see below). **Not yet verified in this
-pass** - see docs/implementation-status.md for why (no Docker daemon
-available in the environment this was built in). Run it once and
-sanity-check before relying on it.
+Brings up MySQL, redis, backend, worker, scheduler, and the real
+frontend (built in increment 3 - see below). **Not yet verified/present
+in this pass** - see docs/implementation-status.md for why (no Docker
+daemon available in the environment this was built in, and no
+`docker-compose.yml` has actually been committed to this repo yet). Use
+Option A or A2 above until this is built and verified.
 
 ### Frontend
 

@@ -1,50 +1,43 @@
 /**
- * Admin Configuration, restructured 2026-09 (Vishal's explicit 4-section
- * layout) into: Application (name/currency/Live-Test-Mode only),
- * Payment Gateway (gateway dropdown + per-mode PayU credentials shown
- * only when PayU is selected, plus the Return URL/PayU webhook URL the
- * payment flow redirects through), Everyticket Integration (secret key,
- * webhook URL, retry limit, an archive-after-days threshold, a
- * read-only sample-JSON preview of the five real webhook event types,
- * and an escalation email sent once a delivery is exhausted), and
- * Notifications (SMTP transport + sender overrides). "Subscription
- * rules" and "Security" configuration keep their existing backend
- * endpoints and live enforcement, completely unchanged - they're just
- * not rendered on this page for now (see
- * app/applications/config_schemas.py's module docstring on the backend
- * for the full rationale). The custom key/value extra-parameters editor
- * this screen used to have was removed in the 2026-09 follow-up 3 pass
- * ("Remove feature for parameters (key,value) from this section").
- *
- * Every save here has a REAL effect on the next request, not just
- * storage: default_gateway/PayU credentials/redirect URLs change the
- * very next payment, the webhook fields change the next delivery
- * attempt, and the SMTP/sender fields change the next email's transport
- * and From header.
+ * The four Configuration section forms - Application (General), Payment
+ * gateway, Everyticket Integration, and Notifications (Communication) -
+ * factored out of what used to be a single stacked AdminConfigPage.tsx
+ * screen (see docs/implementation-status.md's 2026-09 entries for that
+ * screen's own history) so each can now live on its own route/sidebar
+ * entry (2026-09-14 follow-up: "Under Configuration, 4 sub menu will
+ * come - 1. General... 2. Payment Gateway... 3. Communication... 4.
+ * Integration"). Nothing about any section's own behavior changed in
+ * that split - each still POSTs/PUTs to exactly the endpoint it always
+ * has and every save here still has a REAL effect on the next request,
+ * not just storage: default_gateway/PayU credentials/redirect URLs
+ * change the very next payment, the webhook fields change the next
+ * delivery attempt, and the SMTP/sender fields change the next email's
+ * transport and From header. "Subscription rules" and "Security"
+ * configuration keep their existing backend endpoints and live
+ * enforcement, completely unchanged - they're just not rendered by any
+ * of these four pages (see app/applications/config_schemas.py's module
+ * docstring on the backend for the full rationale).
  */
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
-  adminGetApplicationConfig,
   adminUpdateGeneralConfig,
   adminUpdateIntegrationConfig,
   adminUpdateNotificationConfig,
   adminUpdatePaymentGatewayConfig,
-} from "../../api/endpoints";
-import { ErrorBanner } from "../../components/ErrorBanner";
-import { RichTextEditor } from "../../components/RichTextEditor";
-import { useAuth } from "../../context/AuthContext";
-import { useToast } from "../../context/ToastContext";
+} from "../../../api/endpoints";
+import { ErrorBanner } from "../../../components/ErrorBanner";
+import { RichTextEditor } from "../../../components/RichTextEditor";
+import { useToast } from "../../../context/ToastContext";
 import type {
-  ApplicationConfigOut,
   ApplicationGeneralOut,
   EveryticketIntegrationOut,
   NotificationConfigOut,
   PaymentGatewayConfigOut,
-} from "../../api/types";
+} from "../../../api/types";
 
 const CURRENCIES = ["INR", "USD", "EUR", "GBP", "AUD", "CAD", "AED", "SGD"];
 
-function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+export function Section({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
     <div className="admin-panel">
       <h2>{title}</h2>
@@ -54,7 +47,7 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   );
 }
 
-function SaveButton({ saving, savedAt }: { saving: boolean; savedAt: number | null }) {
+export function SaveButton({ saving, savedAt }: { saving: boolean; savedAt: number | null }) {
   return (
     <>
       <button className="button button-primary" type="submit" disabled={saving}>
@@ -65,7 +58,7 @@ function SaveButton({ saving, savedAt }: { saving: boolean; savedAt: number | nu
   );
 }
 
-function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; token: string }) {
+export function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; token: string }) {
   const toast = useToast();
   const [name, setName] = useState(initial.name);
   const [currency, setCurrency] = useState(initial.currency);
@@ -146,7 +139,7 @@ function GeneralSection({ initial, token }: { initial: ApplicationGeneralOut; to
   );
 }
 
-function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConfigOut; token: string }) {
+export function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConfigOut; token: string }) {
   const toast = useToast();
   const [defaultGateway, setDefaultGateway] = useState(initial.default_gateway);
   const [returnUrl, setReturnUrl] = useState(initial.return_url ?? "");
@@ -200,7 +193,7 @@ function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConf
   return (
     <Section
       title="Payment gateway"
-      hint="Default gateway takes effect on the very next payment. Whether the Test or Live credentials below are actually used is decided by the Live/Test mode set in the Application section above."
+      hint="Default gateway takes effect on the very next payment. Whether the Test or Live credentials below are actually used is decided by the Live/Test mode set in the General section."
     >
       <ErrorBanner error={error} />
       <form
@@ -291,7 +284,7 @@ function PaymentGatewaySection({ initial, token }: { initial: PaymentGatewayConf
   );
 }
 
-function IntegrationSection({ initial, token }: { initial: EveryticketIntegrationOut; token: string }) {
+export function IntegrationSection({ initial, token }: { initial: EveryticketIntegrationOut; token: string }) {
   const toast = useToast();
   const [webhookUrl, setWebhookUrl] = useState(initial.webhook_url ?? "");
   const [secretKey, setSecretKey] = useState("");
@@ -503,6 +496,49 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
             Copy this API secret now - after you save, it's stored but never shown again in full.
           </p>
         )}
+        {/* 2026-09-14 follow-up: "What parameters Everyticket has to send
+            apart from key and secret... please show json as help text" -
+            the key/secret above only authenticate the call (as headers);
+            this is the full request/response contract for the call
+            itself, straight from app.sso.schemas.SsoLinkGenerateRequest/
+            SsoLinkOut and app.api.v1.integration.generate_sso_link - kept
+            here so it can be handed to Everyticket's integration team
+            alongside the credentials without them needing the backend
+            source. */}
+        <div className="webhook-sample" style={{ marginTop: 12, maxWidth: 560 }}>
+          <div className="webhook-sample-header">
+            <code>POST /api/v1/integration/sso/generate-link</code>
+          </div>
+          <pre className="webhook-sample-body">
+            {JSON.stringify(
+              {
+                headers: {
+                  "X-Api-Key": "<the API key above>",
+                  "X-Api-Secret": "<the API secret above>",
+                },
+                body: {
+                  external_customer_id: "ET-CUST-10432",
+                  user_identifier: "admin-42",
+                },
+                response: {
+                  sso_token: "eyJhbGciOi...",
+                  consume_url: "https://subscribe.everyticket.com/sso/consume?token=eyJhbGciOi...",
+                  expires_at: "2026-09-14T07:15:00+00:00",
+                },
+              },
+              null,
+              2,
+            )}
+          </pre>
+        </div>
+        <p className="hint">
+          <code>external_customer_id</code> (required) is the same value Everyticket's own backend already
+          returned when it responded to the subscription.activated webhook (its success/external_customer_id/
+          instance_id reply), so it's always on hand by the time a customer clicks "Manage Subscription".{" "}
+          <code>user_identifier</code> is optional, free-form context (e.g. which of Everyticket's own admin
+          users triggered this) stored for audit only and never interpreted by this app. Everyticket's app then
+          just opens the returned <code>consume_url</code> - the customer lands signed in, no second password.
+        </p>
 
         <h3 style={{ marginTop: 16 }}>Webhook events</h3>
         <p className="hint">
@@ -588,7 +624,7 @@ function IntegrationSection({ initial, token }: { initial: EveryticketIntegratio
   );
 }
 
-function NotificationSection({ initial, token }: { initial: NotificationConfigOut; token: string }) {
+export function NotificationSection({ initial, token }: { initial: NotificationConfigOut; token: string }) {
   const toast = useToast();
   const [notificationsEnabled, setNotificationsEnabled] = useState(initial.notifications_enabled);
   const [smtpHost, setSmtpHost] = useState(initial.smtp_host ?? "");
@@ -697,32 +733,5 @@ function NotificationSection({ initial, token }: { initial: NotificationConfigOu
         <SaveButton saving={saving} savedAt={savedAt} />
       </form>
     </Section>
-  );
-}
-
-export function AdminConfigPage() {
-  const { adminToken } = useAuth();
-  const [config, setConfig] = useState<ApplicationConfigOut | null>(null);
-  const [error, setError] = useState<unknown>(null);
-
-  useEffect(() => {
-    if (!adminToken) return;
-    adminGetApplicationConfig(adminToken).then(setConfig).catch(setError);
-  }, [adminToken]);
-
-  return (
-    <section>
-      <h1>Configuration</h1>
-      <ErrorBanner error={error} />
-      {config === null && !error && <p>Loading...</p>}
-      {config && adminToken && (
-        <>
-          <GeneralSection initial={config.general} token={adminToken} />
-          <PaymentGatewaySection initial={config.payment_gateway} token={adminToken} />
-          <IntegrationSection initial={config.integration} token={adminToken} />
-          <NotificationSection initial={config.notification} token={adminToken} />
-        </>
-      )}
-    </section>
   );
 }

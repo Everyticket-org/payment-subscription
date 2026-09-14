@@ -24,12 +24,32 @@ class Settings(BaseSettings):
     CURRENCY: str = "INR"
 
     # --- Database ---
-    DATABASE_URL: str = "postgresql+psycopg2://subscription:subscription@localhost:5432/subscription"
+    # 2026-09-13 follow-up ("change database to mysql"): switched from
+    # Postgres to MySQL. Use the PyMySQL driver (pure Python - no C
+    # extension to compile, unlike mysqlclient, which matters on a
+    # Windows dev machine with no build toolchain set up) and always pass
+    # charset=utf8mb4 so multi-byte text (emoji, non-Latin names/plan
+    # descriptions) round-trips correctly - MySQL's plain "utf8" charset
+    # is actually a 3-byte-max legacy encoding, not full Unicode.
+    DATABASE_URL: str = "mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4"
 
     # --- Redis / Celery ---
     REDIS_URL: str = "redis://localhost:6379/0"
     CELERY_BROKER_URL: str = "redis://localhost:6379/1"
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
+
+    # --- Admin bootstrap ---
+    # 2026-09-13 follow-up ("keep admin credentials for login into admin"
+    # while resetting to a fresh MySQL database): app.core.seed.py's
+    # _get_or_create_admin() uses these, when BOTH are set, instead of the
+    # hardcoded DEV_ADMIN_EMAIL/DEV_ADMIN_PASSWORD dev constants - so the
+    # admin login on a freshly-created database can be whatever you want
+    # (e.g. the same email/password you already use today) without that
+    # password ever needing to be typed anywhere but your own .env file.
+    # Leave both blank to keep the existing dev default
+    # (admin@example.com / ChangeMe123!).
+    ADMIN_BOOTSTRAP_EMAIL: str = ""
+    ADMIN_BOOTSTRAP_PASSWORD: str = ""
 
     # --- Auth / Security ---
     JWT_SECRET: str = "change-me-dev-only-do-not-use-in-production"

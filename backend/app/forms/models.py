@@ -21,6 +21,18 @@ class RegistrationFormField(Base, TimestampMixin):
     # doesn't - see app.forms.validation.validate_registration_data().
     validation_pattern: Mapped[str | None] = mapped_column(String(500), nullable=True)
     validation_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Per Vishal's follow-up ("add one more checkbox to validate
+    # duplication... if any record have similar value then it will not
+    # allow user to enter same name"): when set, a submitted value for
+    # this field must not already exist on ANY OTHER customer's
+    # registration data for this application (case-insensitive,
+    # whitespace-trimmed comparison) - see
+    # app.forms.validation.check_duplicate_registration_data().
+    # duplicate_message is the error shown on a match, falling back to a
+    # generic "<label> already exists" when unset - same pattern as
+    # validation_message above.
+    check_duplicate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    duplicate_message: Mapped[str | None] = mapped_column(String(255), nullable=True)
     placeholder: Mapped[str | None] = mapped_column(String(255), nullable=True)
     help_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     options: Mapped[list | None] = mapped_column(JSON, nullable=True)  # for dropdown/radio/checkbox

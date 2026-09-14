@@ -12,10 +12,12 @@ Usage:
 """
 from sqlalchemy.orm import Session
 
+from app.applications.config_schemas import DEFAULT_POST_SUBSCRIPTION_MESSAGE
 from app.applications.models import Application
 from app.auth import service as auth_service
 from app.auth.models import AdminUser, Permission, Role
 from app.auth.permissions import PERMISSIONS
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.core import models_registry  # noqa: F401
 from app.forms.models import RegistrationFormField
@@ -44,6 +46,7 @@ def _get_or_create_application(db: Session) -> Application:
         otp_bypass_enabled=True,
         mfa_bypass_enabled=True,
         payment_simulation_enabled=True,
+        post_subscription_message=DEFAULT_POST_SUBSCRIPTION_MESSAGE,
     )
     db.add(app_row)
     db.flush()
@@ -158,15 +161,28 @@ def _get_or_create_admin(db: Session) -> AdminUser:
     """Dev-only seed admin (spec section 70). Credentials are printed by
     main() and documented in README.md - they are NOT meant for
     production use; production admin accounts should be created through a
-    proper (not-yet-built) admin-user-management flow."""
+    proper (not-yet-built) admin-user-management flow.
+
+    2026-09-13 follow-up: if ADMIN_BOOTSTRAP_EMAIL/ADMIN_BOOTSTRAP_PASSWORD
+    are both set (e.g. in .env - never hardcoded here), this creates that
+    admin instead of the DEV_ADMIN_EMAIL/DEV_ADMIN_PASSWORD dev default -
+    the mechanism that lets a freshly created database (e.g. after
+    switching to a new MySQL instance) come up with the same admin login
+    you already use, without that password ever needing to appear in code,
+    chat, or a file this app writes anywhere else."""
     role = _sync_superadmin_role(db)
 
-    existing = db.query(AdminUser).filter(AdminUser.email == DEV_ADMIN_EMAIL).first()
+    settings = get_settings()
+    using_bootstrap = bool(settings.ADMIN_BOOTSTRAP_EMAIL and settings.ADMIN_BOOTSTRAP_PASSWORD)
+    email = settings.ADMIN_BOOTSTRAP_EMAIL if using_bootstrap else DEV_ADMIN_EMAIL
+    password = settings.ADMIN_BOOTSTRAP_PASSWORD if using_bootstrap else DEV_ADMIN_PASSWORD
+
+    existing = db.query(AdminUser).filter(AdminUser.email == email).first()
     if existing is not None:
         return existing
 
     user = auth_service.create_admin_user(
-        db, email=DEV_ADMIN_EMAIL, full_name="Dev Admin", password=DEV_ADMIN_PASSWORD, mfa_enabled=True
+        db, email=email, full_name="Admin" if using_bootstrap else "Dev Admin", password=password, mfa_enabled=True
     )
     user.roles.append(role)
     db.add(user)
@@ -271,13 +287,18 @@ def main() -> None:
     db = SessionLocal()
     try:
         admin_user = seed(db)
+        settings = get_settings()
+        using_bootstrap = bool(settings.ADMIN_BOOTSTRAP_EMAIL and settings.ADMIN_BOOTSTRAP_PASSWORD)
         print("Seed data applied.")
-        print(f"Dev admin login: {DEV_ADMIN_EMAIL} / {DEV_ADMIN_PASSWORD}")
+        if using_bootstrap:
+            print(f"Admin login: {admin_user.email} (password set via ADMIN_BOOTSTRAP_PASSWORD in .env)")
+        else:
+            print(f"Dev admin login: {DEV_ADMIN_EMAIL} / {DEV_ADMIN_PASSWORD}")
         if admin_user.mfa_secret:
             import pyotp
 
             uri = pyotp.TOTP(admin_user.mfa_secret).provisioning_uri(
-                name=DEV_ADMIN_EMAIL, issuer_name="Everyticket Subscriptions (dev)"
+                name=admin_user.email, issuer_name="Everyticket Subscriptions (dev)"
             )
             print(f"Dev admin MFA secret: {admin_user.mfa_secret}")
             print(f"Dev admin MFA provisioning URI (scan in an authenticator app): {uri}")

@@ -330,3 +330,153 @@ def test_build_wire_body_is_just_event_type_and_payload(seeded_db):
         payload={"subscription_id": "SUB-1"},
     )
     assert body == {"event_type": "subscription.activated", "payload": {"subscription_id": "SUB-1"}}
+
+
+# --- 2026-09-14 follow-up: "allow to configure, more data to be passed
+# for webhook call like plan details including name, amount, expiry
+# etc.. so if admin select those parameters then it will be passed to
+# webhook" ---
+
+
+def test_onboarding_webhook_includes_only_selected_optional_fields(client, seeded_db):
+    """With no selection saved, activated's payload is exactly the fixed
+    shape (already covered above). Selecting a subset of the OPTIONAL
+    catalog for subscription.activated must add exactly those keys with
+    real values - and nothing else - to a real queued delivery."""
+    application = _configure_webhook_destination(seeded_db)
+    application.webhook_field_selection = {
+        "subscription.activated": ["currency", "customer_id", "transaction_id", "invoice_id"],
+    }
+    seeded_db.commit()
+
+    subscription = _subscribe_with_registration_data(
+        client, seeded_db, email="onboarding-selected@museum.example", registration_data={}
+    )
+    event = (
+        seeded_db.query(WebhookEvent)
+        .filter(WebhookEvent.event_type == "subscription.activated", WebhookEvent.entity_id == subscription.subscription_id)
+        .one()
+    )
+    assert set(event.payload) == {
+        "subscription_id", "email", "phone_number", "plan_code", "plan_name", "price", "is_trial", "expires_at",
+        "currency", "customer_id", "transaction_id", "invoice_id",
+    }
+    assert event.payload["currency"] == subscription.plan.currency
+    assert event.payload["customer_id"] == subscription.customer.customer_id
+    assert event.payload["transaction_id"]
+    assert event.payload["invoice_id"]
+    # Fields NOT selected (e.g. gateway, total_amount) must still be absent.
+    assert "gateway" not in event.payload
+    assert "total_amount" not in event.payload
+
+
+def test_renewed_webhook_includes_selected_optional_fields(client, seeded_db):
+    application = _configure_webhook_destination(seeded_db)
+    subscription = _subscribe_with_registration_data(
+        client, seeded_db, email="renew-selected@museum.example", registration_data={}
+    )
+    application.webhook_field_selection = {
+        "subscription.renewed": ["plan_name", "amount", "expires_at"],
+    }
+    seeded_db.commit()
+
+    token = _customer_token(client, "renew-selected@museum.example", "9812345671")
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.post(f"/api/v1/customer/subscriptions/{subscription.subscription_id}/renew", headers=headers)
+    assert resp.status_code == 200, resp.text
+    txn = resp.json()["payment"]["transaction_id"]
+    callback = client.post("/api/v1/payment/mock/callback", json={"transaction_id": txn, "scenario": "SUCCESS"})
+    assert callback.status_code == 200, callback.text
+
+    event = (
+        seeded_db.query(WebhookEvent)
+        .filter(WebhookEvent.event_type == "subscription.renewed", WebhookEvent.entity_id == subscription.subscription_id)
+        .one()
+    )
+    assert set(event.payload) == {"subscription_id", "plan_name", "amount", "expires_at"}
+    assert event.payload["plan_name"] == subscription.plan.name
+
+
+def test_field_catalog_never_offers_payment_or_invoice_fields_for_expired_cancelled_archived(seeded_db):
+    """Vishal's own decision when this was scoped: nothing was actually
+    charged the moment a subscription expires, is cancelled, or is
+    archived, so those three events must never even OFFER
+    transaction_id/payment_type/gateway/amount/invoice_id/total_amount/
+    tax_amount as selectable - offering them would just be admin-visible
+    nulls."""
+    from app.webhooks.field_catalog import AVAILABLE_FIELDS
+
+    payment_invoice_fields = {"transaction_id", "payment_type", "gateway", "amount", "invoice_id", "total_amount", "tax_amount"}
+    for event_type in ("subscription.expired", "subscription.cancelled", "subscription.archived"):
+        assert payment_invoice_fields.isdisjoint(AVAILABLE_FIELDS[event_type]), event_type
+
+
+def test_sanitize_selection_drops_unknown_events_and_fields():
+    """A selection saved against an older/different version of this
+    catalog (event renamed/removed, or a field that no longer exists)
+    must never reach a payload builder - dropped silently rather than
+    raising, so a catalog change can never break an existing
+    application's saved configuration outright."""
+    from app.webhooks.field_catalog import sanitize_selection
+
+    raw = {
+        "subscription.activated": ["currency", "not_a_real_field", "gateway"],
+        "subscription.made_up_event": ["plan_name"],
+        "subscription.expired": ["transaction_id"],  # not offered for this event - must be dropped
+        "subscription.renewed": [],  # empty list after filtering - must be dropped entirely
+    }
+    cleaned = sanitize_selection(raw)
+    assert cleaned == {"subscription.activated": ["currency", "gateway"]}
+    assert sanitize_selection(None) == {}
+    assert sanitize_selection({}) == {}
+
+
+def test_upgraded_and_downgraded_webhook_payloads_include_selected_optional_fields(client, seeded_db):
+    """subscription.upgraded/downgraded (2026-09-14 follow-up: "yes" to
+    bringing these into the same configurable-fields system) keep their
+    existing fixed shape by default and only gain extra keys when
+    selected."""
+    from app.plans.models import Plan
+
+    application = _configure_webhook_destination(seeded_db)
+    basic_plan = seeded_db.query(Plan).filter(Plan.application_id == application.id, Plan.plan_code == "BASIC").one()
+    # Priced well above BASIC so this is unambiguously an UPGRADE
+    # (assert_transition_allowed derives UPGRADE/DOWNGRADE purely from
+    # the two plans' prices - see app.subscriptions.service).
+    pro_plan = Plan(
+        application_id=application.id, plan_code="PRO2", name="Pro Two", price=float(basic_plan.price) + 1000,
+        currency="INR", billing_interval="month", billing_frequency=1, active=True,
+    )
+    seeded_db.add(pro_plan)
+    seeded_db.commit()
+
+    application.webhook_field_selection = {
+        "subscription.upgraded": ["plan_name", "amount"],
+    }
+    seeded_db.commit()
+
+    subscription = _subscribe_with_registration_data(
+        client, seeded_db, email="upgrade-selected@museum.example", registration_data={}
+    )
+    token = _customer_token(client, "upgrade-selected@museum.example", "9812345671")
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.post(
+        f"/api/v1/customer/subscriptions/{subscription.subscription_id}/upgrade",
+        json={"target_plan_code": "PRO2"},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    txn = resp.json()["payment"]["transaction_id"]
+    callback = client.post("/api/v1/payment/mock/callback", json={"transaction_id": txn, "scenario": "SUCCESS"})
+    assert callback.status_code == 200, callback.text
+
+    event = (
+        seeded_db.query(WebhookEvent)
+        .filter(WebhookEvent.event_type == "subscription.upgraded", WebhookEvent.entity_id == subscription.subscription_id)
+        .one()
+    )
+    assert set(event.payload) == {
+        "subscription_id", "customer_id", "plan_code", "status", "expires_at", "transaction_id",
+        "plan_name", "amount",
+    }
+    assert event.payload["plan_name"] == "Pro Two"

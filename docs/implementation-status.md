@@ -2424,3 +2424,1076 @@ dynamic-form values for a test customer. Two real gaps found and fixed:
 
 Verified: 106 total tests (up from 105), 105 passing (same pre-existing
 `/ready` gap).
+
+## 2026-09-13 (follow-up): registration-form field duplicate-value validation
+
+Vishal's follow-up, verbatim: "Registration form data - 1. Add one more
+checkbox to validate duplication (it means any record have similar value
+then it will not allow user to enter same name) & Validation message for
+that duplication also should be configured."
+
+**What changed:**
+
+- `RegistrationFormField` gained two new columns
+  (`f2a8c3d91b45_form_field_duplicate_validation.py`, off head
+  `e45b1604043b`): `check_duplicate` (boolean, default `False`) and
+  `duplicate_message` (nullable string, 255 chars) - same shape as the
+  existing `validation_pattern`/`validation_message` pair, exposed the
+  same way on `RegistrationFormFieldOut`/`Create`/`Update`.
+- New `app.forms.validation.check_duplicate_registration_data()`,
+  deliberately a SEPARATE function from the existing
+  `validate_registration_data()` rather than folded into it: the
+  duplicate check needs to know which customer is submitting (to exclude
+  that customer's own prior rows), which isn't resolved until after
+  `/subscribe` has looked up or created the `Customer` record, whereas
+  the existing regex check runs earlier, before that resolution, and was
+  left untouched to avoid any regression risk to already-tested behavior.
+  It's wired into `app/api/v1/public.py`'s `/subscribe` right after
+  customer resolution and before the upgrade/downgrade/new-subscription
+  branch, so it applies uniformly across all three paths.
+- Matching is case-insensitive and whitespace-trimmed (`_normalize()`:
+  `str(value).strip().lower()`), per Vishal's own wording ("any record
+  have similar value") rather than a byte-exact comparison. A field with
+  `check_duplicate` off never blocks a repeated value; a blank submitted
+  value is never checked; a customer re-submitting their own existing
+  value (e.g. on an upgrade/downgrade that resends the same
+  `registration_data`) is excluded via `exclude_customer_id` and is never
+  flagged as a duplicate of itself - the main regression risk this
+  feature could have introduced.
+- The lookup queries `CustomerRegistrationData` rows for the application
+  via SQLAlchemy, then compares each row's JSON value in plain Python
+  rather than as a dialect-specific JSON-column SQL expression, so
+  behavior is identical on SQLite (tests) and Postgres (production).
+  This is a full table scan per checked field per submission - documented
+  in code comments as an accepted trade-off at this app's expected scale,
+  not a hidden shortcut.
+- Rejection is a 422 `REGISTRATION_DATA_INVALID` with the field's
+  `duplicate_message`, falling back to a generic "<label> already exists.
+  Please use a different value." when unset - same pattern as the
+  existing regex validation's message handling.
+- Admin UI (`AdminRegistrationFormPage.tsx`): the shared `ValidationFields`
+  block (used by both the create form and the field-edit modal) gained a
+  "Check duplicate" checkbox and a conditional duplicate-message input
+  right after the existing regex/test-pattern controls; the fields table
+  gained a "Duplicate check" column (`ON`/`Off` badge) next to the
+  existing "Validation" column.
+
+New backend tests in `tests/test_form_field_duplicate_validation.py` (8
+tests): admin create/update save and return the two new fields correctly
+and expose them on the public form endpoint; a duplicate value is
+rejected with the configured custom message, or a generic fallback when
+none is set; matching is case-insensitive/whitespace-trimmed; a field
+with the checkbox off allows repeats; a blank value is never checked; and
+- the key regression test - an existing customer upgrading their plan
+while resending their own unchanged value succeeds, while a genuinely
+different customer using that same value is still rejected.
+
+Verified: full suite 183 total, 182 passing (up from 175 total/174
+passing before this pass), same single pre-existing, unrelated `/ready`
+DB-connectivity gap that predates this project. Frontend `tsc -b && vite build`
+clean; `oxlint` 0 errors, same 9 pre-existing warnings (double-checked
+the one warning inside `AdminRegistrationFormPage.tsx`, confirmed
+pre-existing and unrelated to this change). New migration
+`f2a8c3d91b45` (single clean head off `e45b1604043b`) still needs
+`alembic upgrade head` run against Vishal's real Postgres database.
+
+**Not yet committed.** This session's remote shell to Vishal's machine
+(`device_bash`) is down - Windows update (Sept 8) broke Claude's
+workspace access to local files; file staging/reading/writing still
+works, but no remote command execution, so `git add`/`git commit` could
+not be run on the real repository. The files listed above were changed
+and verified in an isolated mirror and written back to the real repo
+paths via file transfer only (no git operations performed there) -
+Vishal needs to run `git add` + `git commit` himself once at the
+machine (exact command given to him separately), or wait for the
+device-shell issue to clear.
+
+## 2026-09-13 (follow-up 2): Testing page trimmed + webhook event dropdown, configurable post-subscription message
+
+Vishal's follow-up, verbatim:
+
+"Testing Tools Page inside admin
+
+1. Remove Test Payment section
+2. Remove Test Subscription Events section
+3. Under Test Webhook
+   1. Give dropdown of Events like activate etc..
+   2. Based on selection JSON editor automatically should be filled with
+      required strcuture.
+
+Thank you page after payment
+
+1. show message "You have successfully subscribed, you will get your
+   credentials in sometime" for first time subscription, (after section
+   of Transaction: `TXN-RJTJMJJODP`)
+   1. This message also should be configurable.
+2. for change plan they already will have credentials."
+
+**Testing page (`AdminTestingPage.tsx`)**: the Test payment and Test
+subscription events sections are gone. Their backend endpoints
+(`/admin/testing/payment`, `/admin/testing/subscription-event`) are
+deliberately left untouched - same "dead UI, live backend" precedent
+this codebase already used for the Plan Transitions allow-list UI
+(2026-09 UI/UX rework) - so direct API/diagnostic use and every existing
+test against them keeps passing unmodified; only the frontend imports/
+state/JSX for those two sections were removed (unused-var-clean, this
+project's `tsconfig.app.json` has `noUnusedLocals`/`noUnusedParameters`
+on).
+
+Test Everyticket webhook gained an Event dropdown. Rather than write a
+second, easily-drifting copy of the five real webhook event bodies, the
+admin Configuration screen's existing "Webhook events" sample-JSON
+builder (`_build_webhook_samples` in `admin_config.py`) was moved
+verbatim into `app.webhooks.payloads.build_webhook_samples()` - now the
+one shared source of truth for both. A new `GET
+/admin/testing/webhook/samples` (`TESTING_TOOLS_USE` + `require_test_mode`
+gated, same as every other Testing endpoint) returns it; picking an event
+from the new dropdown fills the JSON editor with `JSON.stringify(sample.
+payload, null, 2)` - the exact wire body (`{event_type, payload}`) a real
+delivery of that event would send - which the admin can still hand-edit
+before sending, same as before.
+
+**Configurable post-subscription message**: new `Application.
+post_subscription_message` column (migration `a6d92e4f7c31`, off head
+`f2a8c3d91b45`, nullable - unset falls back to a built-in default string,
+`DEFAULT_POST_SUBSCRIPTION_MESSAGE` in `app/applications/config_schemas.py`,
+same fallback convention as `validation_message`/`duplicate_message` on
+registration form fields), editable on the admin Configuration screen's
+existing "Application" section. New public `GET /public/messages`
+(`PublicMessagesOut`) serves the resolved value (configured text, or the
+default) with no auth - it has to be readable by an anonymous customer
+mid-checkout.
+
+Distinguishing "first time subscription" from "change plan" (point 2:
+"for change plan they already will have credentials") needed a real,
+precise signal rather than guessing from whether the customer happened
+to be signed in already - `PaymentTransactionOut` (customer/public-facing
+payment schema) gained `payment_type` (`NEW | RENEWAL | UPGRADE |
+DOWNGRADE` - a real `PaymentTransaction` column that already existed and
+already auto-populates via `model_validate()`, just never exposed on
+this particular schema before; `PaymentAdminOut`, the admin-only schema,
+already had it). The message is shown only when `payment_type === "NEW"`:
+
+- **Mock gateway** (what this dev environment actually exercises):
+  `SubscribePage.tsx`'s "done" step - previously showing no transaction
+  detail at all once payment was simulated - now also shows a Transaction
+  line (`callbackResult.payment.transaction_id`, matching Vishal's own
+  wording of where the message should go) immediately followed by the
+  message when `payment_type` is `NEW`. An authenticated existing
+  customer whose `/subscribe` call gets silently auto-routed to an
+  upgrade/downgrade against their existing subscription (spec section
+  9/22's auto-routing) never sees it, since that transaction's
+  `payment_type` is `UPGRADE`/`DOWNGRADE`, not `NEW` - exactly Vishal's
+  "already have credentials" case, with no separate flag needed.
+- **Real PayU gateway**: `_handle_payu_return()` (`app/api/v1/payment.py`)
+  now also passes `payment_type=updated_transaction.payment_type` in the
+  redirect back to `/payment/return`; `PaymentReturnPage.tsx` reads it and
+  shows the message right after its existing Transaction line, gated the
+  same way (`payment_type === "NEW"`). Both pages fetch `GET
+  /public/messages` themselves (SubscribePage on mount alongside its
+  existing "other plans" fetch; PaymentReturnPage only when the payment
+  succeeded and is NEW) rather than threading the text through every
+  intermediate response.
+
+New backend tests: `test_admin_testing.py` gained a webhook-samples test
+(covers all five events, and asserts byte-for-byte parity with the admin
+Configuration screen's own preview, `expires_at` excluded from the
+comparison since it's independently computed as "now + 30 days" on each
+of the two separate requests); `test_admin_config.py` gained two
+post_subscription_message tests (round-trips through the admin API and
+is served correctly by the public endpoint; falls back to the default
+text when explicitly cleared); a new `test_payu_callback_redirect.py`
+drives a REAL subscribe → PayU checkout → signed callback round trip
+(same reverse-hash formula as `test_payu_gateway.py`'s adapter-only unit
+tests) for both a first-time subscription (asserts `payment_type=NEW` on
+the redirect) and an existing customer's upgrade (asserts `payment_type=
+UPGRADE`) - the actual wire contract PaymentReturnPage.tsx depends on,
+not just the underlying field in isolation.
+
+Verified: full suite 190 total, 187 passing (up from 183 total/182
+passing before this pass), same single pre-existing, unrelated `/ready`
+gap. Frontend `tsc -b && vite build` clean (65 modules); `oxlint` 0
+errors, same 9 pre-existing warnings, none new (the two new `useEffect`
+calls that fetch the public message set state inside a `.then()`
+callback, not synchronously in the effect body, so they don't trip
+`react/set-state-in-effect` - same pattern `listPlans()` already used in
+`SubscribePage.tsx`). New migration `a6d92e4f7c31` (single clean head)
+still needs `alembic upgrade head` run against Vishal's real Postgres -
+now the **second** migration this project has sitting uncommitted (on
+top of `f2a8c3d91b45` from the follow-up above), since `device_bash` was
+still down for this entire pass too - same standing note applies: not
+yet committed, written to the real repo paths via file transfer only,
+Vishal needs to run `git add`/`git commit` himself (or wait for the
+device-shell issue to clear) before either pass reaches his real git
+history.
+
+## 2026-09-13 (follow-up 4): real Everyticket SSO handoff API (POST /api/v1/integration/sso/generate-link)
+
+Vishal's follow-up, verbatim: "Test SSO Link - Actually this has to be
+generated by Everyticket platform to login into subscription engine...
+so need to give API to everyticket Platform to call that which generates
+token and return a link so everyticket can use inside their app. or any
+other way to make login that customer please suggest."
+
+**Why an API call, not Everyticket minting the token itself**: spec
+section 47 describes Everyticket generating the signed SSO token
+directly. That can't actually work end to end with this app's replay
+protection, though: `app/sso/service.py`'s redemption check is DB-backed
+(a token is only valid if a matching `SsoSession` row already exists,
+created at mint time) - so whoever mints a token must be able to write
+to this app's own database, which only this app can do. The correct,
+secure shape is therefore exactly what Vishal asked for: Everyticket's
+backend calls this app's API to have the token minted (this app still
+owns issuance and the replay-protection row) and gets back a ready-to-use
+link.
+
+**New endpoint**: `POST /api/v1/integration/sso/generate-link`
+(`app/api/v1/integration.py`, previously an empty placeholder router).
+Body: `{external_customer_id, user_identifier?}` - `external_customer_id`
+is the identity Everyticket itself already holds for this customer,
+handed back to it in the `subscription.activated` webhook's response
+(spec section 32), so by the time a customer clicks "Manage Subscription"
+inside Everyticket the mapping is guaranteed to already exist. Returns
+the same `SsoLinkOut` shape (`sso_token`, `consume_url`, `expires_at`)
+the existing TEST_MODE-only admin action already returns, since both
+call the exact same `sso_service.create_sso_token()` underneath - a
+token minted through either path is redeemed identically via the
+existing `POST /public/sso/consume`.
+
+**Authentication is a new kind for this app**: every other endpoint here
+authenticates a human (admin bearer token, customer OTP session). This
+one authenticates Everyticket's own backend - `X-Api-Key`/`X-Api-Secret`
+headers, checked with `hmac.compare_digest` (constant-time) against
+`Application.api_credentials` (a JSON column that already existed on the
+model but was completely unused - reused here as `{"api_key":...,
+"api_secret":...}`, so **no migration was needed** for this feature).
+Distinct from every other secret already in this app: `webhook_secret`
+signs OUR outbound calls TO Everyticket; `sso_secret` still signs every
+token internally but Everyticket never needs to see it now that it
+doesn't mint tokens itself; `api_credentials` authenticates Everyticket's
+INBOUND calls TO this app. Until the admin configures these credentials,
+every call is refused (401 `UNAUTHORIZED`), never silently allowed. An
+unmapped `external_customer_id` is a 404 `CUSTOMER_NOT_FOUND`. Every
+successful call is audit-logged (`SSO_LINK_GENERATED`, actor
+`everyticket-integration:<application code>`).
+
+**Admin Configuration**: the Everyticket Integration section gained an
+"SSO API access" block - an API Key field (shown in plain text; it's an
+identifier, not a secret by itself) and an API Secret field (deliberately
+NOT password-masked, unlike every other secret field on this app -
+admin's job here is to copy the value and hand it to Everyticket's team
+out of band, so hiding it on screen would be actively unhelpful) plus a
+"Generate random values" button (`crypto.getRandomValues`-based, client
+side). Same `None on PUT = unchanged, "" = clears` convention as
+`secret_key` elsewhere on this screen.
+
+**Test SSO admin action unaffected**: `POST /admin/customers/{id}/
+sso-link` (TEST_MODE-gated, used by "Generate test SSO link" on the
+admin customer detail page) is untouched - it remains the quickest way to
+exercise the handoff without needing a real Everyticket call, and now the
+admin Testing page's "Test SSO" section explicitly notes that the real
+flow goes through this new API instead.
+
+New backend tests in `tests/test_integration_sso.py` (5 tests): happy
+path end to end (mint via the API, redeem via `/public/sso/consume`,
+confirm the resulting token opens a real customer portal session, confirm
+the audit log entry); refused when API credentials aren't configured yet;
+refused with wrong key/secret; refused with missing headers; 404 for an
+external_customer_id with no mapping. `tests/test_admin_config.py` gained
+one round-trip test for the new `api_key`/`api_secret` fields (set,
+partial-update leaves them unchanged, explicit `""` clears both).
+
+Verified: full suite 194 total, 193 passing (up from 190 total/187
+passing before this pass), same single pre-existing, unrelated `/ready`
+gap. Frontend `tsc -b && vite build` clean (65 modules); `oxlint` 0
+errors, same 9 pre-existing warnings, none new. **No new migration** -
+`Application.api_credentials` already existed and was simply put to use,
+so the pending-migration count stays at eight (unchanged from the
+previous pass) even though this is a real, shippable feature.
+
+## 2026-09-13 (follow-up 5): bugfix - Test Email ignored per-application SMTP config
+
+**User report**: "Why test email is not going even after configured correctly SMTP."
+
+**Root cause**: `POST /api/v1/admin/testing/email` (`test_email()` in
+`app/api/v1/admin_testing.py`) called `email_service.send_templated_email()`
+without passing `application=`. Every other real send site (payment success/
+failed, subscription renewal reminders, invoice emails, customer OTP, the
+webhook-delivery-exhausted escalation email) already passes the current
+`Application` row so `_resolve_settings()` can override the global SMTP_*/
+EMAIL_* env defaults with whatever was saved on Configuration ->
+Notifications (`Application.smtp_host/smtp_port/smtp_username/
+smtp_password/smtp_use_tls/email_provider`). Test Email was the one
+exception - it always sent through the raw global `Settings` (SMTP_HOST=
+localhost, SMTP_PORT=1025, no user/password), completely ignoring whatever
+SMTP host/credentials the admin had just configured in the UI. Every other
+`/testing/*` endpoint in this same file already takes
+`application: Application = Depends(get_application)` as a dependency;
+`test_email()` was simply missing it.
+
+**Fix**: added the same `application: Application = Depends(get_application)`
+dependency to `test_email()` and passed `application=application` into
+`send_templated_email()`, matching every other call site.
+
+**Test**: `tests/test_admin_testing.py::
+test_test_email_uses_the_configured_application_smtp_override_not_global_defaults`
+- sets a distinctive per-application SMTP host/port/username (clearly
+different from the global env defaults), sends a test email through a
+recording fake `smtplib.SMTP`, and asserts the SMTP conversation actually
+used the configured values, not the global defaults.
+
+**Verification**: full backend suite 195 total / 194 passing (same single
+pre-existing `/ready` gap, needs live Postgres, unrelated); existing
+`test_test_email_sends_via_faked_smtp` still passes unchanged.
+
+**No new migration** - this only changed which already-existing settings
+were read, not any schema.
+
+## 2026-09-13 (follow-up 6): bugfix - SMTP "timed out" on port 465 (implicit SSL)
+
+**User report**: after the previous fix, Test Email still failed with
+`provider_response: "timed out"`.
+
+**Root cause**: `app/notifications/email/providers/smtp/provider.py` only ever
+opened a plaintext `smtplib.SMTP` connection, upgrading with STARTTLS if
+`smtp_use_tls` was on - the port-587-style flow. Port 465 (the default most
+providers, including Gmail and Office365, document for "SMTP over SSL") uses a
+different convention: the server expects a TLS handshake immediately on
+connect and never speaks in plaintext first ("implicit SSL"). Connecting to a
+465-only server with plain `smtplib.SMTP` just sits waiting for a plaintext
+banner that never arrives, until the socket hits its timeout - which is
+exactly the "timed out" symptom reported.
+
+**Fix**: `provider.send()` now opens `smtplib.SMTP_SSL` instead of
+`smtplib.SMTP` whenever `SMTP_PORT == 465`, regardless of the `smtp_use_tls`
+toggle (465 is unconditionally SSL by convention; the toggle still governs
+STARTTLS behavior on every other port, unchanged). Also broadened the caught
+exception tuple to include `TimeoutError` explicitly alongside the existing
+`smtplib.SMTPException`/`OSError` (this was already covered via `OSError`'s
+subclass hierarchy, but made explicit for clarity).
+
+**Tests**: `tests/test_email_service.py::
+test_smtp_provider_uses_implicit_ssl_for_port_465` (port 465 -> SMTP_SSL, not
+SMTP) and `::test_smtp_provider_uses_plain_smtp_for_non_ssl_ports` (587/other
+ports unchanged - still plain SMTP + optional STARTTLS).
+
+**Also fixed in this same follow-up**: `TEST_EMAIL_SENT`'s audit log entry
+used to be just `{"to", "sent": false}` - no way to see *why* a send failed
+without catching the live API response at the moment it happened. It now
+also stores `status` and `provider_response`, matching the precedent already
+set for `TEST_WEBHOOK_SENT`. New test:
+`tests/test_admin_testing.py::test_test_email_failure_reason_is_visible_in_audit_logs`.
+
+**Verification**: full backend suite 198 total / 197 passing (same single
+pre-existing `/ready` gap, needs live Postgres, unrelated to any of this).
+
+**No new migration** - no schema change; `SMTP_PORT == 465` is a
+convention check, not configuration.
+
+**Still not implemented / worth knowing**: if this doesn't turn out to be a
+TLS-mode mismatch, "timed out" more broadly just means the TCP connection to
+`SMTP_HOST:SMTP_PORT` never completed from wherever this backend process
+actually runs - most commonly a wrong host/port, or an outbound firewall on
+that network blocking SMTP ports (25/465/587 are frequently blocked by
+default on cloud VMs and some ISPs). That's an infrastructure/network check,
+not something fixable in this codebase - see the reply to Vishal for the
+diagnostic steps suggested.
+
+## 2026-09-13 (follow-up 7): signed-in customers with an active subscription no longer land on the Plans page
+
+**User request**: "After login, If user has already subscription then it
+should not allow to go to Plans page - it should go to my subscription
+page and ask for change plan."
+
+**Before**: the public Plans page (`/`, `PlansPage.tsx`) rendered
+unconditionally for anyone, signed in or not - including a customer who
+already had an active subscription and just clicked the "Plans" link in
+the header (or landed on `/` directly). Nothing steered them toward
+"Change plan" on their existing subscription instead of the new-
+subscription flow.
+
+**Fix**: new route guard `RedirectIfActiveSubscription`
+(`frontend/src/components/ProtectedRoute.tsx`, alongside the existing
+`RequireCustomer`/`RequireAdmin`), wrapping the index route in `App.tsx`.
+For a signed-in customer, it calls `GET /customer/me` and, if
+`active_subscription` is set and is NOT a trial, redirects to `/portal`
+(with a toast: "You already have an active subscription - use Change
+plan below to switch.") instead of ever rendering the plan grid.
+Deliberately scoped to non-trial subscriptions only - PortalPage already
+refuses to offer "Change plan" for a trial subscription ("Free trials
+can't be switched to another plan - subscribe to a paid plan instead"),
+so a trial customer's only path to a paid plan IS this same Plans page;
+blocking them here would strand them with no way to ever pay. A signed-
+out visitor always passes straight through unaffected.
+
+This is a UX guard, not a new security boundary: a signed-in customer who
+instead navigates straight to `/subscribe/:planCode` bypasses it, but
+that was already safe before this change too - the backend already
+auto-routes an already-subscribed customer's `/subscribe` call to
+upgrade/downgrade against their existing subscription rather than
+creating a duplicate (spec section 9/22, and the earlier duplicate-
+validation fix this session).
+
+**Verification**: frontend `tsc -b && vite build` clean (65 modules);
+`oxlint` 0 errors, same 9 pre-existing warnings, 0 new. No backend change,
+so the full backend suite is unaffected (still 197/198, same pre-existing
+`/ready` gap).
+
+**No new migration** - frontend-only change, reuses the existing
+`GET /customer/me` (`CustomerPortalOut.active_subscription`).
+
+## 2026-09-13 (follow-up 8): switched the database from PostgreSQL to MySQL
+
+**User request**: "Keep the back[up] of project now.. and change database
+to mysql. let me know what details are required." Follow-up decisions:
+fresh database is fine (no existing data to migrate), but the admin login
+must keep working across the reset; and "I already have mysql into
+xampp. or we can create in docker as well" (both are supported - see
+README.md's Option A/A2).
+
+**What actually changed**:
+
+1. `requirements.txt`: `psycopg2-binary` -> `PyMySQL==1.1.1` (pure
+   Python - no C extension to compile, so it installs the same way on
+   Windows as everywhere else, unlike `mysqlclient`).
+2. `app/core/config.py`: `DATABASE_URL` default is now
+   `mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4`.
+   Set your own in `.env` to match wherever your MySQL actually runs (see
+   README.md's Option A for XAMPP's default `root`/no-password setup, or
+   Option A2 for a one-line Docker MySQL container).
+3. **New:** `ADMIN_BOOTSTRAP_EMAIL` / `ADMIN_BOOTSTRAP_PASSWORD` settings.
+   When both are set in `.env`, `app/core/seed.py` creates that admin
+   account (on a fresh database) instead of the hardcoded dev default
+   (`admin@example.com` / `ChangeMe123!`) - this is how "keep admin
+   credentials working" is satisfied without your real password ever
+   needing to be typed anywhere but your own `.env` file (never logged,
+   never printed - `seed.py`'s stdout output only ever prints the dev
+   default credentials, or a note that a real password was set via env
+   var).
+4. **Real compatibility fix, not just a driver swap** -
+   `app/subscriptions/models.py`'s two DB-level rules (one active
+   subscription per customer+application; one trial per customer+
+   application for their whole lifetime) were built as Postgres-only
+   partial unique indexes (`postgresql_where=...`) - a feature MySQL has
+   no equivalent for at all, in any version. Replaced with a portable
+   generated-column design: `active_slot`/`trial_slot` are computed
+   columns (`GENERATED ALWAYS AS (CASE WHEN ... THEN 1 ELSE NULL END)
+   STORED`) that are 1 when the row matches the condition and NULL
+   otherwise, with a plain unique index over `(customer_id,
+   application_id, that column)` - every SQL dialect here treats NULL as
+   distinct from every other NULL in a unique index, so only matching
+   rows ever collide. Verified directly against a real local MySQL 8.0
+   instance: an ACTIVE row plus a CANCELLED row for the same customer+
+   application both insert fine (history still accumulates freely), a
+   second ACTIVE row for the same customer+application is rejected at
+   the DB level, and a second trial (even with a different status - e.g.
+   CANCELLED then EXPIRED) is also rejected. This same generated-column
+   approach is portable to SQLite too, so `tests/conftest.py`'s test
+   suite now exercises this real DB-level constraint as well, not only
+   the application-level pre-check (previously it silently could not,
+   since SQLite/Postgres-dialect-specific kwargs are simply ignored on
+   other dialects - the constraint was Postgres-only in practice even in
+   tests). Also fixed: `app/notifications/models.py`'s `body_html`/
+   `body_text` were unbounded `String` (valid on Postgres, but MySQL
+   requires every `VARCHAR` to have an explicit length) - changed to
+   `Text`, the correct type for arbitrarily long HTML/plain-text email
+   bodies regardless of dialect.
+5. **Alembic migration history squashed**: the 13 existing migrations
+   were authored against Postgres and contain Postgres-only DDL that
+   would either fail outright or silently do the wrong thing against
+   MySQL - e.g. `postgresql_where=` on two `create_index` calls (ignored
+   on MySQL, which would silently create a FULL unique index instead of
+   a partial one - blocking a customer from EVER having more than one
+   subscription row, even history), and one migration's
+   `UPDATE ... FROM ...` (Postgres-only multi-table UPDATE syntax; MySQL
+   needs `UPDATE ... JOIN ... SET ...`). Since there's no existing MySQL
+   data to preserve, the old versions are archived (not deleted) at
+   `backend/migrations_postgres_archive/versions_postgres_history_2026-09-13/`
+   for historical reference, and `backend/migrations/versions/` now
+   holds one fresh migration (`2c58d7629015_initial_mysql_schema.py`)
+   autogenerated from the current models directly against MySQL 8.0 and
+   verified with `alembic upgrade head` against a real local MySQL
+   instance (clean run, no errors).
+6. `README.md`: "Option A" now documents MySQL setup (including the
+   XAMPP-specific connection string), and a new "Option A2" gives a
+   one-line `docker run` command for MySQL if you'd rather not install it
+   directly - both were exercised as part of this change. Also flagged
+   (pre-existing, unrelated to this change): `.env.example` and
+   `docker-compose.yml` are referenced in this README but don't actually
+   exist anywhere in this repo - "Option B: Docker Compose" is aspirational
+   documentation, not a verified/working path today.
+
+**Verification**: full backend suite 198/198 passing against SQLite
+(every one of the pre-existing `/ready`-endpoint gap's runs now also pass,
+since this session's local MySQL instance happens to be reachable at the
+default DATABASE_URL - that gap was always about no DB being reachable in
+whatever environment runs the tests, not an application bug). Separately,
+directly against a real local MySQL 8.0.36 instance: `alembic upgrade
+head` applies cleanly, `python -m app.core.seed` creates the application/
+plans/admin correctly (both with and without ADMIN_BOOTSTRAP_EMAIL/
+PASSWORD set), and the one-active-subscription / one-trial-per-lifetime
+constraints were exercised directly (5 scenarios, all correct - see
+point 4 above).
+
+**What Vishal needs to provide/decide** (answered so far: fresh database,
+keep admin login, has MySQL via XAMPP already/open to Docker):
+- Set `DATABASE_URL` in your own `.env` to match wherever MySQL actually
+  runs - never needs to be shared here. For XAMPP:
+  `mysql+pymysql://root:@localhost:3306/subscription?charset=utf8mb4`
+  (create the `subscription` database first).
+- Optionally set `ADMIN_BOOTSTRAP_EMAIL`/`ADMIN_BOOTSTRAP_PASSWORD` in
+  the same `.env` before running the seed script, to control the admin
+  login on the fresh database instead of the dev default.
+- Run, in order: `pip install -r requirements.txt` (picks up PyMySQL),
+  `alembic upgrade head`, `python -m app.core.seed`.
+
+**No data migration was performed** (the "fresh start" decision) - this
+is a brand-new empty MySQL database plus the application's fixed seed
+data (EVERYTICKET application, Basic/Professional/Enterprise/trial
+plans, registration form, plan transitions, email templates, and the
+admin user), not a copy of whatever was in the old Postgres database.
+
+## 2026-09-13 (follow-up 9): registration-page asterisks, subscribe-page plan display, free (price=0) plans skip the payment gateway entirely
+
+Four small, separately-requested changes to the public subscribe flow,
+grouped here since they touched the same two files repeatedly:
+
+1. **"show email and phone number as mandatory label - '*' like
+   others"**: `SubscribePage.tsx`'s hardcoded Email/Mobile fields were
+   always `required` but never got the `*` suffix the dynamic
+   per-application fields (`DynamicRegistrationForm.tsx`) already show
+   for any required field. Now read "Email *" / "Mobile *".
+2. **"Show selected Plan on right side with its feature above other
+   plans selection.. keep both things into same card"**: the
+   `subscribe-plans-panel` side card (previously just "Other plans")
+   now also fetches and shows the plan being subscribed to first - name,
+   price/billing interval (or "Free for N days" for a trial), and its
+   rich-text feature/description list - under a "Your plan" label,
+   separated by a divider, with "Other plans" still below it in the
+   *same* card (not a second card). New `selectedPlan` state, found by
+   filtering the same `listPlans()` response already used for
+   `otherPlans`.
+3. **"Text 'Subscribe to PROFESSIONAL' should have Plan Name instead of
+   code"**: the page heading now reads `selectedPlan?.name ?? planCode`
+   - the plan's display name once loaded, falling back to the raw
+   `planCode` route param only for the brief instant before that fetch
+   resolves.
+4. **"if price of plan is 0 then no need to redirect to payment
+   gateway"**: price=0 is, by construction, *only* ever a free-trial
+   plan (`app/api/v1/admin_plans.py`'s `_validate_trial_configuration`
+   already rejects a non-trial plan with price 0 and a trial plan with
+   any non-zero price) - but subscribing to one still went through the
+   full payment-gateway dance (a real PayU hosted-checkout redirect for
+   ₹0, or a mock-gateway "click simulate success" step) before
+   activating, which is pure friction for something that was never
+   actually going to charge anything.
+
+   Fixed at the single choke point every payment goes through -
+   `app/payments/service.py`'s `create_payment_transaction()` - rather
+   than in any one caller, so it uniformly covers all four places that
+   call it (a brand-new `/subscribe`, an existing customer's auto-routed
+   upgrade/downgrade, the customer-portal's explicit upgrade/downgrade,
+   and renewal): when `plan.price == 0`, the real gateway
+   (`gateway.create_payment(...)`) is never called at all - instead a
+   synthetic `GatewayPaymentResult` with `status=SUCCESS` is built
+   locally and run straight through the existing
+   `process_gateway_result()` SUCCESS path (same activation / invoice
+   generation / outbound-webhook-queue-plus-`attempt_soon()` /
+   confirmation-email behavior any other successful payment gets - nothing
+   new to reason about there). `SubscribePage.tsx`'s `doSubscribe()`
+   checks `result.payment.status === "SUCCESS"` and, when true, skips
+   the "payment" step entirely and renders the same "done" screen a real
+   successful mock-callback would reach (synthesizing the
+   `MockCallbackResult` shape locally from the `SubscribeResponse` it
+   already has - `invoice_id` isn't part of `SubscribeResponse`, so that
+   one field is left `null`, even though the invoice was in fact
+   generated and emailed).
+
+   In practice today this can only ever be reached by a trial signup
+   (the other three call sites can never actually see `plan.price == 0`
+   given the admin-side validation above and the existing
+   `InvalidPlanTransition` guard against switching *to* a trial via
+   upgrade/downgrade) - so `ChangePlanPage.tsx` and `PortalPage.tsx`'s
+   renew flow were deliberately left untouched, since they can't
+   currently exercise this path; the backend fix is still written
+   generically against `plan.price == 0` rather than `plan.is_trial`,
+   so it needs no changes if that admin-side rule is ever relaxed.
+
+   New test: `tests/test_free_trial.py::
+   test_trial_subscribe_skips_payment_gateway_and_activates_immediately`
+   - asserts `/subscribe` for the trial plan comes back
+   `subscription.status == "ACTIVE"` and `payment.status == "SUCCESS"`
+   (no `checkout` payload) with an invoice already on file, in direct
+   contrast to `test_end_to_end.py`'s paid-plan test which still
+   correctly asserts `PENDING_PAYMENT`/`INITIATED` immediately after
+   `/subscribe`. Full suite: 198/198 (the pre-existing `/ready`-needs-a-
+   live-database gap is an environment/session difference, not caused by
+   this change - see follow-up 8).
+
+## 2026-09-13 (follow-up 10): "Enable Notifications?" master switch under SMTP configuration
+
+**User request, verbatim**: "add one more field at backend under SMTP
+configuration that 'Enable Notifications?' - check box or radio. if its
+enabled, email service will work otherwise it will skip."
+
+A new `Application.notifications_enabled` column (Boolean, `default=True`
+- every existing application keeps sending exactly as it does today)
+gates ALL outbound email for that application at one single point,
+independent of whether the SMTP host/port/credentials below it are
+configured correctly - this is a hard on/off switch, not another
+override-else-fall-back-to-env field like the rest of the Notifications
+config group.
+
+**What changed**:
+
+1. `app/applications/models.py`: `notifications_enabled` column added
+   right after the existing `smtp_*` columns.
+2. `migrations/versions/2158e8072098_add_notifications_enabled_to_.py`:
+   new migration, `server_default=sa.true()` (adjusted from the bare
+   autogenerate output) so it applies cleanly to the already-seeded
+   `applications` table - autogenerated against, and verified with
+   `alembic upgrade head` on, a real local MySQL 8.0 instance (same
+   workflow as follow-up 8's migration).
+3. `app/core/enums.py`: `NotificationStatus` gained a third value,
+   `SKIPPED` (alongside the existing `SENT`/`FAILED`) - a deliberately-
+   disabled send is not a delivery failure, and showing it as FAILED
+   would make an admin who intentionally turned this off see what looks
+   like a wall of broken emails in Notification Logs.
+4. `app/notifications/email/service.py`: both `send_templated_email()`
+   and `send_direct_email()` check `application.notifications_enabled`
+   immediately after resolving settings - before the template lookup,
+   before rendering, before the SMTP provider is ever touched - and
+   write a SKIPPED `NotificationLog` row (with a provider_response
+   explaining why) rather than proceeding. `application is None` (no
+   per-application context) still sends, matching every other
+   per-application override's behavior in this module.
+5. `app/applications/config_schemas.py` /
+   `app/api/v1/admin_config.py`: `NotificationConfigOut`/
+   `NotificationConfigUpdate` carry the new field; `update_notification_config`
+   writes it straight through (no None-means-unchanged convention here -
+   unlike the secret-bearing fields on this same screen, there's nothing
+   sensitive about a boolean, so it's always replaced outright) and
+   includes it in the `APPLICATION_CONFIG_UPDATED` audit entry.
+6. Frontend (`AdminConfigPage.tsx`, `index.css`): a new "Enable
+   Notifications?" checkbox sits above the existing SMTP fields on the
+   Notifications config screen, with a hint explaining exactly what
+   turning it off does; the SMTP fields below it visually dim (not
+   disabled via `pointerEvents:none` on the Save button itself - that
+   stays live so turning notifications back on and saving always works)
+   when unchecked, as a visual cue that they're currently moot. New
+   `.toggle-row` CSS class for this checkbox-plus-label row style (the
+   app's default `label` layout stacks label-above-input, wrong shape
+   for a single inline checkbox).
+7. Test Email (admin_testing.py's existing endpoint) needed no code
+   change at all to respect this - it already calls
+   `send_templated_email()` with `application=`, so a disabled
+   application now makes Test Email honestly report back a SKIPPED
+   result with the same "disabled" explanation, rather than pretending
+   to test something that would never actually go out.
+
+**New tests**: `tests/test_email_service.py::
+test_send_templated_email_skips_when_application_has_notifications_disabled`
+(unit-level, deliberately runs with NO fake SMTP transport installed - if
+the guard were ever missing or misplaced this test would fail with a
+real connection error instead of the expected SKIPPED assertion, making
+the test self-verifying); `tests/test_admin_config.py::
+test_notification_config_defaults_to_enabled` and
+`test_disabling_notifications_skips_email_send_without_touching_smtp`
+(end-to-end: PUT the config off, trigger the OTP email
+`test_update_notification_config_changes_outbound_sender_and_smtp_host`
+already exercises for its own sender-override assertions, confirm the
+fake SMTP transport was never called and the log came back SKIPPED).
+Full suite: 202/202 (198 from follow-up 9, plus these 3, plus the
+`/ready` endpoint passing again now that this session's local MySQL is
+running - see follow-up 8's note on that gap being environment-specific,
+not a code issue).
+
+## 2026-09-14 (follow-up 11): configurable extra fields on outbound Everyticket webhooks
+
+**User request, verbatim**: "allow to configure, more data to be passed
+for webhook call like plan details including name, amount, expiry etc..
+so if admin select those parameters then it will be passed to webhook to
+everyticket. first let me know what parameters will be available for
+this option then we will do code change" - the full parameter catalog
+was presented and two design questions answered (per-event selection
+rather than one universal list; payment/invoice fields excluded from
+expired/cancelled/archived, since nothing is actually charged at that
+moment) before any code was written, per the user's own explicit
+two-phase request. A follow-up "yes" confirmed subscription.upgraded/
+downgraded (previously outside this configurable system, with their own
+fixed inline payload) should be brought into it too.
+
+Every one of the 7 real outbound webhook events already sends a fixed
+set of fields (subscription_id at minimum, more for onboarding/upgrade/
+downgrade). This adds an OPT-IN layer on top: an admin can now also tick
+additional fields - per event, since what's meaningful differs by event
+(e.g. "Payment amount" makes sense for Renew, not for Expired) - and only
+those tick get added to that event's real outbound JSON, on top of the
+existing fixed fields. Nothing changes for any application that never
+opts in - every existing webhook payload is byte-for-byte identical to
+before this follow-up.
+
+**What changed**:
+
+1. `app/webhooks/field_catalog.py` (NEW): the single source of truth for
+   what's selectable - `AVAILABLE_FIELDS` (event_type -> ordered list of
+   selectable field names) and `FIELD_LABELS` (field name -> human
+   label), plus `sanitize_selection()`, which drops any event type or
+   field name a stored selection has that this catalog doesn't
+   recognize - applied both when a selection is read back out and
+   before it's saved, so a catalog change across a future release can
+   never make a stale selection surface a field a payload builder
+   doesn't know how to fill in. No payment/invoice fields are ever
+   offered for subscription.expired/cancelled/archived, per the user's
+   own decision when this was scoped.
+2. `app/applications/models.py`: new `webhook_field_selection` JSON
+   column (nullable, no migration default needed - NULL/missing key
+   means "no optional fields for that event", i.e. unchanged behavior).
+3. `migrations/versions/2f423fa60347_add_webhook_field_selection_to_.py`:
+   new migration, verified with `alembic upgrade head` against a real
+   local MySQL 8.0 instance (same workflow as follow-up 8/10's
+   migrations).
+4. `app/webhooks/payloads.py`: every builder (`onboarding_payload`,
+   `renewed_payload`, `expiry_payload`, `cancelled_payload`,
+   `archive_payload`, plus two NEW ones, `upgraded_payload`/
+   `downgraded_payload`, replacing the inline dict payments/service.py
+   used to build for those two events) now accepts every optional field
+   its event's catalog entry lists (default `None`) plus a
+   `selected_fields` list, and merges in only the ones both passed and
+   selected - via a shared `_select_optional_fields()` helper that
+   re-checks each name against `field_catalog.AVAILABLE_FIELDS` as a
+   second, defense-in-depth sanitize pass. Precedence on any key
+   collision: fixed fields always win, then admin-selected optional
+   fields, then (onboarding only) the customer's own registration-form
+   answers - extending the fixed-fields-always-win rule this module
+   already had one level further.
+5. `app/payments/service.py` / `app/subscriptions/service.py`: all 7
+   webhook-queuing call sites (activated/renewed/upgraded/downgraded in
+   `process_gateway_result`; expired/archived/cancelled in
+   `expire_due_subscriptions`/`archive_stale_subscriptions`/
+   `cancel_subscription`) now pass every raw value their event's catalog
+   offers (all already sitting on ORM objects already loaded at that
+   call site - no extra queries) plus
+   `field_catalog.sanitize_selection(application.webhook_field_selection)
+   .get(event_type)`.
+6. `app/applications/config_schemas.py` / `app/api/v1/admin_config.py`:
+   `EveryticketIntegrationOut` gained `webhook_field_catalog` (event_type
+   -> `[{field, label}, ...]`, straight from field_catalog, for
+   rendering the checklist) and `webhook_field_selection` (this
+   application's current, sanitized selection);
+   `EveryticketIntegrationUpdate` gained `webhook_field_selection`,
+   replaced outright when given (same "always replace" convention as
+   `retry_limit`/`archive_after_days` on this same endpoint - it isn't a
+   secret) and sanitized again before being stored. `build_webhook_samples()`
+   now covers all 7 events (previously 5 - upgraded/downgraded were
+   real events but never had a sample) and reflects the application's
+   current selection, so the Configuration screen's preview and the
+   Testing page's event dropdown (both driven by this one function)
+   never drift from what a real delivery actually sends.
+7. Frontend (`types.ts`, `AdminConfigPage.tsx`, `index.css`): a new
+   "Extra webhook fields" block on the Everyticket integration screen -
+   one group per event, each a row of checkboxes built straight from
+   `webhook_field_catalog` - sits above the existing "Webhook events"
+   sample-JSON preview, so ticking a box and saving immediately shows
+   the field appear in that event's sample below. New `.webhook-field-*`
+   CSS classes.
+
+**New tests**: `tests/test_webhook_payloads.py` -
+`test_onboarding_webhook_includes_only_selected_optional_fields`,
+`test_renewed_webhook_includes_selected_optional_fields`,
+`test_upgraded_and_downgraded_webhook_payloads_include_selected_optional_fields`
+(each drives a real subscribe/renew/upgrade + mock payment callback and
+asserts the queued `WebhookEvent.payload` gains exactly the selected keys
+with real values, nothing more),
+`test_field_catalog_never_offers_payment_or_invoice_fields_for_expired_cancelled_archived`,
+`test_sanitize_selection_drops_unknown_events_and_fields`;
+`tests/test_admin_config.py` -
+`test_integration_config_exposes_webhook_field_catalog_and_round_trips_selection`
+(GET exposes the full catalog + empty default selection; PUT persists a
+selection, silently dropping an unrecognized event/field rather than
+rejecting the request); the existing five-event sample-coverage test in
+this file and in `test_admin_testing.py` were updated to expect all 7
+events (renamed accordingly) now that upgraded/downgraded are covered
+too. Full suite: 208/208 (202 from follow-up 10, plus these 6).
+
+## 2026-09-14 (follow-up 12): webhook fields screen - fixed-field transparency + dropdown/two-column layout
+
+**User request, verbatim**: "subscription.activated - does not have plan
+name, code, price etc.. where it has to be, same for renewed event there
+is no plan code, please keep consistency" and, separately: "also for
+these webhooks, - Give dropdown - when eventtype selected, it will show
+checklist left side and sample JSON at right side so we can reduce
+overall space."
+
+Two follow-on fixes to follow-up 11's new Configuration screen, both
+about how the (already-correct) field data is presented, not about the
+underlying payloads:
+
+1. **Fixed-field transparency.** The checklist previously showed ONLY
+   the OPTIONAL fields (`AVAILABLE_FIELDS`) an admin could tick. For
+   subscription.activated/upgraded/downgraded, plan_code/plan_name/price
+   etc. are already always sent (fixed) - they were never OPTIONAL, so
+   they never appeared in that checklist at all, which read as "this
+   event doesn't have plan info". For subscription.renewed, those same
+   fields genuinely ARE optional (Vishal's own follow-up 3 trimmed
+   renewed's fixed shape to `subscription_id` only) - so they did appear
+   there as ordinary checkboxes. Same underlying fields, opposite
+   visibility, for no reason a reader of the screen could tell.
+   `app/webhooks/field_catalog.py` gained `FIXED_FIELDS` (event_type ->
+   always-sent field names, display-only - never sent back as part of a
+   selection, since a builder doesn't need telling to include something
+   it already always includes), exposed via a new
+   `EveryticketIntegrationOut.webhook_fixed_fields` field
+   (`app/applications/config_schemas.py`, `app/api/v1/admin_config.py`).
+   The checklist now always shows BOTH groups for whichever event is
+   selected: fixed fields first, rendered as checked-and-disabled with an
+   "(always sent)" label, then the real, tickable optional fields - so
+   activated visibly has its plan fields (marked always-sent) and
+   renewed visibly has plan_code as a real, unchecked option, and nothing
+   looks missing either way.
+2. **Dropdown + two-column layout.** The previous screen stacked one box
+   per event (7 checklists) followed by one sample-JSON block per event
+   (7 more blocks) - a lot of scrolling to look at any single event.
+   Replaced with a single `<select>` of all 7 event types
+   (`AdminConfigPage.tsx`'s `IntegrationSection`) plus one
+   `.webhook-event-detail` area showing just the selected event: its
+   checklist on the left, its sample JSON on the right, via a responsive
+   CSS grid (`repeat(auto-fit, minmax(min(280px, 100%), 1fr))` - the
+   `min(280px, 100%)` guards against the admin layout's actual content
+   width, which is narrower than the raw viewport because of its fixed
+   sidebar, ever being forced wider than available and clipping text).
+   Switching the dropdown re-renders both panes instantly (no extra
+   request - both `fieldCatalog`/`fixedFields`/`webhook_field_selection`
+   and every event's sample are already loaded).
+
+**What changed**: `app/webhooks/field_catalog.py` (`FIXED_FIELDS` +
+`FIELD_LABELS` entries for `subscription_id`/`status`),
+`app/applications/config_schemas.py` /`app/api/v1/admin_config.py`
+(`webhook_fixed_fields` in the GET response), `frontend/src/api/types.ts`
+(`webhook_fixed_fields` on `EveryticketIntegrationOut`),
+`AdminConfigPage.tsx` (event dropdown, two-pane layout, fixed-field
+rows), `index.css` (`.webhook-event-picker`, `.webhook-event-detail`,
+`.webhook-field-checkbox-fixed`; old per-event-box grid and stacked
+sample list removed).
+
+**New tests**: `tests/test_admin_config.py::
+test_integration_config_exposes_webhook_field_catalog_and_round_trips_selection`
+extended to assert `webhook_fixed_fields` covers every event, that
+`subscription.activated`'s fixed set includes plan_code/plan_name/price
+(and that plan_code is NOT also in its optional catalog), and that
+`subscription.renewed`'s fixed set is `subscription_id` only while
+plan_code IS in its optional catalog. Full suite: 208/208 (same count as
+follow-up 11 - this extended an existing test rather than adding a new
+one). Manually verified in a real browser (Playwright, logged in as the
+seeded admin) at 1300px (dropdown + side-by-side panes, activated's
+plan fields correctly marked "always sent"), 900px (checklist column
+collapses to full width, stacks above the sample), and confirmed
+switching the dropdown to subscription.renewed shows plan_code as a
+real, unchecked checkbox rather than "always sent".
+
+## 2026-09-14 (follow-up 13): sample JSON updates live as checkboxes are ticked, not just after Save
+
+Vishal: "when select checkbox for parameters, it should reflect into
+sample JSON as well." The dropdown/two-column screen from follow-up 12
+only refreshed its sample JSON from the PUT response, so ticking a box
+and NOT yet clicking Save showed no change at all - easy to read as "my
+click didn't register."
+
+**Design constraint carried over from every other webhook-sample feature
+in this codebase**: the sample/preview JSON must always come from the
+same payload-builder functions a real delivery uses (see
+`app/webhooks/payloads.py`'s module docstring) - the frontend must never
+invent a field's sample VALUE itself. Two ways to get a live update
+without breaking that rule: (a) auto-save the selection on every
+checkbox click, or (b) have the backend hand the frontend a second,
+"maximal" sample per event (as if every optional field were selected)
+and let the frontend purely filter which already-computed keys to show.
+Went with (b): auto-save was rejected because it would silently persist
+whatever else is sitting in the surrounding form at that moment
+(webhook URL, secret key, retry limit, ...) even if the admin is
+mid-edit on those and not ready to save them yet.
+
+**Backend**: `app/webhooks/payloads.py`'s `build_webhook_samples()` gained
+an optional `selection_override: dict[str, list[str]] | None` parameter -
+when given, it's sanitized and used instead of the application's actually
+stored `webhook_field_selection`, but every payload is still built by the
+exact same per-event builder functions (no new value-computation logic
+anywhere). `app/applications/config_schemas.py`'s `EveryticketIntegrationOut`
+gained `webhook_samples_all_fields: list[EveryticketWebhookSampleOut]` -
+same shape as the existing `webhook_samples`. `app/api/v1/admin_config.py`'s
+`_integration_out()` now also calls `build_webhook_samples(db, application,
+selection_override={event_type: fields for event_type, fields in
+AVAILABLE_FIELDS.items()})` to populate it - i.e. "what would this event's
+payload look like if every optional field were ticked."
+
+**Frontend**: `frontend/src/api/types.ts` adds the matching
+`webhook_samples_all_fields` field. `AdminConfigPage.tsx`'s
+`IntegrationSection` stores it in `samplesAllFields` state (refreshed
+from the PUT response too, alongside `fieldSelection`, so it stays
+correct if application data that feeds sample values - e.g. the active
+plan - changes on save) and derives a `livePreviewSample` via `useMemo`,
+recomputed whenever `fieldSelection` changes: it finds
+`samplesAllFields`'s entry for the selected event, then - since each
+sample's `payload` is the whole `{event_type, payload: {...fields}}` wire
+body, not a flat field map - filters keys inside that nested `payload`
+object, dropping any key that's in the event's optional catalog
+(`fieldCatalog[eventType]`) but not currently ticked
+(`fieldSelection[eventType]`); every fixed field and every key outside
+the optional catalog (e.g. onboarding's dynamic registration-data fields)
+is always kept. The JSX now renders this computed object instead of
+filtering the plain `webhookSamples` list, which is no longer needed and
+was removed. Hint text above the dropdown updated to say the JSON
+updates instantly and Save is what makes it take effect on the next real
+delivery.
+
+**New test**: `tests/test_admin_config.py::
+test_webhook_samples_all_fields_shows_every_optional_field_regardless_of_saved_selection`
+- with the application's saved selection empty, asserts
+`webhook_samples`'s `subscription.renewed` sample carries only
+`subscription_id` (as before) while `webhook_samples_all_fields`'s
+`subscription.renewed` sample carries every field in that event's
+optional catalog, including a real non-placeholder `plan_code` value.
+Full suite: 209/209 (208 existing + this one new test).
+
+Manually verified in a real browser (Playwright, logged in as the seeded
+admin, backend started with `ALLOW_ADMIN_MFA_BYPASS=true` so the "BYPASS"
+MFA code worked): on `subscription.renewed`, ticked "Plan code" and
+confirmed the JSON pane updated to include `"plan_code": "BASIC"`
+immediately (before Save), then unticked it and confirmed it disappeared
+again just as immediately. Also re-confirmed `subscription.activated`
+still shows its fixed fields (plan_code/plan_name/price/subscription_id/
+email/phone_number) by default and that ticking one of its own optional
+fields (Currency) adds it live too - no regression from follow-up 12's
+fixed-field fix. Checked 900px width for newly-introduced horizontal
+overflow: none found. No new migration needed for this change.
+
+## 2026-09-14 (follow-up 14): Configuration split into its own sidebar group with 4 sub-pages; Webhook logs' "Connectivity check" panel removed
+
+Vishal: "Under Configuration, 4 sub menu will come 1. General - which
+contains application 2. Payment Gateway - will contain payment gateway
+config 3. Communication - will contain Notification section from config
+(Email section) 4. Integration - will be Everyticket Integration" plus,
+separately, "Webhook logs - Remove section of 'Connectivity check'".
+Pure frontend routing/navigation + one page-content removal - no backend
+or database changes.
+
+**Configuration restructure.** The single `/admin/config` screen used to
+stack all four section forms (Application, Payment gateway, Everyticket
+integration, Notifications) on one long page. It's now four separate
+routes, one per section, and the sidebar's "Configuration" entry (which
+used to be one item at the bottom of the "System" group) is now its own
+top-level nav group with those four as its submenu items - the same
+group+submenu pattern every other sidebar group (Catalog, Customers,
+Billing, ...) already uses:
+
+- General -> `/admin/config/general` (Application name/currency/Live-Test
+  mode/post-subscription message - the old "Application" section,
+  unchanged)
+- Payment Gateway -> `/admin/config/payment-gateway` (gateway dropdown +
+  PayU credentials + redirect/webhook URLs - unchanged)
+- Communication -> `/admin/config/communication` (SMTP transport + sender
+  overrides - the old "Notifications" section inside Configuration,
+  unchanged; NOT to be confused with the separate "Notifications" page
+  under the sidebar's existing "Communications" group, which is email
+  templates + delivery logs, a completely different screen this request
+  didn't touch)
+- Integration -> `/admin/config/integration` (secret key, webhook URL,
+  retry limit, archive-after-days, the webhook-events dropdown + live
+  sample JSON from follow-ups 11-13, escalation email - the old
+  "Everyticket integration" section, unchanged)
+
+Bare `/admin/config` redirects to `/admin/config/general` so an old
+bookmark/link still lands somewhere sensible.
+
+**What changed**: each section's form logic (state, save handler, JSX)
+was moved as-is out of the old `AdminConfigPage.tsx` into
+`frontend/src/pages/admin/config/ConfigSections.tsx` (now exporting
+`GeneralSection`/`PaymentGatewaySection`/`IntegrationSection`/
+`NotificationSection`/`Section`/`SaveButton` instead of keeping them
+private to one file) - no section's own behavior, validation, or API
+call changed at all, only where the function lives. Four new thin page
+components (`AdminConfigGeneralPage.tsx`,
+`AdminConfigPaymentGatewayPage.tsx`, `AdminConfigCommunicationPage.tsx`,
+`AdminConfigIntegrationPage.tsx`, all under
+`frontend/src/pages/admin/config/`) each fetch the full
+`ApplicationConfigOut` via a small shared `useApplicationConfig()` hook
+(`useApplicationConfig.ts`) and render just their one section - the same
+independent-fetch-per-page pattern every other admin page in this app
+already follows, rather than introducing a shared route layout/context
+that would be the only one of its kind here. `App.tsx` swaps the old
+single `config` route for the four routes above plus the redirect;
+`AdminLayout.tsx`'s `NAV_GROUPS` drops "Configuration" from "System" and
+adds it as its own group. The old `AdminConfigPage.tsx` was deleted from
+the repo (nothing imports it anymore) - **manual step for Vishal**: the
+remote file-delete path wasn't available when these changes were shipped,
+so the new/changed files could be written but the old file could not be
+deleted on your machine automatically - please delete
+`frontend/src/pages/admin/AdminConfigPage.tsx` yourself once these
+changes are in; it's dead code (unreferenced by any route) but harmless
+to leave until you get to it.
+
+**Webhook logs "Connectivity check" removal.** The standalone
+"Connectivity check" panel (its "Verify connectivity" button and the
+result readout below it) is removed from `/admin/webhooks` entirely, per
+Vishal's explicit request. Its state (`verifying`/`verifyResult`), handler
+(`handleVerify`), and now-unused imports (`adminVerifyWebhookConnectivity`,
+`TestWebhookSendResult`) were removed from `AdminWebhooksPage.tsx`. The
+backend endpoint it called (`POST /api/v1/admin/webhooks/verify`) and its
+API client function were deliberately left in place (not asked to be
+removed, and the Testing tools page's own "Send test webhook" action
+covers similar ad-hoc verification) - only this page's UI section is
+gone. The rest of the page (Deliveries table with its per-row Attempt
+button, Events table) is unchanged.
+
+**Verification**: `npx tsc -b` and `npm run build` both clean (70 modules
+now, up from 65, for the new config/ page files). No backend changes, so
+the existing 209/209 test suite is unaffected (not re-run for this purely
+frontend change beyond the build). Manually verified in a real browser
+(Playwright, logged in as the seeded admin): clicked through the sidebar's
+new Configuration group to all four sub-items and confirmed each URL and
+page heading; confirmed a bare `/admin/config` redirects to
+`/admin/config/general`; confirmed the Integration and Communication
+pages render their full original forms (webhook events dropdown + live
+sample JSON, SMTP fields) unchanged; confirmed `/admin/webhooks` no longer
+contains "Connectivity check" or "Verify connectivity" anywhere on the
+page while "Deliveries" and "Events" still render normally. No migration
+needed for this change.
+
+## 2026-09-14 (follow-up 15): SSO API access help text now shows the actual request/response JSON contract
+
+Vishal: "for SSO API access (for Everyticket's 'Manage Subscription'
+link) - What parameters Everyticket has to send apart from key and
+secret... please show json as help text into Integration configuration."
+The section already explained that the API key/secret go as `X-Api-Key`/
+`X-Api-Secret` headers, but never showed the actual request body
+Everyticket's backend has to POST, or what it gets back - an admin
+reading this screen (or handing it to Everyticket's integration team)
+had no way to see that without reading backend source.
+
+**What changed**: `frontend/src/pages/admin/config/ConfigSections.tsx`'s
+`IntegrationSection`, right after the API key/secret fields, now renders
+a `POST /api/v1/integration/sso/generate-link` sample block (reusing the
+existing `.webhook-sample`/`.webhook-sample-header`/`.webhook-sample-body`
+styling the webhook-events preview already uses, so it looks like part of
+the same family of "here's exactly what gets sent" help text) showing:
+headers (`X-Api-Key`/`X-Api-Secret`, referring back to the fields above),
+the request body (`external_customer_id` required, `user_identifier`
+optional), and the response (`sso_token`/`consume_url`/`expires_at`) -
+taken directly from `app.sso.schemas.SsoLinkGenerateRequest`/`SsoLinkOut`
+and `app.api.v1.integration.generate_sso_link`, not approximated. A
+follow-up paragraph underneath explains where `external_customer_id`
+comes from: it's the same value Everyticket's own backend already
+returned in its response to the `subscription.activated` webhook
+(`{success, external_customer_id, instance_id}` - see
+`app.webhooks.service`'s `_handle_activation_outcome`), so it's always on
+hand by the time a customer clicks "Manage Subscription"; `user_identifier`
+is optional audit-only context. This is display-only help text - no
+backend change, no new endpoint, nothing about the real SSO handoff
+changed.
+
+**Verification**: `npx tsc -b` and `npm run build` both clean (no new
+files, existing module count). No backend touched, so the 209/209 suite
+is unaffected. Manually verified in a real browser (Playwright, logged in
+as the seeded admin) that `/admin/config/integration` renders the new
+block with `external_customer_id`, `user_identifier`, `consume_url`, and
+`X-Api-Key` all present and readable. No migration needed.

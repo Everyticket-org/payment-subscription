@@ -44,6 +44,7 @@ from app.core.config import get_settings
 from app.core.exceptions import TrialAlreadyUsed
 from app.core.seed import DEV_ADMIN_EMAIL, DEV_ADMIN_PASSWORD
 from app.customers import service as customer_service
+from app.invoices.models import Invoice
 from app.notifications.models import NotificationLog
 from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
@@ -199,6 +200,31 @@ def test_trial_subscription_is_free(client, seeded_db):
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["payment"]["amount"] == 0.0
+
+
+def test_trial_subscribe_skips_payment_gateway_and_activates_immediately(client, seeded_db):
+    """2026-09-13 follow-up: "if price of plan is 0 then no need to
+    redirect to payment gateway" - a free trial (the only plan shape that
+    can ever be priced at 0, see app/api/v1/admin_plans.py's cross-field
+    validation) must come back from /subscribe already ACTIVE/SUCCESS,
+    with its invoice already generated, rather than sitting in
+    PENDING_PAYMENT/INITIATED awaiting a mock-gateway "simulate" call or a
+    real gateway redirect (see test_end_to_end.py's paid-plan test for the
+    contrasting PENDING_PAYMENT/INITIATED behavior that non-zero-price
+    plans still correctly go through)."""
+    resp = client.post(
+        "/api/v1/public/plans/free_trial/subscribe",
+        json={"email": "trialnogateway@example.com", "mobile": "9800000012", "registration_data": {}},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["subscription"]["status"] == "ACTIVE"
+    assert body["payment"]["status"] == "SUCCESS"
+    assert body["payment"]["checkout"] is None
+
+    subscription_id = body["subscription"]["subscription_id"]
+    invoice = seeded_db.query(Invoice).filter(Invoice.subscription.has(subscription_id=subscription_id)).first()
+    assert invoice is not None
 
 
 # --- One trial per customer, for their full account lifetime ---

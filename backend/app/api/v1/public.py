@@ -37,6 +37,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_application, get_db
+from app.applications.config_schemas import DEFAULT_POST_SUBSCRIPTION_MESSAGE, PublicMessagesOut
 from app.applications.models import Application
 from app.auth import otp_service
 from app.sso import service as sso_service
@@ -55,7 +56,7 @@ from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
 from app.forms.schemas import RegistrationFormFieldOut
-from app.forms.validation import validate_registration_data
+from app.forms.validation import check_duplicate_registration_data, validate_registration_data
 from app.notifications.email import service as email_service
 from app.customers.schemas import (
     CustomerOut,
@@ -115,6 +116,20 @@ def get_registration_form(db: Session = Depends(get_db), application: Applicatio
         .all()
     )
     return fields
+
+
+@router.get("/messages", response_model=PublicMessagesOut)
+def get_public_messages(application: Application = Depends(get_application)):
+    """2026-09-13 follow-up: "show message '...you will get your
+    credentials in sometime' for first time subscription... This message
+    also should be configurable." Read by two frontend pages after a
+    payment succeeds - SubscribePage's mock "done" step and
+    PaymentReturnPage's PayU success branch - gated there on
+    PaymentTransactionOut.payment_type == "NEW" so it's never shown to an
+    existing customer changing plans (they already have credentials)."""
+    return PublicMessagesOut(
+        post_subscription_message=application.post_subscription_message or DEFAULT_POST_SUBSCRIPTION_MESSAGE
+    )
 
 
 @router.post("/identify", response_model=IdentifyResponse)
@@ -260,6 +275,21 @@ def subscribe(
                 "Call POST /public/identify and verify via OTP before subscribing."
             )
         customer = customer_service.create_customer(db, email=body.email, mobile=body.mobile)
+
+    # Duplicate-value check (spec section 18 follow-up: "Add one more
+    # checkbox to validate duplication... if any record have similar
+    # value then it will not allow user to enter same name") - run here,
+    # after customer identity is resolved (unlike validate_registration_data()
+    # above), so the submitting customer's OWN prior registration data can
+    # be excluded: customer.id is required to exclude it, and isn't known
+    # until this point. Applies uniformly to every path below (new
+    # signup, repurchase, upgrade/downgrade), same as the regex check
+    # above - excluding the customer's own rows means a repurchase or
+    # plan change that resubmits identical data is never flagged as a
+    # duplicate of itself.
+    check_duplicate_registration_data(
+        db, application_id=application.id, registration_data=body.registration_data, exclude_customer_id=customer.id
+    )
 
     # Plan auto-routing for an already-identified existing customer (spec
     # sections 9, 22): SAME/HIGHER/LOWER/EXPIRED/CANCELLED cases. An

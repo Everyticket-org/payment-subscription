@@ -100,6 +100,11 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
         result.status.lower(),
         transaction_id=updated_transaction.transaction_id,
         subscription_id=updated_transaction.subscription.subscription_id,
+        # 2026-09-13 follow-up: lets PaymentReturnPage.tsx tell a brand-new
+        # subscription's first payment (NEW) apart from a renewal/upgrade/
+        # downgrade, so the configurable post-subscription message only
+        # ever shows for a genuinely first-time subscriber.
+        payment_type=updated_transaction.payment_type,
     )
 
 

@@ -1,17 +1,23 @@
 """
 Shared pytest fixtures.
 
-Tests run against an in-memory SQLite database rather than Postgres, so
-the suite is fast and needs no external services (spec section 73: the
-whole application must be testable without any real external
-dependencies). This deliberately does NOT exercise the Postgres-only
-partial unique index (one-active-subscription-per-customer) - that
-constraint is verified separately, against real Postgres, as part of
-generating/applying the Alembic migration (see
-docs/implementation-status.md for how that was verified). These tests
-verify application-level enforcement of the same rule
+Tests run against an in-memory SQLite database rather than the real
+production database (MySQL, as of the 2026-09-13 "change database to
+mysql" follow-up), so the suite is fast and needs no external services
+(spec section 73: the whole application must be testable without any
+real external dependencies).
+
+The one-active-subscription-per-customer / one-trial-per-lifetime rules
+(app.subscriptions.models.Subscription's two unique indexes) are backed
+by generated columns (active_slot/trial_slot) specifically so they work
+identically across SQLite, MySQL, and Postgres - see that model's module
+docstring for why. That means these tests DO exercise the real DB-level
+constraint (SQLite creates the same GENERATED ALWAYS AS ... STORED
+columns + unique indexes), not just the application-level pre-check
 (subscriptions.service.create_pending_subscription raising
-CustomerAlreadySubscribed), which runs regardless of database backend.
+CustomerAlreadySubscribed) - both layers are covered here. The DB-level
+constraint was additionally verified directly against a real MySQL 8.0
+instance as part of migrating to it (see docs/implementation-status.md).
 """
 import os
 

@@ -309,6 +309,7 @@ def expire_due_subscriptions(db: Session) -> int:
     just subscription_id in follow-up 3). Returns how many subscriptions
     were expired."""
     from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+    from app.webhooks.field_catalog import sanitize_selection
     from app.webhooks.payloads import expiry_payload
 
     now = datetime.now(timezone.utc)
@@ -326,13 +327,34 @@ def expire_due_subscriptions(db: Session) -> int:
         expire_subscription(db, subscription=subscription)
         application = db.get(Application, subscription.application_id)
         if application is not None:
+            # 2026-09-14 follow-up: OPT-IN extra fields (Configuration >
+            # Everyticket integration) - see app.webhooks.field_catalog
+            # for what's selectable and why no payment/invoice fields are
+            # offered for this event.
+            selected_fields = sanitize_selection(application.webhook_field_selection).get("subscription.expired")
             webhook_service.queue_event(
                 db,
                 application=application,
                 event_type="subscription.expired",
                 entity_type="subscription",
                 entity_id=subscription.subscription_id,
-                payload=expiry_payload(subscription_id=subscription.subscription_id),
+                payload=expiry_payload(
+                    subscription_id=subscription.subscription_id,
+                    plan_code=subscription.plan.plan_code,
+                    plan_name=subscription.plan.name,
+                    price=float(subscription.plan.price),
+                    currency=subscription.plan.currency,
+                    billing_interval=subscription.plan.billing_interval,
+                    billing_frequency=subscription.plan.billing_frequency,
+                    trial_period_days=subscription.plan.trial_period_days,
+                    is_trial=subscription.is_trial,
+                    starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                    expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                    customer_id=subscription.customer.customer_id,
+                    email=subscription.customer.email,
+                    phone_number=subscription.customer.mobile,
+                    selected_fields=selected_fields,
+                ),
             )
         db.commit()
         expired_count += 1
@@ -358,6 +380,7 @@ def archive_stale_subscriptions(db: Session) -> int:
     subscriptions were archived."""
     from app.subscriptions.models import SubscriptionHistory
     from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+    from app.webhooks.field_catalog import sanitize_selection
     from app.webhooks.payloads import archive_payload
 
     now = datetime.now(timezone.utc)
@@ -403,13 +426,34 @@ def archive_stale_subscriptions(db: Session) -> int:
             )
         )
 
+        # 2026-09-14 follow-up: OPT-IN extra fields (Configuration >
+        # Everyticket integration) - see app.webhooks.field_catalog for
+        # what's selectable and why no payment/invoice fields are offered
+        # for this event.
+        selected_fields = sanitize_selection(application.webhook_field_selection).get("subscription.archived")
         webhook_service.queue_event(
             db,
             application=application,
             event_type="subscription.archived",
             entity_type="subscription",
             entity_id=subscription.subscription_id,
-            payload=archive_payload(subscription_id=subscription.subscription_id),
+            payload=archive_payload(
+                subscription_id=subscription.subscription_id,
+                plan_code=subscription.plan.plan_code,
+                plan_name=subscription.plan.name,
+                price=float(subscription.plan.price),
+                currency=subscription.plan.currency,
+                billing_interval=subscription.plan.billing_interval,
+                billing_frequency=subscription.plan.billing_frequency,
+                trial_period_days=subscription.plan.trial_period_days,
+                is_trial=subscription.is_trial,
+                starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                customer_id=subscription.customer.customer_id,
+                email=subscription.customer.email,
+                phone_number=subscription.customer.mobile,
+                selected_fields=selected_fields,
+            ),
         )
         db.commit()
         archived_count += 1
@@ -512,15 +556,39 @@ def cancel_subscription(
 
     if application is not None:
         from app.webhooks import service as webhook_service  # local import: avoids a module-load cycle
+        from app.webhooks.field_catalog import sanitize_selection
         from app.webhooks.payloads import cancelled_payload
 
+        # 2026-09-14 follow-up: OPT-IN extra fields (Configuration >
+        # Everyticket integration), including the three cancellation-only
+        # ones - see app.webhooks.field_catalog for what's selectable.
+        selected_fields = sanitize_selection(application.webhook_field_selection).get("subscription.cancelled")
         webhook_service.queue_event(
             db,
             application=application,
             event_type="subscription.cancelled",
             entity_type="subscription",
             entity_id=subscription.subscription_id,
-            payload=cancelled_payload(subscription_id=subscription.subscription_id),
+            payload=cancelled_payload(
+                subscription_id=subscription.subscription_id,
+                plan_code=subscription.plan.plan_code,
+                plan_name=subscription.plan.name,
+                price=float(subscription.plan.price),
+                currency=subscription.plan.currency,
+                billing_interval=subscription.plan.billing_interval,
+                billing_frequency=subscription.plan.billing_frequency,
+                trial_period_days=subscription.plan.trial_period_days,
+                is_trial=subscription.is_trial,
+                starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                customer_id=subscription.customer.customer_id,
+                email=subscription.customer.email,
+                phone_number=subscription.customer.mobile,
+                cancelled_at=subscription.cancelled_at.isoformat() if subscription.cancelled_at else None,
+                cancelled_by=subscription.cancelled_by,
+                cancellation_reason=subscription.cancellation_reason,
+                selected_fields=selected_fields,
+            ),
         )
 
     return subscription

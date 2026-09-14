@@ -88,3 +88,8 @@ class NotificationChannel(str, enum.Enum):
 class NotificationStatus(str, enum.Enum):
     SENT = "SENT"
     FAILED = "FAILED"
+    # 2026-09-13 follow-up ("Enable Notifications?" toggle under SMTP
+    # configuration): distinct from FAILED - this is never a delivery
+    # error, it's the admin having deliberately turned notifications off
+    # for this application, so it shouldn't read as something broken.
+    SKIPPED = "SKIPPED"

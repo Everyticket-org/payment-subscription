@@ -21,6 +21,7 @@ import type {
   ApplicationSubscriptionRulesUpdateInput,
   EveryticketIntegrationOut,
   EveryticketIntegrationUpdateInput,
+  EveryticketWebhookSampleOut,
   NotificationConfigOut,
   NotificationConfigUpdateInput,
   PaymentGatewayConfigOut,
@@ -39,6 +40,7 @@ import type {
   PlanTransitionOut,
   PlanUpdateInput,
   PortalSubscriptionOut,
+  PublicMessagesOut,
   RegistrationFormFieldAdminOut,
   RegistrationFormFieldCreateInput,
   RegistrationFormFieldOut,
@@ -79,6 +81,12 @@ export const identify = (email: string, mobile: string) =>
 
 export const getRegistrationForm = () =>
   api.get<RegistrationFormFieldOut[]>("/api/v1/public/registration-form");
+
+/** 2026-09-13 follow-up: the configurable post-subscription confirmation
+ * message - read by SubscribePage's mock "done" step and PaymentReturnPage
+ * (PayU flow), both only when the just-completed payment's payment_type
+ * is "NEW" (a genuinely first-time subscription). */
+export const getPublicMessages = () => api.get<PublicMessagesOut>("/api/v1/public/messages");
 
 export const verifyOtp = (otpSessionId: string, code: string) =>
   api.post<OtpVerifyResponse>("/api/v1/public/otp/verify", { otp_session_id: otpSessionId, code });
@@ -321,6 +329,12 @@ export const testSubscriptionEvent = (
   body: { subscription_id: string; event: string; target_plan_code?: string },
   token: string,
 ) => api.post<SubscriptionAdminOut>("/api/v1/admin/testing/subscription-event", body, token);
+
+/** 2026-09-13 follow-up: backs the "Test Everyticket webhook" event
+ * dropdown - same five sample wire bodies the admin Configuration
+ * screen's "Webhook events" preview shows. */
+export const adminGetWebhookSamples = (token: string) =>
+  api.get<EveryticketWebhookSampleOut[]>("/api/v1/admin/testing/webhook/samples", token);
 
 export const testWebhookSend = (
   body: { payload: Record<string, unknown>; headers?: Record<string, string> },

@@ -86,6 +86,15 @@ def send_direct_email(
     never raises, same as send_templated_email()."""
     settings = _resolve_settings(application)
 
+    if application is not None and not application.notifications_enabled:
+        logger.info("send_direct_email(%s): notifications disabled for this application, skipping", template_code)
+        _log(
+            db, template_code=template_code, to=to, status=NotificationStatus.SKIPPED.value,
+            provider_response="Notifications are disabled for this application (Configuration > Notifications)",
+            related_entity_type=related_entity_type, related_entity_id=related_entity_id,
+        )
+        return False
+
     if not to:
         logger.info("send_direct_email(%s): no recipient address, skipping", template_code)
         return False
@@ -147,8 +156,25 @@ def send_templated_email(
     otherwise - same per-application-override-else-global-default
     pattern app.sso.service and app.webhooks.service already use for
     sso_secret/webhook_secret. Built via settings.model_copy(), never by
-    mutating the process-wide cached Settings singleton."""
+    mutating the process-wide cached Settings singleton.
+
+    `application.notifications_enabled` (2026-09-13 follow-up: "Enable
+    Notifications?" under SMTP configuration) is checked first and is a
+    hard stop, not an override - when it's False, nothing below this
+    (template lookup, rendering, the SMTP call itself) ever runs, and the
+    NotificationLog row is written as SKIPPED, not FAILED, so an admin
+    who deliberately turned this off doesn't see a wall of "failures" in
+    the logs."""
     settings = _resolve_settings(application)
+
+    if application is not None and not application.notifications_enabled:
+        logger.info("send_templated_email(%s): notifications disabled for this application, skipping", template_code)
+        _log(
+            db, template_code=template_code, to=to or "", status=NotificationStatus.SKIPPED.value,
+            provider_response="Notifications are disabled for this application (Configuration > Notifications)",
+            related_entity_type=related_entity_type, related_entity_id=related_entity_id,
+        )
+        return False
 
     if not to:
         logger.info("send_templated_email(%s): no recipient address, skipping", template_code)

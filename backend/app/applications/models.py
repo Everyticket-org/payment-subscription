@@ -67,6 +67,19 @@ class Application(Base, TimestampMixin):
     webhook_escalation_emails: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # comma-separated
     webhook_escalation_email_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
     webhook_escalation_email_body: Mapped[str | None] = mapped_column(Text, nullable=True)  # sanitized rich text, see app.plans.sanitize
+    # Per-event selection of OPTIONAL extra fields to include in outbound
+    # Everyticket webhook payloads (2026-09-14 follow-up: "allow to
+    # configure, more data to be passed for webhook call like plan details
+    # including name, amount, expiry etc.. so if admin select those
+    # parameters then it will be passed to webhook"). Shape:
+    # {event_type: [field_name, ...]}, e.g. {"subscription.renewed":
+    # ["plan_name", "amount"]}. Only event types/field names present in
+    # app.webhooks.field_catalog.AVAILABLE_FIELDS are ever honored - see
+    # field_catalog.sanitize_selection(), applied both on save and on read
+    # so a stale value from a previous catalog version can never make a
+    # payload builder look for a field it no longer supports. None/missing
+    # key = no optional fields for that event, i.e. today's fixed payload.
+    webhook_field_selection: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
     # --- Notifications: real SMTP transport override (previously env-only via Settings.SMTP_*) ---
     smtp_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -74,6 +87,13 @@ class Application(Base, TimestampMixin):
     smtp_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     smtp_password: Mapped[str | None] = mapped_column(String(500), nullable=True)  # masked in API responses
     smtp_use_tls: Mapped[bool | None] = mapped_column(Boolean, nullable=True)  # None = inherit env default
+    # Master on/off switch for this application's email sending (2026-09-13
+    # follow-up: "add one more field... 'Enable Notifications?'... if its
+    # enabled, email service will work otherwise it will skip") - checked
+    # by app.notifications.email.service before every send, regardless of
+    # how correctly SMTP itself is configured above. Defaults True so
+    # every existing application keeps sending exactly as it does today.
+    notifications_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # --- Payment redirect / webhook URLs (2026-09 follow-up: "PayU redirect
     # back to localhost:4200 which is wrong. instead allow to configure
@@ -86,6 +106,21 @@ class Application(Base, TimestampMixin):
     # --- Everyticket integration: archive/delete after N days of non-renewal
     # (2026-09 follow-up, third webhook type) - None/0 = disabled. ---
     archive_after_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # --- Post-subscription confirmation message (2026-09-13 follow-up:
+    # "show message 'You have successfully subscribed, you will get your
+    # credentials in sometime' for first time subscription... This message
+    # also should be configurable") - shown on the public thank-you screen
+    # (SubscribePage's mock "done" step, PaymentReturnPage's PayU success
+    # branch) only after a NEW subscription's first payment succeeds, never
+    # on a renewal/upgrade/downgrade - see app.payments.schemas.
+    # PaymentTransactionOut.payment_type, which is what the frontend
+    # actually gates this on. Nullable: unset means "use the built-in
+    # default text" (app.applications.config_schemas.
+    # DEFAULT_POST_SUBSCRIPTION_MESSAGE), same fallback pattern as
+    # duplicate_message/validation_message on registration form fields -
+    # never a hardcoded value baked into a migration's server_default. ---
+    post_subscription_message: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # --- Testing (spec section 55: also always gated on ENVIRONMENT != production at runtime) ---
     test_mode: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

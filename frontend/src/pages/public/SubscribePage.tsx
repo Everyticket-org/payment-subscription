@@ -20,13 +20,14 @@
  */
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { identify, listPlans, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
+import { getPublicMessages, identify, listPlans, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { sanitizeHtml } from "../../utils/sanitizeHtml";
 import type { MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 type Step = "form" | "otp" | "payment" | "done";
@@ -49,8 +50,30 @@ export function SubscribePage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [otherPlans, setOtherPlans] = useState<Plan[]>([]);
+  // The plan being subscribed to (this page's own planCode), shown with its
+  // full details/features in the same side panel as "Other plans" -
+  // Vishal's follow-up: "Show selected Plan on right side with its feature
+  // above other plans selection.. keep both things into same card".
+  const [selectedPlan, setSelectedPlan] = useState<Plan | null>(null);
+  // 2026-09-13 follow-up: the configurable post-subscription confirmation
+  // message, shown on the "done" step only for a genuinely first-time
+  // subscription (callbackResult.payment.payment_type === "NEW") - never
+  // for an existing customer whose /subscribe call was silently auto-
+  // routed to an upgrade/downgrade against their existing subscription
+  // (spec section 9/22's auto-routing - they already have credentials).
+  const [postSubscriptionMessage, setPostSubscriptionMessage] = useState<string | null>(null);
 
   const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields();
+
+  useEffect(() => {
+    // Fetched unconditionally alongside otherPlans below rather than only
+    // once "done" is reached - one cheap public GET, and it's ready the
+    // instant the mock callback resolves rather than adding a visible
+    // delay to the "done" step's first render.
+    getPublicMessages()
+      .then((msgs) => setPostSubscriptionMessage(msgs.post_subscription_message))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     // Side panel on this page (spec section 51: "professional, not MVP")
@@ -59,7 +82,8 @@ export function SubscribePage() {
     // panel just stays empty), so it's swallowed rather than surfaced
     // via the page's main ErrorBanner.
     listPlans()
-      .then((all) =>
+      .then((all) => {
+        setSelectedPlan(all.find((p) => p.plan_code === planCode) ?? null);
         setOtherPlans(
           all.filter((p) => {
             if (p.plan_code === planCode) return false;
@@ -72,8 +96,8 @@ export function SubscribePage() {
             if (customerToken && p.is_trial) return false;
             return true;
           }),
-        ),
-      )
+        );
+      })
       .catch(() => {});
   }, [planCode, customerToken]);
 
@@ -91,7 +115,24 @@ export function SubscribePage() {
         token,
       );
       setSubscribeResult(result);
-      setStep("payment");
+      if (result.payment.status === "SUCCESS") {
+        // A free plan (price 0 - always a trial plan, spec follow-up: a
+        // non-trial plan can never be priced at 0) never actually goes
+        // through the gateway (2026-09-13 follow-up: "if price of plan is
+        // 0 then no need to redirect to payment gateway") -
+        // create_payment_transaction() activates it server-side
+        // immediately, so the response already reports SUCCESS. Skip the
+        // payment step and go straight to "done", the same place a real
+        // successful payment simulation lands. invoice_id isn't part of
+        // SubscribeResponse (only MockCallbackResult carries it), but the
+        // invoice was still generated and emailed server-side - it's just
+        // not named on this screen.
+        setCallbackResult({ payment: result.payment, subscription: result.subscription, invoice_id: null });
+        setStep("done");
+        toast.success("Subscription activated");
+      } else {
+        setStep("payment");
+      }
     } catch (err) {
       if (err instanceof ApiError && err.errorCode === "OTP_VERIFICATION_REQUIRED") {
         // Existing account - walk them through identify + OTP before
@@ -157,7 +198,7 @@ export function SubscribePage() {
 
   return (
     <section>
-      <h1>Subscribe to {planCode}</h1>
+      <h1>Subscribe to {selectedPlan?.name ?? planCode}</h1>
       <ErrorBanner error={error} />
       <ErrorBanner error={registrationFieldsError} />
 
@@ -182,7 +223,7 @@ export function SubscribePage() {
           ) : (
             <form className="card" onSubmit={handleFormSubmit}>
               <label>
-                Email
+                Email *
                 <input
                   type="email"
                   required
@@ -192,7 +233,7 @@ export function SubscribePage() {
                 />
               </label>
               <label>
-                Mobile
+                Mobile *
                 <input
                   type="tel"
                   required
@@ -269,6 +310,12 @@ export function SubscribePage() {
             <>
               <h2>Subscription active</h2>
               <p>Your subscription is now active{callbackResult.invoice_id ? ` and invoice ${callbackResult.invoice_id} was generated.` : "."}</p>
+              <p className="hint">
+                Transaction: <code>{callbackResult.payment.transaction_id}</code>
+              </p>
+              {callbackResult.payment.payment_type === "NEW" && postSubscriptionMessage && (
+                <p>{postSubscriptionMessage}</p>
+              )}
               {customerToken ? (
                 <Link className="button button-primary" to="/portal">
                   Go to my account
@@ -295,20 +342,56 @@ export function SubscribePage() {
       )}
       </div>
 
-      {step !== "done" && otherPlans.length > 0 && (
+      {step !== "done" && (selectedPlan || otherPlans.length > 0) && (
         <aside className="subscribe-plans-panel">
-          <h2>Other plans</h2>
-          <p className="hint">Not sure this is the right one? Switch before you pay.</p>
-          <div className="subscribe-plans-row">
-            {otherPlans.map((p) => (
-              <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
-                <span className="plan-mini-name">{p.name}</span>
-                <span className="plan-mini-price">
-                  {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
-                </span>
-              </Link>
-            ))}
-          </div>
+          {selectedPlan && (
+            <div className="subscribe-selected-plan">
+              <p className="subscribe-selected-plan-eyebrow">Your plan</p>
+              <p className="subscribe-selected-plan-name">{selectedPlan.name}</p>
+              <p className="plan-price">
+                {selectedPlan.is_trial ? (
+                  `Free for ${selectedPlan.trial_period_days ?? "?"} days`
+                ) : (
+                  <>
+                    {selectedPlan.currency} {selectedPlan.price.toFixed(2)}
+                    <span className="plan-interval">
+                      {" "}
+                      / {selectedPlan.billing_frequency > 1 ? `${selectedPlan.billing_frequency} ` : ""}
+                      {selectedPlan.billing_interval}
+                      {selectedPlan.billing_frequency > 1 ? "s" : ""}
+                    </span>
+                  </>
+                )}
+              </p>
+              {selectedPlan.description && (
+                // Same rich-text description used on the public plans
+                // listing (spec section 51 bullet-point editor) - the
+                // "features" for a plan are exactly this description, so
+                // reuse the same sanitize-then-render treatment here.
+                <div
+                  className="plan-description"
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(selectedPlan.description) }}
+                />
+              )}
+            </div>
+          )}
+
+          {otherPlans.length > 0 && (
+            <div className="subscribe-other-plans">
+              <h2>Other plans</h2>
+              <p className="hint">Not sure this is the right one? Switch before you pay.</p>
+              <div className="subscribe-plans-row">
+                {otherPlans.map((p) => (
+                  <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
+                    <span className="plan-mini-name">{p.name}</span>
+                    <span className="plan-mini-price">
+                      {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
         </aside>
       )}
       </div>

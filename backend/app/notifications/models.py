@@ -1,5 +1,5 @@
 """Email templates + send log (spec sections 49-50)."""
-from sqlalchemy import Boolean, Integer, String
+from sqlalchemy import Boolean, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -13,8 +13,13 @@ class NotificationTemplate(Base, TimestampMixin):
     template_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
     channel: Mapped[str] = mapped_column(String(20), default=NotificationChannel.EMAIL.value, nullable=False)
     subject: Mapped[str] = mapped_column(String(255), nullable=False)
-    body_html: Mapped[str] = mapped_column(String, nullable=False)
-    body_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    # 2026-09-13 follow-up ("change database to mysql"): plain String
+    # (unbounded VARCHAR) is valid on Postgres/SQLite but MySQL requires
+    # every VARCHAR to have an explicit length - Text is the correct type
+    # here regardless of dialect anyway (this holds arbitrarily long
+    # rendered HTML/plain-text email bodies, not a short bounded field).
+    body_html: Mapped[str] = mapped_column(Text, nullable=False)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 

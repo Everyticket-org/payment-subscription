@@ -33,6 +33,17 @@ prefix and a "@test.invalid" customer email domain (spec section 54: "Mark
 test records clearly as TEST") so CLEANUP can find and remove exactly
 those rows, in FK-safe child-to-parent order, without ever touching a
 real customer/plan/subscription.
+
+2026-09-13 follow-up ("Remove Test Payment section, Remove Test
+Subscription Events section" from the admin Testing page): TEST PAYMENT
+and TEST SUBSCRIPTION EVENTS below are no longer reachable from the
+frontend Testing page, but their endpoints are deliberately left
+untouched here - same "dead UI, live backend" precedent this codebase
+already uses elsewhere (e.g. the Plan Transitions allow-list removed from
+the admin panel in the 2026-09 UI/UX rework) - so they still work for
+direct API/diagnostic use and every existing test against them keeps
+passing unmodified. Also added: GET /webhook/samples, backing the Testing
+page's new "Test Everyticket webhook" event dropdown.
 """
 import secrets
 import uuid
@@ -65,8 +76,10 @@ from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription, SubscriptionHistory
 from app.subscriptions.schemas import SubscriptionAdminOut
+from app.applications.config_schemas import EveryticketWebhookSampleOut
 from app.webhooks import service as webhook_service
 from app.webhooks.models import WebhookDelivery, WebhookEvent
+from app.webhooks.payloads import build_webhook_samples
 from app.webhooks.schemas import WebhookDeliveryOut
 
 router = APIRouter(prefix="/testing", tags=["admin-testing"])
@@ -290,6 +303,24 @@ def test_subscription_event(
 # --- TEST EVERYTICKET WEBHOOK ----------------------------------------------
 
 
+@router.get("/webhook/samples", response_model=list[EveryticketWebhookSampleOut])
+def get_webhook_samples(
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+    _admin: AdminUser = Depends(require_permission("TESTING_TOOLS_USE")),
+    _test_mode: None = Depends(require_test_mode),
+):
+    """2026-09-13 follow-up: "Give dropdown of Events like activate
+    etc.. Based on selection JSON editor automatically should be filled
+    with required structure." Backs the event dropdown on the Testing
+    page's "Test Everyticket webhook" tool - reuses the exact same five
+    sample wire bodies the admin Configuration screen already previews
+    (app.webhooks.payloads.build_webhook_samples), so picking "onboarding"
+    here fills the JSON editor with the literal body a real onboarding
+    delivery would send, not a second, hand-maintained copy of it."""
+    return build_webhook_samples(db, application)
+
+
 class TestWebhookSendRequest(BaseModel):
     payload: dict
     headers: dict[str, str] | None = None
@@ -458,6 +489,7 @@ def test_email(
     body: TestEmailRequest,
     request: Request,
     db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
     admin: AdminUser = Depends(require_permission("TESTING_TOOLS_USE")),
     _test_mode: None = Depends(require_test_mode),
 ):
@@ -465,7 +497,17 @@ def test_email(
     with representative sample values via the exact same
     send_templated_email() every real trigger point uses, then reports
     back the NotificationLog row it just wrote (spec: "Show delivery
-    result")."""
+    result").
+
+    2026-09-13 bugfix: this call was missing `application=`, so it always
+    sent through the global SMTP_*/EMAIL_* env defaults (SMTP_HOST=
+    localhost:1025) instead of the per-application SMTP config saved on
+    the Configuration -> Notifications screen (Application.smtp_host/
+    smtp_port/smtp_username/smtp_password/smtp_use_tls) - every other
+    real send site (payments, subscriptions, webhooks, customer OTP,
+    invoices) already passes `application`; this endpoint just never did,
+    so Test Email could never actually exercise the SMTP settings an
+    admin had just configured."""
     context = _SAMPLE_EMAIL_CONTEXT.get(body.template_code, {})
     sent = email_service.send_templated_email(
         db,
@@ -474,6 +516,7 @@ def test_email(
         context=context,
         related_entity_type="test_email",
         related_entity_id=f"TEST-EMAIL-{_short_suffix()}",
+        application=application,
     )
     log = (
         db.query(NotificationLog)
@@ -487,7 +530,19 @@ def test_email(
         action="TEST_EMAIL_SENT",
         entity_type="notification_template",
         entity_id=body.template_code,
-        new_value={"to": body.to, "sent": sent},
+        # 2026-09-13 bugfix: previously only {"to", "sent"} - on a failure
+        # there was no way to see WHY from Audit Logs (the live API
+        # response's provider_response was the only place it showed up,
+        # and only if you were watching at the moment it happened). Now
+        # carries the same status/provider_response the live response and
+        # the NotificationLog row have, matching the precedent already set
+        # for TEST_WEBHOOK_SENT (full result dict, reviewable later).
+        new_value={
+            "to": body.to,
+            "sent": sent,
+            "status": log.status if log else None,
+            "provider_response": log.provider_response if log else None,
+        },
         ip_address=_client_ip(request),
     )
     db.commit()

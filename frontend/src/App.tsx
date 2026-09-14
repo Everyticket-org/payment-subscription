@@ -1,7 +1,7 @@
-import { BrowserRouter, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { AdminLayout } from "./components/AdminLayout";
-import { RequireAdmin, RequireCustomer } from "./components/ProtectedRoute";
+import { RedirectIfActiveSubscription, RequireAdmin, RequireCustomer } from "./components/ProtectedRoute";
 import { PlansPage } from "./pages/public/PlansPage";
 import { SubscribePage } from "./pages/public/SubscribePage";
 import { PaymentReturnPage } from "./pages/public/PaymentReturnPage";
@@ -25,14 +25,24 @@ import { AdminWebhooksPage } from "./pages/admin/AdminWebhooksPage";
 import { AdminNotificationsPage } from "./pages/admin/AdminNotificationsPage";
 import { AdminAuditLogsPage } from "./pages/admin/AdminAuditLogsPage";
 import { AdminTestingPage } from "./pages/admin/AdminTestingPage";
-import { AdminConfigPage } from "./pages/admin/AdminConfigPage";
+import { AdminConfigGeneralPage } from "./pages/admin/config/AdminConfigGeneralPage";
+import { AdminConfigPaymentGatewayPage } from "./pages/admin/config/AdminConfigPaymentGatewayPage";
+import { AdminConfigCommunicationPage } from "./pages/admin/config/AdminConfigCommunicationPage";
+import { AdminConfigIntegrationPage } from "./pages/admin/config/AdminConfigIntegrationPage";
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<PlansPage />} />
+          <Route
+            index
+            element={
+              <RedirectIfActiveSubscription>
+                <PlansPage />
+              </RedirectIfActiveSubscription>
+            }
+          />
           <Route path="subscribe/:planCode" element={<SubscribePage />} />
           <Route path="payment/return" element={<PaymentReturnPage />} />
           <Route path="login" element={<CustomerLoginPage />} />
@@ -81,7 +91,17 @@ function App() {
           <Route path="notifications" element={<AdminNotificationsPage />} />
           <Route path="audit" element={<AdminAuditLogsPage />} />
           <Route path="testing" element={<AdminTestingPage />} />
-          <Route path="config" element={<AdminConfigPage />} />
+          {/* 2026-09-14 follow-up: "Under Configuration, 4 sub menu will
+              come" - the old single stacked /admin/config screen is now
+              four routes, one per section, matching the sidebar's new
+              Configuration group (see AdminLayout.tsx). Bare /admin/config
+              redirects to General so an old bookmark/link still lands
+              somewhere sensible instead of a blank/missing route. */}
+          <Route path="config" element={<Navigate to="general" replace />} />
+          <Route path="config/general" element={<AdminConfigGeneralPage />} />
+          <Route path="config/payment-gateway" element={<AdminConfigPaymentGatewayPage />} />
+          <Route path="config/communication" element={<AdminConfigCommunicationPage />} />
+          <Route path="config/integration" element={<AdminConfigIntegrationPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -36,7 +36,20 @@ Restructured 2026-09 (Vishal's explicit 4-section layout) into:
      admin field) but is no longer read or written by this screen.
   4. Notifications - real SMTP transport (host/port/username/password/
      use_tls, previously env-only) plus the pre-existing sender name/
-     address/reply-to overrides.
+     address/reply-to overrides, plus a master `notifications_enabled`
+     on/off switch (2026-09-13 follow-up: "Enable Notifications?") that
+     app.notifications.email.service checks before every send for this
+     application, independent of whether SMTP itself is configured
+     correctly.
+
+Section 1 (Application) also carries `post_subscription_message`
+(2026-09-13 follow-up: "show message '...you will get your credentials
+in sometime' for first time subscription... This message also should be
+configurable") - free text shown on the public thank-you screen after a
+brand-new subscription's first payment succeeds (never on a renewal/
+upgrade/downgrade change-plan, since that customer already has
+credentials - see app.api.v1.public.PublicMessagesOut and
+DEFAULT_POST_SUBSCRIPTION_MESSAGE below).
 
 "Subscription rules" and "Security" configuration are unchanged (see
 ApplicationSubscriptionRulesOut/Update below and app/auth/security_config.py)
@@ -52,6 +65,14 @@ it (see admin_config.py).
 """
 from pydantic import BaseModel, ConfigDict
 
+# Shown on the public thank-you screen when an application hasn't
+# configured its own post_subscription_message (column defaults to NULL -
+# see Application.post_subscription_message) - same "nullable column,
+# code-level fallback text" convention as validation_message/
+# duplicate_message on registration form fields, so a blank admin field
+# never silently means "show nothing" for every new subscriber.
+DEFAULT_POST_SUBSCRIPTION_MESSAGE = "You have successfully subscribed, you will get your credentials in sometime."
+
 
 class ApplicationGeneralOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -59,12 +80,29 @@ class ApplicationGeneralOut(BaseModel):
     name: str
     currency: str
     gateway_mode: str  # test | live - "Live/Test Mode"
+    post_subscription_message: str | None = None
 
 
 class ApplicationGeneralUpdate(BaseModel):
     name: str
     currency: str = "INR"
     gateway_mode: str = "test"
+    # None/"" both mean "use the default text" - applied at read time by
+    # whoever serves it publicly (app.api.v1.public.get_public_messages),
+    # never baked into this column as a hardcoded default.
+    post_subscription_message: str | None = None
+
+
+class PublicMessagesOut(BaseModel):
+    """GET /public/messages - the small set of admin-configurable, public-
+    facing UI strings (currently just one). Deliberately its own tiny
+    endpoint/schema rather than folded into an existing response, since
+    it's read from two different, unrelated frontend pages: SubscribePage
+    (mock gateway "done" step) and PaymentReturnPage (PayU redirect
+    success branch) - see app.api.v1.public.get_public_messages, which
+    applies DEFAULT_POST_SUBSCRIPTION_MESSAGE when the admin hasn't set
+    one."""
+    post_subscription_message: str
 
 
 class PayUCredentialsOut(BaseModel):
@@ -113,6 +151,21 @@ class EveryticketWebhookSampleOut(BaseModel):
     payload: dict
 
 
+class EveryticketWebhookFieldCatalogEntry(BaseModel):
+    """One field an admin can SEE for one event - either an OPTIONAL one
+    they can tick, or a FIXED one shown as an always-included, disabled
+    entry (2026-09-14 follow-up: "allow to configure, more data to be
+    passed for webhook call..."; 2026-09-14 follow-up 2: "activated does
+    not have plan name, code, price... where it has to be... keep
+    consistency" - fixed fields are now shown too, so nothing looks
+    missing). `field` is the exact JSON key that appears in the outbound
+    payload; `label` is a short human-readable description. Sourced
+    directly from app.webhooks.field_catalog - see that module for the
+    full explanation of what's available/fixed per event and why."""
+    field: str
+    label: str
+
+
 class EveryticketIntegrationOut(BaseModel):
     secret_key_is_set: bool
     webhook_url: str | None = None
@@ -125,6 +178,50 @@ class EveryticketIntegrationOut(BaseModel):
     # not renew for x days" (2026-09 follow-up).
     archive_after_days: int | None = None
     webhook_samples: list[EveryticketWebhookSampleOut]
+    # 2026-09-14 follow-up 3: "when select checkbox for parameters, it
+    # should reflect into sample JSON as well" - live, in the browser, as
+    # each box is ticked, not only after Save. Same shape as
+    # webhook_samples above but built as if EVERY optional field for
+    # every event were selected, regardless of what's actually stored -
+    # so it carries a real sample value for every possible field. The
+    # frontend never invents a value itself; it only shows/hides keys
+    # already present here to reflect the checkboxes' current (possibly
+    # unsaved) state, so no sample value is ever computed outside
+    # app.webhooks.payloads (see build_webhook_samples' own docstring).
+    webhook_samples_all_fields: list[EveryticketWebhookSampleOut]
+    # 2026-09-14 follow-up: "allow to configure, more data to be passed
+    # for webhook call like plan details including name, amount, expiry
+    # etc.. so if admin select those parameters then it will be passed to
+    # webhook". webhook_field_catalog is every OPTIONAL field selectable
+    # per event (event_type -> [{field, label}, ...], in display order) -
+    # the frontend renders one checklist group per event from this;
+    # webhook_field_selection is this application's CURRENTLY selected
+    # subset (event_type -> [field_name, ...]), sanitized against the
+    # catalog above so a stale value from a previous catalog version can
+    # never be echoed back. webhook_fixed_fields (2026-09-14 follow-up 2)
+    # is the complementary always-sent field list per event, display-only
+    # (never part of a selection - a builder doesn't need telling to
+    # include something it already always includes) - shown alongside
+    # webhook_field_catalog so every event's full field picture is
+    # visible, not just its optional extras. All three come straight from
+    # app.webhooks.field_catalog - see that module's own docstring.
+    webhook_field_catalog: dict[str, list[EveryticketWebhookFieldCatalogEntry]]
+    webhook_fixed_fields: dict[str, list[EveryticketWebhookFieldCatalogEntry]]
+    webhook_field_selection: dict[str, list[str]]
+    # --- Everyticket -> this app API credentials (2026-09-13 follow-up 3:
+    # "Test SSO Link - Actually this has to be generated by Everyticket
+    # platform to login into subscription engine... so need to give API
+    # to everyticket Platform to call that which generates token and
+    # return a link") - authenticates POST /api/v1/integration/sso/
+    # generate-link (app.api.v1.integration), the opposite direction of
+    # webhook_secret (which signs OUR calls TO Everyticket). Stored in the
+    # existing, previously-unused Application.api_credentials JSON column
+    # (no migration needed) as {"api_key": ..., "api_secret": ...}.
+    # api_key is shown in plain text (it's an identifier, like a
+    # client_id, not a secret by itself); api_secret follows the same
+    # masked-boolean convention as every other secret on this screen.
+    api_key: str | None = None
+    api_secret_is_set: bool = False
 
 
 class EveryticketIntegrationUpdate(BaseModel):
@@ -135,9 +232,26 @@ class EveryticketIntegrationUpdate(BaseModel):
     escalation_email_subject: str | None = None
     escalation_email_body: str | None = None
     archive_after_days: int | None = None
+    # 2026-09-14 follow-up: this application's per-event OPTIONAL field
+    # selection (event_type -> [field_name, ...]). Replaced outright when
+    # given, same "always replace" convention as retry_limit/
+    # archive_after_days above (not a secret, so no need for the
+    # None=unchanged/""=clear convention those use) - the frontend always
+    # sends the full current selection back, never a partial patch. None
+    # clears every event's selection back to just the fixed payload
+    # shape. Sanitized against app.webhooks.field_catalog before being
+    # stored (app.api.v1.admin_config.update_integration_config), so an
+    # unrecognized event type or field name is silently dropped rather
+    # than rejected outright - keeps this endpoint forward/backward
+    # compatible with catalog changes across releases.
+    webhook_field_selection: dict[str, list[str]] | None = None
+    # None = unchanged, "" clears - same convention as secret_key above.
+    api_key: str | None = None
+    api_secret: str | None = None
 
 
 class NotificationConfigOut(BaseModel):
+    notifications_enabled: bool
     smtp_host: str | None = None
     smtp_port: int | None = None
     smtp_username: str | None = None
@@ -149,6 +263,7 @@ class NotificationConfigOut(BaseModel):
 
 
 class NotificationConfigUpdate(BaseModel):
+    notifications_enabled: bool = True
     smtp_host: str | None = None
     smtp_port: int | None = None
     smtp_username: str | None = None

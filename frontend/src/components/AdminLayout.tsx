@@ -55,7 +55,20 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: "Audit logs", path: "/admin/audit" },
       { label: "Testing tools", path: "/admin/testing" },
-      { label: "Configuration", path: "/admin/config" },
+    ],
+  },
+  // 2026-09-14 follow-up: "Under Configuration, 4 sub menu will come - 1.
+  // General... 2. Payment Gateway... 3. Communication... 4. Integration"
+  // - Configuration is now its own sidebar group (like Catalog/Customers/
+  // Billing above) instead of a single item buried in System, with one
+  // route per section (see App.tsx) instead of one long stacked page.
+  {
+    label: "Configuration",
+    items: [
+      { label: "General", path: "/admin/config/general" },
+      { label: "Payment Gateway", path: "/admin/config/payment-gateway" },
+      { label: "Communication", path: "/admin/config/communication" },
+      { label: "Integration", path: "/admin/config/integration" },
     ],
   },
 ];

@@ -21,6 +21,16 @@
  * backend app.forms.validation) - this UI is just where an admin sets
  * it, plus a live "Test pattern" helper so they can sanity-check a regex
  * before saving it.
+ *
+ * check_duplicate/duplicate_message (Vishal's later follow-up: "Add one
+ * more checkbox to validate duplication (it means any record have
+ * similar value then it will not allow user to enter same name) &
+ * Validation message for that duplication also should be configured")
+ * are available the same way, right below the validation pattern
+ * fields - a checkbox plus a message input that only appears once it's
+ * checked. There's no client-side preview for this one (unlike the regex
+ * "Test pattern" helper) since checking for a duplicate means looking at
+ * every other customer's submitted data, which only the backend can do.
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
@@ -67,6 +77,8 @@ export function AdminRegistrationFormPage() {
           required: form.get("required") === "on",
           validation_pattern: String(form.get("validation_pattern") || "") || undefined,
           validation_message: String(form.get("validation_message") || "") || undefined,
+          check_duplicate: form.get("check_duplicate") === "on",
+          duplicate_message: String(form.get("duplicate_message") || "") || undefined,
           placeholder: String(form.get("placeholder") || "") || undefined,
           help_text: String(form.get("help_text") || "") || undefined,
           options:
@@ -177,6 +189,7 @@ export function AdminRegistrationFormPage() {
                 <th>Type</th>
                 <th>Required</th>
                 <th>Validation</th>
+                <th>Duplicate check</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -194,6 +207,7 @@ export function AdminRegistrationFormPage() {
                     </button>
                   </td>
                   <td>{f.validation_pattern ? <StatusBadge value="REGEX SET" /> : <span className="muted">None</span>}</td>
+                  <td>{f.check_duplicate ? <StatusBadge value="ON" /> : <span className="muted">Off</span>}</td>
                   <td>
                     <StatusBadge value={f.active ? "ACTIVE" : "INACTIVE"} />
                   </td>
@@ -226,19 +240,25 @@ export function AdminRegistrationFormPage() {
 }
 
 /** Regex pattern + custom message inputs, plus a small live "Test pattern"
- * helper - shared between the create form and the edit modal so both
- * stay in sync as this grows. Uncontrolled (name= only) like the rest of
- * the create form; the edit modal below reads/writes these same names
- * via FormData too. */
+ * helper, plus the duplicate-value checkbox + its own custom message -
+ * shared between the create form and the edit modal so both stay in
+ * sync as this grows. Uncontrolled (name= only) like the rest of the
+ * create form; the edit modal below reads/writes these same names via
+ * FormData too. */
 function ValidationFields({
   idPrefix,
   defaultPattern,
   defaultMessage,
+  defaultCheckDuplicate,
+  defaultDuplicateMessage,
 }: {
   idPrefix: string;
   defaultPattern?: string | null;
   defaultMessage?: string | null;
+  defaultCheckDuplicate?: boolean;
+  defaultDuplicateMessage?: string | null;
 }) {
+  const [checkDuplicate, setCheckDuplicate] = useState(defaultCheckDuplicate ?? false);
   const [pattern, setPattern] = useState(defaultPattern || "");
   const [sample, setSample] = useState("");
 
@@ -298,6 +318,28 @@ function ValidationFields({
           )}
         </label>
       )}
+      <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+        <input
+          name="check_duplicate"
+          id={`${idPrefix}-check_duplicate`}
+          type="checkbox"
+          defaultChecked={defaultCheckDuplicate ?? false}
+          onChange={(e) => setCheckDuplicate(e.target.checked)}
+          style={{ width: 18, height: 18 }}
+        />
+        <span>Reject duplicate values (any record with a similar value is blocked)</span>
+      </label>
+      {checkDuplicate && (
+        <label>
+          Duplicate message (shown to the customer when the value is already in use)
+          <input
+            name="duplicate_message"
+            id={`${idPrefix}-duplicate_message`}
+            defaultValue={defaultDuplicateMessage || ""}
+            placeholder="This value is already registered"
+          />
+        </label>
+      )}
     </div>
   );
 }
@@ -334,6 +376,8 @@ function EditFieldModal({
           required: form.get("required") === "on",
           validation_pattern: String(form.get("validation_pattern") || "") || null,
           validation_message: String(form.get("validation_message") || "") || null,
+          check_duplicate: form.get("check_duplicate") === "on",
+          duplicate_message: String(form.get("duplicate_message") || "") || null,
           placeholder: String(form.get("placeholder") || "") || undefined,
           help_text: String(form.get("help_text") || "") || undefined,
           options:
@@ -394,7 +438,13 @@ function EditFieldModal({
           Help text
           <input name="help_text" defaultValue={field.help_text || ""} />
         </label>
-        <ValidationFields idPrefix={`edit-${field.id}`} defaultPattern={field.validation_pattern} defaultMessage={field.validation_message} />
+        <ValidationFields
+          idPrefix={`edit-${field.id}`}
+          defaultPattern={field.validation_pattern}
+          defaultMessage={field.validation_message}
+          defaultCheckDuplicate={field.check_duplicate}
+          defaultDuplicateMessage={field.duplicate_message}
+        />
         <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
           Save changes
         </button>

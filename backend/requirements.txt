@@ -2,7 +2,12 @@ fastapi==0.115.0
 uvicorn[standard]==0.52.4
 SQLAlchemy==2.0.52
 alembic==1.13.2
-psycopg2-binary==2.9.12
+# 2026-09-13 follow-up ("change database to mysql"): PyMySQL instead of
+# psycopg2-binary. Pure Python (no C extension to compile against libpq/
+# libmysqlclient), so it installs the same way on Windows as everywhere
+# else - important since there's no build toolchain assumed on a Windows
+# dev machine.
+PyMySQL==1.1.1
 pydantic==2.13.4
 pydantic-settings==2.15.0
 python-jose[cryptography]==3.3.0

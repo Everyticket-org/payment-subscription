@@ -34,7 +34,8 @@ from app.plans.models import Plan
 from app.subscriptions import service as subscription_service
 from app.subscriptions.models import Subscription
 from app.webhooks import service as webhook_service
-from app.webhooks.payloads import onboarding_payload, renewed_payload
+from app.webhooks.field_catalog import sanitize_selection
+from app.webhooks.payloads import downgraded_payload, onboarding_payload, renewed_payload, upgraded_payload
 
 logger = logging.getLogger("subscription")
 
@@ -76,6 +77,35 @@ def create_payment_transaction(
     )
     db.add(transaction)
     db.flush()
+
+    # 2026-09-13 follow-up ("if price of plan is 0 then no need to redirect
+    # to payment gateway"): a genuinely free plan - price == 0, which
+    # covers every free-trial plan (is_trial) as well as any ordinary plan
+    # an admin has simply priced at 0 - has nothing to actually charge, so
+    # sending the customer through PayU's hosted checkout for a zero-value
+    # payment (or making them click "simulate success" against the mock
+    # gateway) is pure friction with no purpose. Skip the real gateway
+    # entirely and drive the transaction straight through the exact same
+    # process_gateway_result() SUCCESS path a real gateway callback would
+    # use - identical activation / invoice / webhook / confirmation-email
+    # behavior as any other successful payment, just with nothing to
+    # collect. This covers every caller of create_payment_transaction
+    # uniformly: a brand-new subscribe, an existing customer's auto-routed
+    # upgrade/downgrade, the customer-portal's explicit upgrade/downgrade,
+    # and renewing an (unusual, but possible) permanently-free plan.
+    if plan.price == 0:
+        zero_amount_result = GatewayPaymentResult(
+            gateway=gateway_code,
+            gateway_transaction_id=None,
+            status=PaymentStatus.SUCCESS.value,
+            amount=0.0,
+            currency=plan.currency,
+            raw_response={"auto_completed": True, "reason": "zero_amount_plan"},
+        )
+        updated_transaction, _invoice = process_gateway_result(
+            db, transaction=transaction, result=zero_amount_result
+        )
+        return updated_transaction
 
     # Redirect-based gateways (PayU) need customer/plan display details the
     # mock gateway ignores. This app doesn't collect a customer name field
@@ -212,6 +242,14 @@ def process_gateway_result(
         # Vishal's numbered webhook list and keep their existing, richer
         # payload shape unchanged.
         if application is not None:
+            # 2026-09-14 follow-up: whatever OPTIONAL extra fields this
+            # application's admin has selected per event (Configuration >
+            # Everyticket integration) - sanitized here (not just trusted
+            # as stored) so a selection saved against an older version of
+            # app.webhooks.field_catalog can never surface a field this
+            # catalog no longer knows about. See that module for exactly
+            # what's selectable per event and why.
+            field_selection = sanitize_selection(application.webhook_field_selection)
             if transaction.payment_type == PaymentType.NEW.value:
                 registration_entry = (
                     db.query(CustomerRegistrationData)
@@ -235,32 +273,74 @@ def process_gateway_result(
                         is_trial=subscription.is_trial,
                         expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
                         registration_data=(registration_entry.data if registration_entry else {}),
+                        currency=subscription.plan.currency,
+                        billing_interval=subscription.plan.billing_interval,
+                        billing_frequency=subscription.plan.billing_frequency,
+                        trial_period_days=subscription.plan.trial_period_days,
+                        starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                        customer_id=subscription.customer.customer_id,
+                        transaction_id=transaction.transaction_id,
+                        payment_type=transaction.payment_type,
+                        gateway=transaction.gateway,
+                        invoice_id=invoice.invoice_id if invoice else None,
+                        total_amount=float(invoice.total_amount) if invoice else None,
+                        tax_amount=float(invoice.tax_amount) if invoice else None,
+                        selected_fields=field_selection.get("subscription.activated"),
                     ),
                 )
                 if _queued_event is not None:
                     queued_webhook_event_ids.append(_queued_event.event_id)
             elif transaction.payment_type == PaymentType.RENEWAL.value:
-                # Trimmed to just subscription_id (2026-09 follow-up 3:
-                # "Renew, Expire, Cancel, Archived ... payload with
-                # subscription ID") - Everyticket looks up anything else
-                # about the subscription by this ID.
+                # Fixed shape trimmed to just subscription_id (2026-09
+                # follow-up 3: "Renew, Expire, Cancel, Archived ...
+                # payload with subscription ID") - Everyticket looks up
+                # anything else about the subscription by this ID. Every
+                # other value below is only an OPT-IN extra (2026-09-14
+                # follow-up) - none of it is sent unless this application
+                # has selected it.
                 _queued_event = webhook_service.queue_event(
                     db,
                     application=application,
                     event_type="subscription.renewed",
                     entity_type="subscription",
                     entity_id=subscription.subscription_id,
-                    payload=renewed_payload(subscription_id=subscription.subscription_id),
+                    payload=renewed_payload(
+                        subscription_id=subscription.subscription_id,
+                        plan_code=subscription.plan.plan_code,
+                        plan_name=subscription.plan.name,
+                        price=float(subscription.plan.price),
+                        currency=subscription.plan.currency,
+                        billing_interval=subscription.plan.billing_interval,
+                        billing_frequency=subscription.plan.billing_frequency,
+                        trial_period_days=subscription.plan.trial_period_days,
+                        is_trial=subscription.is_trial,
+                        starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                        expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                        customer_id=subscription.customer.customer_id,
+                        email=subscription.customer.email,
+                        phone_number=subscription.customer.mobile,
+                        transaction_id=transaction.transaction_id,
+                        payment_type=transaction.payment_type,
+                        amount=float(transaction.amount),
+                        invoice_id=invoice.invoice_id if invoice else None,
+                        total_amount=float(invoice.total_amount) if invoice else None,
+                        selected_fields=field_selection.get("subscription.renewed"),
+                    ),
                 )
                 if _queued_event is not None:
                     queued_webhook_event_ids.append(_queued_event.event_id)
             else:
-                # UPGRADE/DOWNGRADE - not part of Vishal's numbered webhook
-                # list, so these keep their existing, richer payload shape
-                # unchanged.
+                # UPGRADE/DOWNGRADE - fixed shape unchanged from before
+                # this event type was brought into the configurable-
+                # fields system (2026-09-14 follow-up); every other value
+                # below is only an OPT-IN extra.
                 webhook_event_type = {
                     PaymentType.UPGRADE.value: "subscription.upgraded",
                     PaymentType.DOWNGRADE.value: "subscription.downgraded",
+                }[transaction.payment_type]
+                payload_builder = {
+                    PaymentType.UPGRADE.value: upgraded_payload,
+                    PaymentType.DOWNGRADE.value: downgraded_payload,
                 }[transaction.payment_type]
                 _queued_event = webhook_service.queue_event(
                     db,
@@ -268,14 +348,31 @@ def process_gateway_result(
                     event_type=webhook_event_type,
                     entity_type="subscription",
                     entity_id=subscription.subscription_id,
-                    payload={
-                        "subscription_id": subscription.subscription_id,
-                        "customer_id": subscription.customer.customer_id,
-                        "plan_code": subscription.plan.plan_code,
-                        "status": subscription.status,
-                        "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
-                        "transaction_id": transaction.transaction_id,
-                    },
+                    payload=payload_builder(
+                        subscription_id=subscription.subscription_id,
+                        customer_id=subscription.customer.customer_id,
+                        plan_code=subscription.plan.plan_code,
+                        status=subscription.status,
+                        expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
+                        transaction_id=transaction.transaction_id,
+                        plan_name=subscription.plan.name,
+                        price=float(subscription.plan.price),
+                        currency=subscription.plan.currency,
+                        billing_interval=subscription.plan.billing_interval,
+                        billing_frequency=subscription.plan.billing_frequency,
+                        trial_period_days=subscription.plan.trial_period_days,
+                        is_trial=subscription.is_trial,
+                        starts_at=subscription.starts_at.isoformat() if subscription.starts_at else None,
+                        email=subscription.customer.email,
+                        phone_number=subscription.customer.mobile,
+                        payment_type=transaction.payment_type,
+                        gateway=transaction.gateway,
+                        amount=float(transaction.amount),
+                        invoice_id=invoice.invoice_id if invoice else None,
+                        total_amount=float(invoice.total_amount) if invoice else None,
+                        tax_amount=float(invoice.tax_amount) if invoice else None,
+                        selected_fields=field_selection.get(webhook_event_type),
+                    ),
                 )
                 if _queued_event is not None:
                     queued_webhook_event_ids.append(_queued_event.event_id)

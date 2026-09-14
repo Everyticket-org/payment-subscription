@@ -344,17 +344,15 @@ select:focus {
   flex-wrap: wrap;
 }
 
-.webhook-sample-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 10px 0 16px;
-}
-
 .webhook-sample {
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+  /* Sits in the right-hand column of .webhook-event-detail (a grid) - a
+     sample can be much taller than its checklist neighbor, so it needs
+     to be allowed to actually grow instead of a grid row clipping it to
+     the shorter column's height. */
+  align-self: start;
 }
 
 .webhook-sample-header {
@@ -377,6 +375,80 @@ select:focus {
   color: var(--text-h);
   overflow-x: auto;
   white-space: pre;
+  max-height: 420px;
+  overflow-y: auto;
+}
+
+.webhook-event-picker {
+  display: block;
+  max-width: 320px;
+  margin: 10px 0 12px;
+}
+
+.webhook-event-picker select {
+  width: 100%;
+}
+
+.webhook-event-detail {
+  /* 2026-09-14 follow-up 3: "Give dropdown - when eventtype selected, it
+     will show checklist left side and sample JSON at right side so we
+     can reduce overall space" - checklist and sample sit side by side
+     on wide screens and stack (checklist first) on narrow ones, via the
+     same auto-fit/minmax technique used elsewhere on this page rather
+     than a fixed breakpoint. */
+  display: grid;
+  /* min(280px, 100%) - not a bare 280px - so this can never force the
+     grid wider than its actual container (the admin layout's content
+     area is narrower than the raw viewport because of its sidebar);
+     without the min() a narrow container would overflow/clip instead of
+     collapsing to one column. */
+  grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr));
+  gap: 16px;
+  align-items: start;
+  margin: 10px 0 16px;
+}
+
+.webhook-field-event {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.webhook-field-checklist {
+  /* Two columns (checkbox, then its label text) with one field per row,
+     rather than a wrapping tag-list - keeps every checkbox lined up in
+     the same column regardless of label length. Always-sent fields
+     (disabled, pre-checked) are listed first, then the selectable ones. */
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  row-gap: 8px;
+  column-gap: 8px;
+  padding: 10px 12px;
+}
+
+.webhook-field-checkbox {
+  /* No box of its own - promotes its two children (input, span)
+     straight into the parent grid so each stays in its own column. */
+  display: contents;
+}
+
+.webhook-field-checkbox input {
+  cursor: pointer;
+}
+
+.webhook-field-checkbox span {
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.webhook-field-checkbox-fixed input {
+  cursor: default;
+}
+
+.webhook-field-checkbox-fixed span {
+  cursor: default;
+  opacity: 0.75;
 }
 
 .hint {
@@ -517,6 +589,33 @@ select:focus {
 .subscribe-plans-panel h2 {
   font-size: 15px;
   margin-bottom: 4px;
+}
+
+.subscribe-selected-plan {
+  padding-bottom: 18px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subscribe-selected-plan-eyebrow {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  opacity: 0.7;
+  margin: 0 0 6px;
+}
+
+.subscribe-selected-plan-name {
+  font-size: 19px;
+  font-weight: 800;
+  color: var(--text-h);
+  margin: 0 0 6px;
+}
+
+.subscribe-selected-plan .plan-price {
+  font-size: 20px;
 }
 
 .subscribe-plans-row {
@@ -977,6 +1076,21 @@ select:focus {
 
 .inline-form label {
   min-width: 140px;
+}
+
+/* A single master on/off switch that sits above (and gates) a form
+   section, e.g. "Enable Notifications?" - a horizontal checkbox+label
+   row rather than the app's default stacked label-above-input layout. */
+.toggle-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
 }
 
 textarea {

@@ -13,8 +13,19 @@
  * redirect round trip, so "Go to my account" works immediately. A brand
  * new subscriber has no token yet at this point - only the OTP login flow
  * issues one - so they're pointed at /login instead.
+ *
+ * 2026-09-13 follow-up ("show message '...you will get your credentials
+ * in sometime' for first time subscription... This message also should
+ * be configurable"): the redirect now also carries ?payment_type=
+ * NEW|RENEWAL|UPGRADE|DOWNGRADE (app/api/v1/payment.py) - the
+ * configurable message is fetched and shown right after the Transaction
+ * line, but ONLY when payment_type is exactly "NEW", so an existing
+ * customer renewing or changing plans (they already have credentials)
+ * never sees it.
  */
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { getPublicMessages } from "../../api/endpoints";
 import { useAuth } from "../../context/AuthContext";
 
 export function PaymentReturnPage() {
@@ -22,10 +33,20 @@ export function PaymentReturnPage() {
   const { customerToken } = useAuth();
   const status = params.get("status");
   const transactionId = params.get("transaction_id");
+  const paymentType = params.get("payment_type");
   const reason = params.get("reason");
+  const [postSubscriptionMessage, setPostSubscriptionMessage] = useState<string | null>(null);
 
   const succeeded = status === "success";
   const pending = status === "pending";
+  const isNewSubscription = paymentType === "NEW";
+
+  useEffect(() => {
+    if (!succeeded || !isNewSubscription) return;
+    getPublicMessages()
+      .then((msgs) => setPostSubscriptionMessage(msgs.post_subscription_message))
+      .catch(() => {});
+  }, [succeeded, isNewSubscription]);
 
   return (
     <section>
@@ -39,6 +60,7 @@ export function PaymentReturnPage() {
                 Transaction: <code>{transactionId}</code>
               </p>
             )}
+            {isNewSubscription && postSubscriptionMessage && <p>{postSubscriptionMessage}</p>}
             {customerToken ? (
               <Link className="button button-primary" to="/portal">
                 Go to my account

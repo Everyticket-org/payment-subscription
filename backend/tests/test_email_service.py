@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from app.core.config import get_settings
 from app.core.enums import NotificationStatus
 from app.notifications.email import service as email_service
 from app.notifications.email.providers.smtp import provider as smtp_provider
@@ -111,6 +112,35 @@ def test_send_templated_email_with_no_recipient_is_a_noop(db_session):
     assert db_session.query(NotificationLog).count() == 0
 
 
+def test_send_templated_email_skips_when_application_has_notifications_disabled(db_session):
+    """2026-09-13 follow-up: "Enable Notifications?" under SMTP
+    configuration - when off, the send must be skipped BEFORE the
+    template lookup/render/SMTP call (none of that ran here - notably,
+    no fake SMTP transport is installed in this test at all, so if the
+    guard were missing or misplaced this test would fail with a real
+    connection error instead of the SKIPPED assertion below), and logged
+    as SKIPPED rather than FAILED - this isn't a delivery error, it's the
+    admin's own deliberate choice."""
+    from app.applications.models import Application
+
+    db_session.add(
+        NotificationTemplate(
+            template_code="greet3", channel="email", subject="Hi", body_html="<p>Hi</p>", active=True,
+        )
+    )
+    db_session.commit()
+
+    application = Application(code="TESTAPP", name="Test App", notifications_enabled=False)
+
+    result = email_service.send_templated_email(
+        db_session, template_code="greet3", to="off@example.com", context={}, application=application,
+    )
+    assert result is False
+    log = db_session.query(NotificationLog).one()
+    assert log.status == NotificationStatus.SKIPPED.value
+    assert "disabled" in log.provider_response.lower()
+
+
 def test_identify_sends_real_otp_email(client, seeded_db, fake_smtp_success):
     client.post(
         "/api/v1/public/plans/basic/subscribe",
@@ -156,6 +186,113 @@ def test_payment_failure_sends_failure_email(client, seeded_db, fake_smtp_succes
 
     log = seeded_db.query(NotificationLog).filter(NotificationLog.template_code == "payment_failed").one()
     assert log.status == NotificationStatus.SENT.value
+
+
+def test_smtp_provider_uses_implicit_ssl_for_port_465(monkeypatch):
+    """2026-09-13 bugfix ("Test email not going even after configured
+    correctly SMTP" -> provider_response "timed out"): port 465 is
+    implicit-SSL (Gmail, Office365, and most hosting providers' "SSL"
+    mode) - the server expects a TLS handshake immediately on connect and
+    never speaks in plaintext first. Opening it with plain smtplib.SMTP
+    (even with STARTTLS) just sits waiting for a plaintext banner that
+    never comes, until the socket times out - exactly this symptom. Port
+    465 must go through smtplib.SMTP_SSL instead, regardless of the
+    use_tls toggle; every other port keeps using plain smtplib.SMTP."""
+    plain_smtp_calls = []
+    ssl_smtp_calls = []
+
+    class _FakePlainSMTP:
+        def __init__(self, host, port, timeout=10):
+            plain_smtp_calls.append((host, port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def sendmail(self, *args, **kwargs):
+            pass
+
+    class _FakeSSLSMTP:
+        def __init__(self, host, port, timeout=10):
+            ssl_smtp_calls.append((host, port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def login(self, user, password):
+            pass
+
+        def sendmail(self, *args, **kwargs):
+            pass
+
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP", _FakePlainSMTP)
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP_SSL", _FakeSSLSMTP)
+
+    settings = get_settings().model_copy(
+        update={
+            "SMTP_HOST": "smtp.configured-by-admin.example.com",
+            "SMTP_PORT": 465,
+            "SMTP_USER": "configured-admin-user",
+            "SMTP_PASSWORD": "configured-admin-password",
+        }
+    )
+
+    smtp_provider.send(settings, to="x@example.com", subject="hi", html_body="<p>hi</p>")
+
+    assert ssl_smtp_calls == [("smtp.configured-by-admin.example.com", 465)]
+    assert plain_smtp_calls == []
+
+
+def test_smtp_provider_uses_plain_smtp_for_non_ssl_ports(monkeypatch):
+    """The port-465-implicit-SSL special case above must not change
+    behavior for every other port (587 STARTTLS, 25 plain, the 1025
+    MailHog/Mailpit dev default, ...)."""
+    plain_smtp_calls = []
+    ssl_smtp_calls = []
+
+    class _FakePlainSMTP:
+        def __init__(self, host, port, timeout=10):
+            plain_smtp_calls.append((host, port))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def starttls(self):
+            pass
+
+        def login(self, user, password):
+            pass
+
+        def sendmail(self, *args, **kwargs):
+            pass
+
+    class _FakeSSLSMTP:
+        def __init__(self, host, port, timeout=10):
+            ssl_smtp_calls.append((host, port))
+
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP", _FakePlainSMTP)
+    monkeypatch.setattr(smtp_provider.smtplib, "SMTP_SSL", _FakeSSLSMTP)
+
+    settings = get_settings().model_copy(update={"SMTP_HOST": "smtp.example.com", "SMTP_PORT": 587, "SMTP_USE_TLS": True})
+
+    smtp_provider.send(settings, to="x@example.com", subject="hi", html_body="<p>hi</p>")
+
+    assert plain_smtp_calls == [("smtp.example.com", 587)]
+    assert ssl_smtp_calls == []
 
 
 def test_renewal_reminder_sent_once_per_cycle(seeded_db, fake_smtp_success):

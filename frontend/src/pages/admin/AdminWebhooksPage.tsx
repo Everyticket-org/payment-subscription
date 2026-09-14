@@ -37,27 +37,33 @@
  * /retry endpoint (reset to PENDING only, no HTTP call) still exists on
  * the backend but is no longer used by this screen.
  *
- * Per Vishal's latest follow-up ("Log webhook call time and response
- * completion time"): every delivery row and the Verify connectivity
- * result now also show when the outbound HTTP call started
- * (attempt_started_at / started_at) and how long it took
+ * Per Vishal's follow-up ("Log webhook call time and response
+ * completion time"): every delivery row (and, at the time, the
+ * Connectivity check panel below) also showed when the outbound HTTP
+ * call started (attempt_started_at / started_at) and how long it took
  * (duration_ms / elapsed_ms) alongside the existing "Last attempt"
- * completion timestamp - a new "Duration" column on the Deliveries
- * table, and a "Call timing" block in the expanded delivery detail and
- * the Verify connectivity result panel. */
+ * completion timestamp - a "Duration" column on the Deliveries table,
+ * and a "Call timing" block in the expanded delivery detail.
+ *
+ * 2026-09-14 follow-up ("Remove section of Connectivity check"): the
+ * standalone "Connectivity check" panel (its ad-hoc "Verify
+ * connectivity" button and result readout) has been removed from this
+ * page entirely, per Vishal's explicit request. The Testing tools page
+ * (/admin/testing) already has its own ad-hoc "Send test webhook"
+ * action covering the same need, and every real delivery's Attempt
+ * button (below) still gives an immediate, Celery-independent result
+ * for one specific queued delivery. The backend endpoint this button
+ * called (POST /api/v1/admin/webhooks/verify) and its API client
+ * function (adminVerifyWebhookConnectivity) were left in place - only
+ * this page's UI section was removed. */
 import { Fragment, useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
-import {
-  adminAttemptWebhookDelivery,
-  adminListWebhookDeliveries,
-  adminListWebhookEvents,
-  adminVerifyWebhookConnectivity,
-} from "../../api/endpoints";
+import { adminAttemptWebhookDelivery, adminListWebhookDeliveries, adminListWebhookEvents } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { TestWebhookSendResult, WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
+import type { WebhookDeliveryOut, WebhookEventOut } from "../../api/types";
 
 function formatHeaders(headers: Record<string, string> | null | undefined): string {
   if (!headers || Object.keys(headers).length === 0) return "(none captured)";
@@ -123,8 +129,6 @@ export function AdminWebhooksPage() {
   const [attemptingId, setAttemptingId] = useState<number | null>(null);
   const [expandedDeliveryId, setExpandedDeliveryId] = useState<number | null>(null);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
-  const [verifying, setVerifying] = useState(false);
-  const [verifyResult, setVerifyResult] = useState<TestWebhookSendResult | null>(null);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
@@ -161,27 +165,6 @@ export function AdminWebhooksPage() {
     }
   }
 
-  async function handleVerify() {
-    if (!adminToken) return;
-    setVerifying(true);
-    setVerifyResult(null);
-    try {
-      const result = await adminVerifyWebhookConnectivity(adminToken);
-      setVerifyResult(result);
-      if (result.sent) {
-        toast.success(`Reached destination (HTTP ${result.http_status})`);
-      } else {
-        toast.error(`Could not reach destination${result.error ? `: ${result.error}` : ""}`);
-      }
-      reload();
-    } catch (err) {
-      setError(err);
-      toast.error(err);
-    } finally {
-      setVerifying(false);
-    }
-  }
-
   return (
     <section>
       <h1>Webhook logs</h1>
@@ -191,47 +174,6 @@ export function AdminWebhooksPage() {
       </p>
 
       <ErrorBanner error={error} />
-
-      <div className="admin-panel">
-        <h2>Connectivity check</h2>
-        <p className="hint">
-          Sends a small, harmless signed ping to the currently-configured webhook destination right now and reports
-          back immediately - useful when deliveries aren't showing up and you want to know if the destination is
-          even reachable. The attempt is also recorded below like any other delivery.
-        </p>
-        <button className="button button-secondary" disabled={verifying} onClick={handleVerify}>
-          {verifying ? "Verifying..." : "Verify connectivity"}
-        </button>
-        {verifyResult && (
-          <div style={{ marginTop: 12 }}>
-            <p>
-              {verifyResult.sent ? (
-                <span className="field-hint-ok">Reached - HTTP {verifyResult.http_status}</span>
-              ) : (
-                <span className="field-hint-error">Not reached{verifyResult.error ? `: ${verifyResult.error}` : ""}</span>
-              )}
-            </p>
-            <p className="hint" style={{ marginTop: -8 }}>
-              {`Started ${verifyResult.started_at ? new Date(verifyResult.started_at).toLocaleString() : "-"}, took ${formatDuration(
-                verifyResult.elapsed_ms,
-              )}`}
-            </p>
-            <pre
-              style={{
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                overflowX: "auto",
-                fontSize: 12,
-                margin: 0,
-              }}
-            >
-              {`Request headers:\n${formatHeaders(verifyResult.request?.headers)}\n\nResponse headers:\n${formatHeaders(
-                verifyResult.response_headers,
-              )}`}
-            </pre>
-          </div>
-        )}
-      </div>
 
       <div className="admin-panel">
         <h2>Deliveries</h2>

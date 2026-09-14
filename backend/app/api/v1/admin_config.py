@@ -5,8 +5,6 @@ configuration keep their own existing endpoints/enforcement, unchanged -
 see app.applications.config_schemas' module docstring for the full
 rationale. Every mutation is audit-logged, secrets are masked on read.
 """
-from datetime import datetime, timedelta, timezone
-
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
@@ -19,6 +17,7 @@ from app.applications.config_schemas import (
     ApplicationSubscriptionRulesUpdate,
     EveryticketIntegrationOut,
     EveryticketIntegrationUpdate,
+    EveryticketWebhookFieldCatalogEntry,
     EveryticketWebhookSampleOut,
     NotificationConfigOut,
     NotificationConfigUpdate,
@@ -31,19 +30,11 @@ from app.auth.deps import require_permission
 from app.auth.models import AdminUser
 from app.auth.security_config import SecurityConfigOut, SecurityConfigUpdate, get_security_config, set_security_config
 from app.core.config import get_settings
-from app.forms.models import RegistrationFormField
 from app.payments.gateway_config import get_payu_credentials_status, set_payu_credentials
 from app.payments.gateways.registry import list_gateway_codes
-from app.plans.models import Plan
 from app.plans.sanitize import sanitize_description as _sanitize_html
-from app.webhooks.payloads import (
-    archive_payload,
-    cancelled_payload,
-    expiry_payload,
-    onboarding_payload,
-    renewed_payload,
-)
-from app.webhooks.service import build_wire_body
+from app.webhooks.field_catalog import AVAILABLE_FIELDS, FIELD_LABELS, FIXED_FIELDS, sanitize_selection
+from app.webhooks.payloads import build_webhook_samples
 
 router = APIRouter(prefix="/config", tags=["admin-config"])
 
@@ -64,108 +55,32 @@ def _payment_gateway_out(db: Session, application: Application) -> PaymentGatewa
     )
 
 
-def _sample_value_for_field(field: RegistrationFormField) -> object:
-    """Illustrative, obviously-fake example value for one registration
-    field, type-appropriate so the onboarding sample below reads as real
-    data rather than a wall of "string" placeholders."""
-    if field.options:
-        first = field.options[0]
-        return first.get("value", first) if isinstance(first, dict) else first
-    if field.field_type in ("number", "integer"):
-        return 42
-    if field.field_type in ("checkbox", "boolean"):
-        return True
-    if field.field_type == "email":
-        return "sample@example.com"
-    if field.placeholder:
-        return field.placeholder
-    return f"Sample {field.label}"
+def _webhook_field_catalog_out() -> dict[str, list[EveryticketWebhookFieldCatalogEntry]]:
+    """Every OPTIONAL field selectable per event, for the Configuration
+    screen's per-event checklist (2026-09-14 follow-up) - straight from
+    app.webhooks.field_catalog, so this can never drift from what the
+    payload builders (app.webhooks.payloads) actually honor."""
+    return {
+        event_type: [EveryticketWebhookFieldCatalogEntry(field=f, label=FIELD_LABELS[f]) for f in fields]
+        for event_type, fields in AVAILABLE_FIELDS.items()
+    }
 
 
-def _build_webhook_samples(db: Session, application: Application) -> list[EveryticketWebhookSampleOut]:
-    """Read-only preview of the exact JSON each of the five real
-    outbound webhook events sends (2026-09 follow-up: "Webhook for
-    everyticket app are as below: 1) onboarding... 2) status inactive
-    when plan expires... 3) delete/archive when user do not renew for x
-    days"; follow-up 3: "Add one more webhook for renew"). Built from
-    app.webhooks.payloads - the SAME functions that shape a real
-    delivery - so this documentation can never quietly drift from what's
-    actually sent. Registration-field keys are pulled from this
-    application's real, currently-configured form (falling back to two
-    generic example fields if none are configured yet), and plan_code/
-    name/price come from a real active plan when one exists, so the
-    onboarding sample reflects this application's actual setup rather
-    than being entirely made up. The other four events are trimmed to
-    just subscription_id (2026-09 follow-up 3), so there is nothing
-    application-specific left to reflect for them."""
-    now = datetime.now(timezone.utc)
-    fields = (
-        db.query(RegistrationFormField)
-        .filter(RegistrationFormField.application_id == application.id, RegistrationFormField.active.is_(True))
-        .order_by(RegistrationFormField.display_order)
-        .all()
-    )
-    registration_data = (
-        {f.field_key: _sample_value_for_field(f) for f in fields}
-        if fields
-        else {"organization_name": "Sample Museum", "contact_person": "Jane Doe"}
-    )
-
-    plan = (
-        db.query(Plan)
-        .filter(Plan.application_id == application.id, Plan.active.is_(True), Plan.is_trial.is_(False))
-        .order_by(Plan.price)
-        .first()
-    )
-    plan_code = plan.plan_code if plan else "PRO"
-    plan_name = plan.name if plan else "Pro Plan"
-    price = float(plan.price) if plan else 999.0
-
-    sample_subscription_id = "SUB-000123"
-
-    onboarding = onboarding_payload(
-        subscription_id=sample_subscription_id,
-        email="customer@example.com",
-        mobile="9999999999",
-        plan_code=plan_code,
-        plan_name=plan_name,
-        price=price,
-        is_trial=False,
-        expires_at=(now + timedelta(days=30)).isoformat(),
-        registration_data=registration_data,
-    )
-    renewed = renewed_payload(subscription_id=sample_subscription_id)
-    expired = expiry_payload(subscription_id=sample_subscription_id)
-    cancelled = cancelled_payload(subscription_id=sample_subscription_id)
-    archived = archive_payload(subscription_id=sample_subscription_id)
-
-    # Wrapped via the SAME build_wire_body() a real delivery uses (see
-    # app.webhooks.service._attempt_one) - just {event_type, payload}, so
-    # the preview below is the literal JSON body Everyticket's endpoint
-    # would receive, not just the inner event data.
-    events = [
-        ("subscription.activated", onboarding, "Onboarding: fires once, the first time a new customer's payment succeeds."),
-        ("subscription.renewed", renewed, "Renew: fires once an existing subscription's renewal payment succeeds."),
-        ("subscription.expired", expired, "Status inactive: fires once when an active subscription's plan expires unrenewed."),
-        ("subscription.cancelled", cancelled, "Cancel: fires once a customer cancels their subscription immediately."),
-        (
-            "subscription.archived",
-            archived,
-            "Delete/archive: fires once an expired subscription has stayed unrenewed past the Archive after "
-            "threshold below (disabled until that field is set).",
-        ),
-    ]
-    return [
-        EveryticketWebhookSampleOut(
-            event=event_type,
-            trigger=trigger,
-            payload=build_wire_body(event_type=event_type, payload=event_payload),
-        )
-        for event_type, event_payload, trigger in events
-    ]
+def _webhook_fixed_fields_out() -> dict[str, list[EveryticketWebhookFieldCatalogEntry]]:
+    """Every field an event ALWAYS sends, display-only (2026-09-14
+    follow-up 2: "activated does not have plan name, code, price... same
+    for renewed event there is no plan code, please keep consistency") -
+    shown alongside the optional catalog above so every event's full
+    field picture is visible at a glance, not just its selectable
+    extras."""
+    return {
+        event_type: [EveryticketWebhookFieldCatalogEntry(field=f, label=FIELD_LABELS[f]) for f in fields]
+        for event_type, fields in FIXED_FIELDS.items()
+    }
 
 
 def _integration_out(db: Session, application: Application) -> EveryticketIntegrationOut:
+    api_credentials = application.api_credentials or {}
     return EveryticketIntegrationOut(
         secret_key_is_set=bool(application.webhook_secret),
         webhook_url=application.webhook_url,
@@ -175,12 +90,36 @@ def _integration_out(db: Session, application: Application) -> EveryticketIntegr
         escalation_email_subject=application.webhook_escalation_email_subject,
         escalation_email_body=application.webhook_escalation_email_body,
         archive_after_days=application.archive_after_days,
-        webhook_samples=_build_webhook_samples(db, application),
+        # 2026-09-13: moved to app.webhooks.payloads.build_webhook_samples
+        # so the admin Testing page's "Test Everyticket webhook" event
+        # dropdown can reuse the exact same sample bodies.
+        webhook_samples=build_webhook_samples(db, application),
+        # 2026-09-14 follow-up 3: the same samples again, but as if every
+        # optional field for every event were selected - the frontend
+        # filters this down to whatever's currently ticked (even before
+        # Save) for an instant live preview, see build_webhook_samples'
+        # own docstring for why the frontend never computes a sample
+        # VALUE itself, only which of these keys to show.
+        webhook_samples_all_fields=build_webhook_samples(
+            db, application, selection_override={event_type: fields for event_type, fields in AVAILABLE_FIELDS.items()}
+        ),
+        # 2026-09-14 follow-up: the full optional catalog (for rendering
+        # the checklist) and this application's current, sanitized
+        # selection; 2026-09-14 follow-up 2: the complementary always-
+        # sent field list per event, so nothing looks "missing".
+        webhook_field_catalog=_webhook_field_catalog_out(),
+        webhook_fixed_fields=_webhook_fixed_fields_out(),
+        webhook_field_selection=sanitize_selection(application.webhook_field_selection),
+        # 2026-09-13 follow-up 3: real Everyticket -> this app API
+        # credentials, see app.api.v1.integration.
+        api_key=api_credentials.get("api_key"),
+        api_secret_is_set=bool(api_credentials.get("api_secret")),
     )
 
 
 def _notification_out(application: Application) -> NotificationConfigOut:
     return NotificationConfigOut(
+        notifications_enabled=application.notifications_enabled,
         smtp_host=application.smtp_host,
         smtp_port=application.smtp_port,
         smtp_username=application.smtp_username,
@@ -282,8 +221,11 @@ def update_integration_config(
     next webhook delivery attempt (app.webhooks.service). None on a
     field = leave the currently-stored value unchanged (so the frontend
     never has to round-trip the secret key) - pass "" to explicitly
-    clear secret_key/webhook_url; retry_limit/escalation_* are replaced
-    outright when given (they aren't secrets). The custom key/value
+    clear secret_key/webhook_url; retry_limit/escalation_*/
+    webhook_field_selection are replaced outright when given (they
+    aren't secrets - webhook_field_selection is sanitized against
+    app.webhooks.field_catalog before being stored, so it can be trusted
+    read back out without re-sanitizing again). The custom key/value
     extra-parameters editor that used to live on this endpoint was
     removed (2026-09 follow-up 3: "Remove feature for parameters
     (key,value) from this section") - webhook_extra_params is no longer
@@ -296,6 +238,31 @@ def update_integration_config(
     application.webhook_escalation_email_subject = body.escalation_email_subject or None
     application.webhook_escalation_email_body = _sanitize_html(body.escalation_email_body)
     application.archive_after_days = body.archive_after_days
+    # 2026-09-14 follow-up: sanitized before storage (not just on read) so
+    # a request built against a stale/wrong catalog can never write an
+    # event type or field name app.webhooks.payloads doesn't recognize -
+    # see app.webhooks.field_catalog.sanitize_selection.
+    application.webhook_field_selection = sanitize_selection(body.webhook_field_selection) or None
+
+    # Everyticket -> this app API credentials (api_key/api_secret), same
+    # None=unchanged/""=clear convention as secret_key above. Stored in
+    # the existing api_credentials JSON column - reassigned as a new dict
+    # rather than mutated in place so SQLAlchemy's change-tracking on a
+    # JSON column actually sees the update.
+    if body.api_key is not None or body.api_secret is not None:
+        creds = dict(application.api_credentials or {})
+        if body.api_key is not None:
+            if body.api_key:
+                creds["api_key"] = body.api_key
+            else:
+                creds.pop("api_key", None)
+        if body.api_secret is not None:
+            if body.api_secret:
+                creds["api_secret"] = body.api_secret
+            else:
+                creds.pop("api_secret", None)
+        application.api_credentials = creds or None
+
     db.add(application)
     audit_service.record(
         db, actor=admin.email, action="APPLICATION_CONFIG_UPDATED", entity_type="application",
@@ -305,6 +272,8 @@ def update_integration_config(
             "secret_key_changed": body.secret_key is not None,
             "retry_limit": body.retry_limit, "escalation_emails": body.escalation_emails,
             "archive_after_days": body.archive_after_days,
+            "webhook_field_selection": application.webhook_field_selection,
+            "api_key_changed": body.api_key is not None, "api_secret_changed": body.api_secret is not None,
         },
         ip_address=_client_ip(request),
     )
@@ -324,7 +293,11 @@ def update_notification_config(
     """Every field here overrides the global SMTP_*/EMAIL_* env settings
     for THIS application's outbound email only, falling back to the
     global defaults for any field left unset - see
-    app.notifications.email.service._resolve_settings()."""
+    app.notifications.email.service._resolve_settings(). notifications_enabled
+    is the one exception to that "override, else fall back" pattern: it's
+    a hard stop checked directly in send_templated_email()/send_direct_email()
+    before anything else, not a settings override."""
+    application.notifications_enabled = body.notifications_enabled
     application.smtp_host = body.smtp_host or None
     application.smtp_port = body.smtp_port
     application.smtp_username = body.smtp_username or None
@@ -340,7 +313,8 @@ def update_notification_config(
         db, actor=admin.email, action="APPLICATION_CONFIG_UPDATED", entity_type="application",
         entity_id=application.code,
         new_value={
-            "group": "notification", "smtp_host": body.smtp_host, "smtp_port": body.smtp_port,
+            "group": "notification", "notifications_enabled": body.notifications_enabled,
+            "smtp_host": body.smtp_host, "smtp_port": body.smtp_port,
             "smtp_password_changed": body.smtp_password is not None,
             "email_sender_name": body.email_sender_name, "email_sender_address": body.email_sender_address,
         },
