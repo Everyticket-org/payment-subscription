@@ -1100,6 +1100,24 @@ select:focus {
   align-items: start;
 }
 
+/* 2026-09-14 follow-up ("Make full width GRID for Subscription,
+   payments and invoices sections", admin Customer detail page only):
+   the shared .detail-grid above is also used by the customer portal
+   (PortalPage.tsx) and its auto-fit sizing is left alone there - this
+   modifier is additive (used alongside .detail-grid, never in place of
+   it) so it only changes the admin Customer detail page's three cards,
+   forcing them into one always-3-equal-column row that spans the full
+   panel width instead of auto-fit's width-dependent column count. */
+.detail-grid-3col {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 860px) {
+  .detail-grid-3col {
+    grid-template-columns: 1fr;
+  }
+}
+
 .breadcrumb {
   font-size: 13px;
   margin-bottom: 6px;
@@ -1128,8 +1146,14 @@ select:focus {
    configuration"): a themed fieldset/legend, replacing the browser's
    plain default fieldset border, used to group related fields within an
    admin-panel card - Payment Gateway's PayU credential groups, and
-   Communication's "SMTP transport" / "Sender identity" groups below. */
-.admin-panel fieldset {
+   Communication's "SMTP transport" / "Sender identity" groups below.
+   2026-09-14 follow-up ("proper design for add/edit plan, registration
+   form"): also scoped to .modal-body, since those two forms live inside
+   a Modal (.modal-panel > .modal-body), not directly under .admin-panel -
+   an <Edit>/Add-plan or Edit-field popup's fieldsets need the same
+   themed look. */
+.admin-panel fieldset,
+.modal-body fieldset {
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 14px 18px 18px;
@@ -1142,7 +1166,8 @@ select:focus {
   min-width: 0;
 }
 
-.admin-panel legend {
+.admin-panel legend,
+.modal-body legend {
   padding: 0 8px;
   font-size: 12px;
   font-weight: 700;
@@ -1214,9 +1239,20 @@ select:focus {
 /* The row wrapping a .toggle-switch plus its label text. The master
    "Enable Notifications?" switch gets the full highlighted-card
    treatment (.toggle-switch-row); a smaller inline one like "Use TLS"
-   stays compact, no card background (.toggle-switch-row-compact). */
+   stays compact, no card background (.toggle-switch-row-compact).
+   flex-direction is set explicitly (2026-09-14 follow-up, caught while
+   adding the Required/Reject-duplicate-values switches on the
+   Registration form) because this is a <label> element, and the bare
+   `label` selector below sets flex-direction: column for the normal
+   text-above-input field pattern - neither of these two classes
+   overrode that property, so every toggle switch on the site (this one
+   included, plus Plan type, Use TLS, Live mode, Enable Notifications?)
+   was quietly stacking its pill above its text and centering both,
+   instead of sitting side by side - easy to miss at a narrow/auto
+   width, glaring once a switch stretches to fill a wide container. */
 .toggle-switch-row {
   display: flex;
+  flex-direction: row;
   align-items: flex-start;
   gap: 12px;
   cursor: pointer;
@@ -1232,11 +1268,57 @@ select:focus {
 
 .toggle-switch-row-compact {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   gap: 8px;
   padding: 0;
   background: none;
   border: none;
+}
+
+/* 2026-09-14 follow-up ("use radio at places required like Free trial
+   plan etc"): a small set of mutually exclusive named options (Paid vs
+   Free trial plan, Month vs Year billing, Required vs Optional, Allow
+   vs Reject duplicate values) reads better as a row of selectable cards
+   than a single checkbox or an always-two-item <select> - each option
+   is its own bordered card, and the one currently checked is
+   highlighted via :has(), so no extra JS-tracked "selected" class is
+   needed even for the plain uncontrolled radios (Required, Duplicate
+   check) that don't otherwise keep React state. */
+.radio-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.radio-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.radio-option input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 2px 0 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.radio-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--surface-alt);
+}
+
+.radio-option .hint {
+  margin: 2px 0 0;
 }
 
 textarea {

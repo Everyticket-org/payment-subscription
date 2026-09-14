@@ -252,12 +252,24 @@ function PlanFormModal({
   const { adminToken } = useAuth();
   const toast = useToast();
   const [error, setError] = useState<unknown>(null);
-  // is_trial is tracked as controlled state (unlike the rest of this
-  // uncontrolled form) because checking it needs to immediately disable/
-  // zero the Price field and reveal the trial-duration field - free trial
-  // is its own distinct plan (price=0, configurable trial_period_days),
-  // not an attribute layered onto a normal-priced plan.
+  // is_trial is tracked as controlled state (unlike most of the rest of
+  // this form) because choosing it needs to immediately swap the
+  // Pricing & billing fieldset for the Trial settings one - free trial
+  // is its own distinct plan (price=0, day-based billing), not an
+  // attribute layered on top of a normal-priced plan. Now a two-option
+  // radio (2026-09-14 follow-up: "use radio at places required like Free
+  // trial plan etc") instead of a bare checkbox, so it reads as "which
+  // kind of plan is this" rather than a toggle-able feature flag.
   const [isTrial, setIsTrial] = useState<boolean>(state?.mode === "edit" ? state.plan.is_trial : false);
+  // billing_interval only has two possible values, so it's a radio too
+  // (same follow-up) rather than an always-two-item <select> - made
+  // controlled state for the same reason: it's hidden entirely (not just
+  // disabled) whenever isTrial is on, and needs to be read back
+  // explicitly in handleSubmit rather than trusted off a FormData entry
+  // that might not even be in the DOM at submit time.
+  const [billingInterval, setBillingInterval] = useState<"month" | "year">(
+    state?.mode === "edit" ? (state.plan.billing_interval as "month" | "year") : "month",
+  );
   // The rich text editor is uncontrolled (see RichTextEditor's own
   // docstring) and re-seeded from `defaultValue` only when its key
   // changes, so switching between "create" and a specific plan's "edit"
@@ -267,6 +279,7 @@ function PlanFormModal({
   useEffect(() => {
     setError(null);
     setIsTrial(state?.mode === "edit" ? state.plan.is_trial : false);
+    setBillingInterval(state?.mode === "edit" ? (state.plan.billing_interval as "month" | "year") : "month");
   }, [state]);
 
   if (!state) return null;
@@ -294,7 +307,7 @@ function PlanFormModal({
             name: String(form.get("name")),
             description,
             price,
-            billing_interval: (form.get("billing_interval") as "month" | "year") || "month",
+            billing_interval: billingInterval,
             billing_frequency: Number(form.get("billing_frequency") || 1),
             is_trial: isTrial,
             trial_period_days: trialPeriodDays,
@@ -310,7 +323,7 @@ function PlanFormModal({
             description,
             price,
             currency: String(form.get("currency") || "INR"),
-            billing_interval: (form.get("billing_interval") as "month" | "year") || "month",
+            billing_interval: billingInterval,
             billing_frequency: Number(form.get("billing_frequency") || 1),
             is_trial: isTrial,
             trial_period_days: trialPeriodDays,
@@ -329,85 +342,113 @@ function PlanFormModal({
   return (
     <Modal open title={isEdit ? `Edit ${plan!.name}` : "New plan"} onClose={onClose} wide>
       <ErrorBanner error={error} />
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-        <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
-          {!isEdit && (
+      {/* 2026-09-14 follow-up ("make proper design for add/edit plan...
+          use radio at places required like Free trial plan etc... Orders
+          of fields should be relevant"): fields are now grouped into
+          themed fieldsets and reordered so "what kind of plan is this"
+          comes right before the pricing fields it determines the
+          relevance of.
+
+          2026-09-14 follow-up #2 ("Take Plan type as label under pricing
+          and billing section" / "Give only Switch for Free Trial"): Plan
+          type is no longer its own fieldset with a Paid/Free-trial radio
+          pair - it's now a plain field label ("Plan type") plus a single
+          toggle switch ("Free trial plan") living at the top of the one
+          "Pricing & billing" fieldset, which then shows either the
+          trial-duration field or the price/interval fields right below
+          it depending on the switch.
+
+          2026-09-14 follow-up #3 ("Subscription cycle - Monthly and
+          Yearly should not be radio buttons, keep dropdown for that"):
+          billing interval reverted from the two-option radio group back
+          to a <select> ("Subscription cycle": Monthly/Yearly), still
+          controlled state (billingInterval/setBillingInterval) since it
+          only exists in the DOM at all when the Free trial switch is
+          off. */}
+      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <fieldset>
+          <legend>Plan details</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            {!isEdit && (
+              <label>
+                Plan code
+                <input name="plan_code" required placeholder="STARTER" />
+              </label>
+            )}
             <label>
-              Plan code
-              <input name="plan_code" required placeholder="STARTER" />
+              Name
+              <input name="name" required placeholder="Starter" defaultValue={plan?.name} />
             </label>
-          )}
-          <label>
-            Name
-            <input name="name" required placeholder="Starter" defaultValue={plan?.name} />
+            {!isEdit && (
+              <label>
+                Currency
+                <input name="currency" defaultValue="INR" />
+              </label>
+            )}
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Pricing &amp; billing</legend>
+
+          <span style={{ display: "block", fontSize: 14, fontWeight: 600, color: "var(--text-h)", marginBottom: 6 }}>
+            Plan type
+          </span>
+          <label className="toggle-switch-row toggle-switch-row-compact">
+            <span className="toggle-switch">
+              <input type="checkbox" checked={isTrial} onChange={(e) => setIsTrial(e.target.checked)} />
+              <span className="toggle-switch-track" aria-hidden="true" />
+            </span>
+            <span>Free trial plan</span>
           </label>
-          <label>
-            Price
-            <input
-              key={isTrial ? "trial" : "paid"}
-              name="price"
-              type="number"
-              step="0.01"
-              min="0.01"
-              required={!isTrial}
-              disabled={isTrial}
-              defaultValue={isTrial ? 0 : plan?.price}
-            />
-          </label>
-          {!isEdit && (
-            <label>
-              Currency
-              <input name="currency" defaultValue="INR" />
-            </label>
-          )}
-          <label>
-            Billing interval
-            <select name="billing_interval" defaultValue={plan?.billing_interval ?? "month"} disabled={isTrial}>
-              <option value="month">month</option>
-              <option value="year">year</option>
-            </select>
-          </label>
-          <label>
-            Every N intervals
-            <input name="billing_frequency" type="number" min="1" defaultValue={plan?.billing_frequency ?? 1} disabled={isTrial} />
-          </label>
-        </div>
-        <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
-          <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <input
-              type="checkbox"
-              checked={isTrial}
-              onChange={(e) => setIsTrial(e.target.checked)}
-            />
-            Free trial plan
-          </label>
-          {isTrial && (
-            <label>
-              Trial duration (days)
-              <input
-                name="trial_period_days"
-                type="number"
-                min="1"
-                required={isTrial}
-                defaultValue={plan?.trial_period_days ?? 14}
-              />
-            </label>
-          )}
-        </div>
-        {isTrial && (
-          <p className="hint">
-            Free trial plans are priced at 0 automatically and follow a day-based billing period (the duration above) instead of the month/year billing interval.
+          <p className="hint" style={{ margin: "6px 0 0" }}>
+            {isTrial
+              ? "Price is 0 automatically; billed on a fixed number of days instead of month/year."
+              : "Priced normally, billed on the interval set below."}
           </p>
-        )}
+
+          {isTrial ? (
+            <label style={{ marginTop: 14 }}>
+              Trial duration (days)
+              <input name="trial_period_days" type="number" min="1" required defaultValue={plan?.trial_period_days ?? 14} />
+            </label>
+          ) : (
+            <>
+              <div className="inline-form" style={{ marginTop: 14 }}>
+                <label>
+                  Price
+                  <input key="paid" name="price" type="number" step="0.01" min="0.01" required defaultValue={plan?.price} />
+                </label>
+                <label>
+                  Every N intervals
+                  <input name="billing_frequency" type="number" min="1" defaultValue={plan?.billing_frequency ?? 1} />
+                </label>
+                <label>
+                  Subscription cycle
+                  <select
+                    name="billing_interval"
+                    value={billingInterval}
+                    onChange={(e) => setBillingInterval(e.target.value as "month" | "year")}
+                  >
+                    <option value="month">Monthly</option>
+                    <option value="year">Yearly</option>
+                  </select>
+                </label>
+              </div>
+            </>
+          )}
+        </fieldset>
+
         {isEdit && (
           <p className="hint">
             Active/Inactive is set from the plans grid now - close this and click the status badge on {plan!.name}'s row.
           </p>
         )}
-        <label>
-          Description
+
+        <fieldset>
+          <legend>Description</legend>
           <RichTextEditor key={editorKey} name="description" defaultValue={plan?.description} placeholder="What makes this plan worth it? Use bullet points to list what's included." />
-        </label>
+        </fieldset>
         <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
           {isEdit ? "Save plan" : "Create plan"}
         </button>

@@ -74,10 +74,10 @@ export function AdminRegistrationFormPage() {
           field_key: String(form.get("field_key")),
           label: String(form.get("label")),
           field_type: fieldType,
-          required: form.get("required") === "on",
+          required: form.get("required") === "yes",
           validation_pattern: String(form.get("validation_pattern") || "") || undefined,
           validation_message: String(form.get("validation_message") || "") || undefined,
-          check_duplicate: form.get("check_duplicate") === "on",
+          check_duplicate: form.get("check_duplicate") === "reject",
           duplicate_message: String(form.get("duplicate_message") || "") || undefined,
           placeholder: String(form.get("placeholder") || "") || undefined,
           help_text: String(form.get("help_text") || "") || undefined,
@@ -137,41 +137,82 @@ export function AdminRegistrationFormPage() {
       <ErrorBanner error={error} />
 
       {showCreate && (
-        <form className="admin-panel" onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <form className="admin-panel" onSubmit={handleCreate} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <h3>New field</h3>
-          <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
-            <label>
-              Field key
-              <input name="field_key" required placeholder="tax_id" pattern="^[a-z][a-z0-9_]*$" />
+          {/* 2026-09-14 follow-up ("make proper design... use radio at
+              places required... Orders of fields should be relevant"):
+              fields are now grouped into themed fieldsets in a more
+              logical order - identity (key/type, both immutable once
+              created) first, then everything about how the field is
+              displayed, then the validation/rules that govern it last.
+              Placeholder is also a new addition here -
+              adminCreateRegistrationFormField already accepted it (see
+              handleCreate above), this form just never had an input for
+              it before, unlike the edit modal below.
+
+              2026-09-14 follow-up #2 ("Required / Optional - only one
+              switch is required, same for duplication values"): Required
+              is now a single toggle switch (checked = required) instead
+              of the Required/Optional radio pair - uncontrolled like the
+              rest of this form, since nothing else conditionally depends
+              on it. Same treatment for Allow/Reject duplicate values,
+              down in ValidationFields. */}
+          <fieldset>
+            <legend>Field identity</legend>
+            <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+              <label>
+                Field key
+                <input name="field_key" required placeholder="tax_id" pattern="^[a-z][a-z0-9_]*$" />
+              </label>
+              <label>
+                Type
+                <select name="field_type" defaultValue="text">
+                  {FIELD_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset>
+            <legend>Display</legend>
+            <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+              <label>
+                Label
+                <input name="label" required placeholder="Tax ID" />
+              </label>
+              <label>
+                Placeholder
+                <input name="placeholder" placeholder="e.g. 27AAAAA0000A1Z5" />
+              </label>
+            </div>
+            <label style={{ marginTop: 12 }}>
+              Options (dropdown/radio only - comma-separated)
+              <input name="options" placeholder="Option A, Option B" />
             </label>
-            <label>
-              Label
-              <input name="label" required placeholder="Tax ID" />
+            <label style={{ marginTop: 12 }}>
+              Help text
+              <input name="help_text" />
             </label>
-            <label>
-              Type
-              <select name="field_type" defaultValue="text">
-                {FIELD_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-              <input name="required" type="checkbox" style={{ width: 18, height: 18 }} />
+          </fieldset>
+
+          <fieldset>
+            <legend>Validation &amp; rules</legend>
+            <label className="toggle-switch-row toggle-switch-row-compact">
+              <span className="toggle-switch">
+                <input type="checkbox" name="required" value="yes" />
+                <span className="toggle-switch-track" aria-hidden="true" />
+              </span>
               <span>Required</span>
             </label>
-          </div>
-          <label>
-            Options (dropdown/radio only - comma-separated)
-            <input name="options" placeholder="Option A, Option B" />
-          </label>
-          <label>
-            Help text
-            <input name="help_text" />
-          </label>
-          <ValidationFields idPrefix="create" />
+            <div style={{ marginTop: 14 }}>
+              <ValidationFields idPrefix="create" />
+            </div>
+          </fieldset>
+
           <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
             Add field
           </button>
@@ -318,16 +359,23 @@ function ValidationFields({
           )}
         </label>
       )}
-      <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-        <input
-          name="check_duplicate"
-          id={`${idPrefix}-check_duplicate`}
-          type="checkbox"
-          defaultChecked={defaultCheckDuplicate ?? false}
-          onChange={(e) => setCheckDuplicate(e.target.checked)}
-          style={{ width: 18, height: 18 }}
-        />
-        <span>Reject duplicate values (any record with a similar value is blocked)</span>
+      <label className="toggle-switch-row toggle-switch-row-compact">
+        <span className="toggle-switch">
+          <input
+            type="checkbox"
+            name="check_duplicate"
+            value="reject"
+            checked={checkDuplicate}
+            onChange={(e) => setCheckDuplicate(e.target.checked)}
+          />
+          <span className="toggle-switch-track" aria-hidden="true" />
+        </span>
+        <span>
+          Reject duplicate values
+          <p className="hint" style={{ margin: "2px 0 0" }}>
+            Any record with a similar value is blocked.
+          </p>
+        </span>
       </label>
       {checkDuplicate && (
         <label>
@@ -373,10 +421,10 @@ function EditFieldModal({
         field.id,
         {
           label: String(form.get("label")),
-          required: form.get("required") === "on",
+          required: form.get("required") === "yes",
           validation_pattern: String(form.get("validation_pattern") || "") || null,
           validation_message: String(form.get("validation_message") || "") || null,
-          check_duplicate: form.get("check_duplicate") === "on",
+          check_duplicate: form.get("check_duplicate") === "reject",
           duplicate_message: String(form.get("duplicate_message") || "") || null,
           placeholder: String(form.get("placeholder") || "") || undefined,
           help_text: String(form.get("help_text") || "") || undefined,
@@ -398,53 +446,81 @@ function EditFieldModal({
 
   return (
     <Modal open title={`Edit ${field.label}`} onClose={onClose}>
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      {/* 2026-09-14 follow-up ("make proper design... use radio at
+          places required... Orders of fields should be relevant"): same
+          fieldset grouping and field order as the "New field" form above
+          - identity (read-only here, both immutable after creation),
+          then Display, then Validation & rules last.
+
+          2026-09-14 follow-up #2 ("Required / Optional - only one switch
+          is required, same for duplication values"): Required is now a
+          single toggle switch (checked = required), seeded from the
+          field's current value via defaultChecked. */}
+      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
         <ErrorBanner error={error} />
-        <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
-          <label>
-            Field key
-            <input value={field.field_key} disabled title="Field key can't be changed after creation" />
+
+        <fieldset>
+          <legend>Field identity</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Field key
+              <input value={field.field_key} disabled title="Field key can't be changed after creation" />
+            </label>
+            <label>
+              Type
+              <input value={field.field_type} disabled title="Field type can't be changed after creation" />
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Display</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Label
+              <input name="label" required defaultValue={field.label} />
+            </label>
+            <label>
+              Placeholder
+              <input name="placeholder" defaultValue={field.placeholder || ""} />
+            </label>
+            <label>
+              Display order
+              <input name="display_order" type="number" defaultValue={field.display_order} />
+            </label>
+          </div>
+          {(field.field_type === "dropdown" || field.field_type === "radio") && (
+            <label style={{ marginTop: 12 }}>
+              Options (comma-separated)
+              <input name="options" defaultValue={(field.options || []).join(", ")} />
+            </label>
+          )}
+          <label style={{ marginTop: 12 }}>
+            Help text
+            <input name="help_text" defaultValue={field.help_text || ""} />
           </label>
-          <label>
-            Type
-            <input value={field.field_type} disabled title="Field type can't be changed after creation" />
-          </label>
-        </div>
-        <label>
-          Label
-          <input name="label" required defaultValue={field.label} />
-        </label>
-        <div className="inline-form" style={{ borderTop: "none", paddingTop: 0, marginTop: 0 }}>
-          <label style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-            <input name="required" type="checkbox" defaultChecked={field.required} style={{ width: 18, height: 18 }} />
+        </fieldset>
+
+        <fieldset>
+          <legend>Validation &amp; rules</legend>
+          <label className="toggle-switch-row toggle-switch-row-compact">
+            <span className="toggle-switch">
+              <input type="checkbox" name="required" value="yes" defaultChecked={field.required} />
+              <span className="toggle-switch-track" aria-hidden="true" />
+            </span>
             <span>Required</span>
           </label>
-          <label>
-            Display order
-            <input name="display_order" type="number" defaultValue={field.display_order} />
-          </label>
-        </div>
-        {(field.field_type === "dropdown" || field.field_type === "radio") && (
-          <label>
-            Options (comma-separated)
-            <input name="options" defaultValue={(field.options || []).join(", ")} />
-          </label>
-        )}
-        <label>
-          Placeholder
-          <input name="placeholder" defaultValue={field.placeholder || ""} />
-        </label>
-        <label>
-          Help text
-          <input name="help_text" defaultValue={field.help_text || ""} />
-        </label>
-        <ValidationFields
-          idPrefix={`edit-${field.id}`}
-          defaultPattern={field.validation_pattern}
-          defaultMessage={field.validation_message}
-          defaultCheckDuplicate={field.check_duplicate}
-          defaultDuplicateMessage={field.duplicate_message}
-        />
+          <div style={{ marginTop: 14 }}>
+            <ValidationFields
+              idPrefix={`edit-${field.id}`}
+              defaultPattern={field.validation_pattern}
+              defaultMessage={field.validation_message}
+              defaultCheckDuplicate={field.check_duplicate}
+              defaultDuplicateMessage={field.duplicate_message}
+            />
+          </div>
+        </fieldset>
+
         <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
           Save changes
         </button>

@@ -3825,3 +3825,259 @@ confirming visually and via a scrollWidth check at both 1400px and
 480px that "Rows per page" now sits at the left, Prev/Next/count at the
 right, and neither width overflows. No migration needed - purely CSS/
 JSX.
+
+## 2026-09-14 (follow-up 21): Add/Edit Plan and Registration form redesign - fieldsets, radio groups, field reordering
+
+"For Forms under add/edit plan, registration form - please make proper
+design, use radio at places required like Free trial plan etc.. Orders
+of fields should be relavant." Reworked three forms to match the
+fieldset/card visual language introduced for the Configuration pages
+(follow-up 18): `PlanFormModal` (`AdminPlansPage.tsx`), and both the
+inline "New field" create form and `EditFieldModal` in
+`AdminRegistrationFormPage.tsx`. Purely frontend/CSS - no backend or
+migration changes.
+
+**Plan form** (`PlanFormModal`) - reorganized into fieldsets, in this
+order: "Plan details" (Plan code/Name/Currency), "Plan type" (new
+`.radio-group` - Paid plan vs. Free trial plan, replacing the previous
+plain checkbox), then, conditionally rendered as a single swapped-out
+fieldset rather than a disabled one - "Trial settings" (Trial duration
+in days) when Free trial plan is selected, or "Pricing & billing"
+(Price, Every N intervals, and a new Month/Year `.radio-group` replacing
+the old `<select>`) when Paid plan is selected - and finally
+"Description" (the rich text editor). Billing interval is now tracked as
+controlled state (`billingInterval`/`setBillingInterval`, seeded from
+the loaded plan on edit with an `as "month" | "year"` cast, since
+`PlanAdminOut.billing_interval` is typed as plain `string` in
+`api/types.ts`) instead of being read from `FormData` at submit time.
+Because the pricing/trial fields now live in two mutually-exclusive
+fieldsets that mount/unmount rather than one fieldset with
+`disabled={isTrial}`, the old remount-trick (`key={isTrial ? "trial" :
+"paid"}` on the Price input, needed to force React to clear a disabled
+field's stale value) is no longer necessary and was removed - each
+fieldset naturally starts fresh with its own uncontrolled defaults every
+time it (re)mounts.
+
+**Registration form** - both the "New field" create form and
+`EditFieldModal` now share the same three fieldsets: "Field identity"
+(Field key, Type - both read-only in the edit modal), "Display" (Label,
+Placeholder, Options for dropdown/radio fields, Help text, and, in the
+edit modal only, Display order moved up next to Label since it's a
+display-affecting property, not a validation one), and "Validation &
+rules" (a new Required/Optional `.radio-group` replacing the old
+checkbox, followed by `ValidationFields` - regex pattern, message, and a
+new Allow/Reject-duplicates `.radio-group` replacing the old checkbox,
+which still conditionally reveals the "Duplicate message" input exactly
+as before). `handleCreate` and `EditFieldModal.handleSubmit` were
+updated to read the new radio values (`form.get("required") === "yes"`,
+`form.get("check_duplicate") === "reject"`) instead of the old checkbox
+reads (`"on"`).
+
+**Bug fixed along the way**: the create form's `handleCreate` already
+read `form.get("placeholder")` and sent it on create, but the create
+form itself had no `<input name="placeholder">` at all (only the edit
+modal did) - so a field's placeholder could only ever be set after the
+fact, via Edit. Added the missing Placeholder input to the create form's
+new "Display" fieldset as part of the reordering work.
+
+**Shared CSS additions** (`index.css`): a new `.radio-group`/
+`.radio-option` pair - card-style radio buttons using the `:has(input:
+checked)` selector for the selected-state highlight (border + background
+tint), which works the same way whether the underlying field is
+React-controlled (Plan type, Billing interval, Duplicate check) or a
+plain uncontrolled radio read via `FormData` at submit (Required) -
+no JS-computed className needed either way. Also extended the existing
+`.admin-panel fieldset`/`.admin-panel legend` rule (from follow-up 18)
+to also match `.modal-body fieldset`/`.modal-body legend`, since
+`Modal.tsx` wraps its content in `.modal-panel > .modal-body`, not
+`.admin-panel`, and both of these redesigned forms render inside a
+`<Modal>` (Registration form's create form is the one exception, which
+is why it also still renders correctly outside a modal).
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint`
+(oxlint) all clean - no new warnings beyond the three pre-existing
+`react(set-state-in-effect)` ones (unchanged, just shifted line
+numbers). Full backend suite still 210/210 (frontend-only change).
+Verified in a real browser (Playwright): Plan form - Paid/Free trial
+radio correctly swaps between "Pricing & billing" and "Trial settings"
+fieldsets, Month/Year radio works, and editing an existing Free Trial
+plan correctly pre-selects Free trial with its real
+`trial_period_days` and description. Registration form - the create
+form's three fieldsets render correctly with Optional and Allow
+duplicates as defaults, clicking "Reject duplicate values" reveals the
+Duplicate message input, and editing an existing required field
+(`museum_name`) correctly pre-selects/highlights "Required" in the edit
+modal alongside its real Label/Placeholder/Display order/Help text.
+
+**Pre-existing issue noticed, not fixed (out of scope for this
+request)**: at a 480px viewport, the Registration Form page overflows
+horizontally (`scrollWidth` 528px vs. 480px) even with no form open,
+before any change in this follow-up. Root cause: `.page-header-row` (the
+page title + "Cancel"/action button row) is a plain `display: flex` row
+with no `flex-wrap`, and the admin sidebar doesn't collapse below its
+fixed width at narrow viewports, leaving only ~248px for
+`.admin-content` - too narrow for the title and button to sit side by
+side without wrapping. Confirmed via a DOM walk that this is unrelated
+to the fieldset/radio-group changes above (those add at most 2px of
+harmless sub-pixel overflow from fieldset border/padding rounding) and
+that the Plans list page doesn't hit it only because its header has no
+comparable long title + button pairing at that width. Flagged for
+Vishal to decide whether it's worth a dedicated responsive pass (e.g.
+`flex-wrap: wrap` on `.page-header-row`, or a collapsible admin sidebar
+below a breakpoint) rather than fixed silently as a side effect of an
+unrelated form-design request.
+
+## 2026-09-14 (follow-up 22): Plan type simplified to a single switch, folded into Pricing & billing
+
+"For add/edit Plan form: 1. Take Plan type as label under pricing and
+billing section 2. Give only Switch for Free Trial" - follow-up 21's
+own separate "Plan type" fieldset (a Paid plan / Free trial plan
+`.radio-group`) is gone. `PlanFormModal` (`AdminPlansPage.tsx`) now has
+a single "Pricing & billing" fieldset: a plain field label reading
+"Plan type", then one toggle switch labeled "Free trial plan" (the same
+`.toggle-switch`/`.toggle-switch-row-compact` pattern already used for
+Communication's "Use TLS" and Payment Gateway's "Live mode"), with the
+existing explanatory hint text now switching between the trial and paid
+copy under the switch itself. Below that, the same conditional block
+from follow-up 21 still swaps in either the Trial duration field or the
+Price/Every N intervals/Month-Year radio group depending on the switch
+- only how "which kind of plan is this" is presented changed, not the
+conditional-fieldset mechanics, the `isTrial` state, or the billing
+interval radio group (still a radio, since the user only asked for a
+switch on the trial toggle specifically).
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint` all
+clean - no new warnings. Full backend suite still 210/210 (frontend-
+only change, no migration). Verified in a real browser (Playwright):
+the switch starts off (paid) with Price/Every N intervals/Month-Year
+visible, flipping it on swaps in Trial duration (defaulting to 14) and
+hides the pricing fields entirely, flipping it back off restores the
+paid fields cleanly, and opening the existing "Free Trial" plan for
+edit correctly shows the switch already on with its real trial duration
+and description. Re-checked at 480px width - no overflow in either
+switch state.
+
+## 2026-09-14 (follow-up 23): Subscription cycle reverted to a dropdown
+
+"Subscription cycle - Monthly and Yearly should not be radio buttons,
+keep dropdown for that." Billing interval in `PlanFormModal`
+(`AdminPlansPage.tsx`) is back to a `<select name="billing_interval">`
+("Subscription cycle": Monthly/Yearly) instead of the `.radio-group`
+introduced in follow-up 21 - the only field this follow-up asked to
+revert; Plan type stays the single switch from follow-up 22, and
+Required/Optional and Allow/Reject-duplicates on the Registration form
+stay radio groups (neither was mentioned here). Kept as controlled
+state (`billingInterval`/`setBillingInterval`, read via `onChange`
+rather than `FormData`) for the same reason as before - the field only
+exists in the DOM while the Free trial switch is off.
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint` all
+clean - no new warnings. Full backend suite still 210/210 (frontend-
+only change, no migration). Verified in a real browser (Playwright):
+the "Subscription cycle" dropdown defaults to Monthly on a new plan,
+selecting Yearly holds after re-render, and editing an existing paid
+plan ("Basic") correctly pre-selects Monthly from its real
+`billing_interval`. Re-checked at 480px width - no overflow.
+
+## 2026-09-14 (follow-up 24): Registration form's Required and Reject-duplicate-values become single switches; a real toggle-switch CSS bug fixed along the way
+
+"Same for Registration form data: 1. Required / Optional - Only one
+switch is required. same for duplication values." Same treatment as
+follow-up 22's Plan type switch, applied to the Registration form's two
+remaining radio pairs in `AdminRegistrationFormPage.tsx`: Required is
+now a single toggle switch (checked = required) in both the "New field"
+create form and `EditFieldModal` - uncontrolled (`defaultChecked`) like
+the rest of those forms, since nothing else conditionally depends on
+it. Allow/Reject duplicate values (in the shared `ValidationFields`)
+becomes a single "Reject duplicate values" switch, staying controlled
+state (`checkDuplicate`/`setCheckDuplicate`) since it still needs to
+conditionally reveal the "Duplicate message" input exactly as before.
+`handleCreate` and `EditFieldModal.handleSubmit` needed no changes -
+FormData reads the same string values from a checked checkbox as it did
+from a checked radio, and gets nothing back from either when unchecked.
+
+**Real CSS bug found and fixed while verifying this (`index.css`)**:
+plugging "Reject duplicate values" into the shared `.toggle-switch-row`/
+`.toggle-switch-row-compact` pattern immediately showed the switch pill
+stacked above its own label text, both centered - and stretched to the
+full width of its container, impossible to miss. Root cause: this is a
+`<label>` element, and the site-wide bare `label` selector sets
+`flex-direction: column` (the normal "text above input" field shape) -
+neither `.toggle-switch-row` nor `.toggle-switch-row-compact` overrode
+that property (they only set `display` and `align-items`), so it leaked
+through on every toggle switch in the app, not just this new one.
+Fixed by adding `flex-direction: row` explicitly to both classes. This
+was already a live (if easy-to-miss) bug on every previously-shipped
+switch - Plan type/Free trial (follow-up 22), and Communication's
+"Enable Notifications?"/"Use TLS" and Payment Gateway's "Live mode"
+(both pre-dating this round of follow-ups) - all of them were quietly
+rendering pill-above-text instead of pill-beside-text; it just wasn't
+obvious at their narrower, shrink-to-fit widths the way it was here.
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint` all
+clean - no new warnings. Full backend suite still 210/210 (frontend-
+only change, no migration - this whole follow-up is CSS/JSX). Verified
+in a real browser (Playwright), after the CSS fix: Required and Reject
+duplicate values both render as a switch sitting cleanly beside its
+label text (not stacked, not centered) in both the create form and the
+edit modal; toggling Reject duplicate values on still correctly reveals
+the Duplicate message field; editing the real "Museum Name" field
+(required, duplicate-check off) shows both switches pre-set correctly;
+and, going back and re-screenshotting them, Plan type's switch, Enable
+Notifications?, Use TLS, and the Payment Gateway page all still render
+correctly (in fact more correctly than before) after the shared CSS
+change - no regressions. The pre-existing, unrelated 480px overflow on
+the Registration Form page (flagged in follow-up 21, caused by
+`.page-header-row` and the non-collapsing admin sidebar) is unchanged
+by this follow-up.
+
+## 2026-09-14 (follow-up 25): Customer detail page - Registration data shows field Labels, Subscriptions/Payments/Invoices are a fixed 3-column full-width grid
+
+"Customer detail page in admin: 1. under Registration data section - it
+shows key and user input... it should be Label of field rather than key
+2. Make full width GRID for Subscription, payments and invoices
+sections." Both changes are scoped to `AdminCustomerDetailPage.tsx` only
+- no backend/migration changes.
+
+**Registration data labels**: each customer's `registration_data` is
+stored keyed by `field_key` (e.g. `museum_name`, `gstin`) - the raw key
+was being rendered directly as the `<dt>`. The page now also fetches
+`adminListRegistrationFormFields` (the same admin-configured field list
+the Registration Form page manages) once on mount, and a `fieldLabel(key)`
+helper looks up each key's real `label` ("Museum Name", "GSTIN") to
+display instead - falling back to the raw key for any value collected
+under a field that's since been renamed or removed from the form
+config, since real historical data a customer actually submitted should
+never disappear from their record just because the field config
+changed later.
+
+**Full-width 3-column grid**: the Subscriptions/Payments/Invoices row
+already used a shared `.detail-grid` class (`grid-template-columns:
+repeat(auto-fit, minmax(280px, 1fr))`), but that same class is also used
+by the customer-facing portal (`PortalPage.tsx`), so it was left alone
+rather than changed everywhere. Instead this page now also applies a
+new, additive `.detail-grid-3col` modifier class alongside
+`.detail-grid` (`index.css`) - `grid-template-columns: repeat(3, 1fr)`,
+always exactly 3 equal columns spanning the panel's full width instead
+of auto-fit's width-dependent column count, collapsing to a single
+column under 860px (matching the same breakpoint style already used for
+`.subscribe-layout`) so it still stacks safely on narrow screens.
+
+**Verification**: `npx tsc -b`, `npm run build`, and `npm run lint` all
+clean - no new warnings. Full backend suite still 210/210 (frontend-
+only change, no migration). Verified in a real browser (Playwright)
+against a real customer created through the actual public subscribe +
+mock-payment-success flow (registration_data: museum_name, gstin,
+address, contact_person, plus a resulting active subscription,
+successful payment, and generated invoice) rather than a mock: 
+Registration data now shows "GSTIN", "Address", "Museum Name", "Contact
+Person" instead of the raw keys, and Subscriptions/Payments/Invoices
+render as one clean 3-equal-column row spanning the full panel width at
+both 1400px and 1024px, correctly collapsing to a single stacked column
+at 480px. The 480px overflow visible on this page (from the top
+Email/Mobile/Status + Suspend/Generate-SSO-link header row not wrapping)
+is the same pre-existing `.page-header-row`/non-collapsing-sidebar issue
+already flagged on the Registration Form page in follow-up 21 - confirmed
+unrelated to this follow-up's changes (neither the label lookup nor the
+grid class touches that row) and left as-is rather than fixed as a side
+effect of an unrelated request.

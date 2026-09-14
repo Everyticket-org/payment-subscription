@@ -10,13 +10,14 @@ import {
   adminActivateCustomer,
   adminGenerateSsoLink,
   adminGetCustomer,
+  adminListRegistrationFormFields,
   adminSuspendCustomer,
 } from "../../api/endpoints";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { CustomerAdminDetailOut, SsoLinkOut } from "../../api/types";
+import type { CustomerAdminDetailOut, RegistrationFormFieldAdminOut, SsoLinkOut } from "../../api/types";
 
 export function AdminCustomerDetailPage() {
   const { customerId = "" } = useParams();
@@ -26,6 +27,13 @@ export function AdminCustomerDetailPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [ssoLink, setSsoLink] = useState<SsoLinkOut | null>(null);
+  // Registration data below is keyed by field_key (e.g. "museum_name"),
+  // not fit for display - fetch the admin-configured fields once (same
+  // list the Registration form admin page manages) so each key can be
+  // shown as its human-readable Label ("Museum Name") instead. Fetched
+  // independently of `reload` since it doesn't depend on customerId and
+  // a customer's data is never re-labeled just because it was reloaded.
+  const [formFields, setFormFields] = useState<RegistrationFormFieldAdminOut[]>([]);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
@@ -33,6 +41,19 @@ export function AdminCustomerDetailPage() {
   }, [adminToken, customerId]);
 
   useEffect(reload, [reload]);
+
+  useEffect(() => {
+    if (!adminToken) return;
+    adminListRegistrationFormFields(adminToken).then(setFormFields).catch(() => {});
+  }, [adminToken]);
+
+  // Falls back to the raw key for any value collected under a field that
+  // has since been renamed or removed from the registration form - real
+  // historical data that was actually submitted should never disappear
+  // from a customer's record just because the field config changed.
+  function fieldLabel(key: string): string {
+    return formFields.find((f) => f.field_key === key)?.label ?? key;
+  }
 
   async function handleSuspend() {
     if (!adminToken) return;
@@ -149,7 +170,7 @@ export function AdminCustomerDetailPage() {
                 <dl className="summary-list" key={i}>
                   {Object.entries(r.data).map(([k, v]) => (
                     <Fragment key={k}>
-                      <dt>{k}</dt>
+                      <dt>{fieldLabel(k)}</dt>
                       <dd>{String(v)}</dd>
                     </Fragment>
                   ))}
@@ -158,7 +179,7 @@ export function AdminCustomerDetailPage() {
             </div>
           )}
 
-          <div className="detail-grid">
+          <div className="detail-grid detail-grid-3col">
             <div className="admin-panel">
               <h2>Subscriptions</h2>
               <div className="table-wrap">
