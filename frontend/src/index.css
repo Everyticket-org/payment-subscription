@@ -115,6 +115,14 @@ code {
   border-radius: 4px;
   background: var(--code-bg);
   color: var(--text-h);
+  /* 2026-09-14 follow-up ("similarly can you change other configuration
+     pages"): long inline code - API paths/URLs in particular
+     (POST /api/v1/integration/sso/generate-link and similar) - has no
+     spaces for the browser to break on by default, so on a narrow
+     viewport it forced its containing flex/grid box wider than the
+     screen instead of wrapping. overflow-wrap: anywhere lets it break
+     anywhere as a last resort while still preferring word boundaries. */
+  overflow-wrap: anywhere;
 }
 
 /* ---------- Public site shell ---------- */
@@ -420,7 +428,13 @@ select:focus {
      the same column regardless of label length. Always-sent fields
      (disabled, pre-checked) are listed first, then the selectable ones. */
   display: grid;
-  grid-template-columns: auto 1fr;
+  /* minmax(0, 1fr), not a bare 1fr: a plain 1fr track still won't shrink
+     below its content's min-content width (a grid-sizing default,
+     unrelated to the fieldset min-width quirk fixed elsewhere in this
+     file) - a long label like "Subscription expiry date/time" was
+     forcing this column, and the whole page, wider than a narrow
+     viewport instead of wrapping onto a second line. */
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   row-gap: 8px;
   column-gap: 8px;
@@ -1078,19 +1092,119 @@ select:focus {
   min-width: 140px;
 }
 
-/* A single master on/off switch that sits above (and gates) a form
-   section, e.g. "Enable Notifications?" - a horizontal checkbox+label
-   row rather than the app's default stacked label-above-input layout. */
-.toggle-row {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
+/* 2026-09-14 follow-up ("make proper design for communication
+   configuration"): a themed fieldset/legend, replacing the browser's
+   plain default fieldset border, used to group related fields within an
+   admin-panel card - Payment Gateway's PayU credential groups, and
+   Communication's "SMTP transport" / "Sender identity" groups below. */
+.admin-panel fieldset {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 18px 18px;
+  margin: 0;
+  /* Browsers give <fieldset> an intrinsic min-width based on its
+     content (a long-standing UA-stylesheet quirk, unrelated to
+     box-sizing) that ignores its parent's actual width and can overflow
+     a narrow viewport - min-width: 0 lets it shrink normally like any
+     other block box. */
+  min-width: 0;
 }
 
-.toggle-row input[type="checkbox"] {
+.admin-panel legend {
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+}
+
+/* A real pill/track toggle switch for on/off fields that used to be a
+   plain checkbox+label (Communication's "Enable Notifications?" master
+   switch and "Use TLS"). The native checkbox stays in the DOM - still
+   keyboard/screen-reader operable, still what state/onChange reads -
+   just visually hidden; :checked is read with a plain CSS sibling
+   selector, no JS involved. */
+.toggle-switch {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+}
+
+.toggle-switch input[type="checkbox"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.toggle-switch-track {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 999px;
+  transition: background 0.15s ease;
+  pointer-events: none;
+}
+
+.toggle-switch-track::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
   width: 18px;
   height: 18px;
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  transition: transform 0.15s ease;
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-switch-track {
+  background: var(--accent);
+}
+
+.toggle-switch input[type="checkbox"]:checked + .toggle-switch-track::before {
+  transform: translateX(18px);
+}
+
+.toggle-switch input[type="checkbox"]:focus-visible + .toggle-switch-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The row wrapping a .toggle-switch plus its label text. The master
+   "Enable Notifications?" switch gets the full highlighted-card
+   treatment (.toggle-switch-row); a smaller inline one like "Use TLS"
+   stays compact, no card background (.toggle-switch-row-compact). */
+.toggle-switch-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  cursor: pointer;
+  padding: 14px 16px;
+  background: var(--surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.toggle-switch-row .toggle-switch {
+  margin-top: 2px;
+}
+
+.toggle-switch-row-compact {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
 }
 
 textarea {

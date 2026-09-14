@@ -71,6 +71,13 @@ def test_activation_queue_sets_provisioning_in_progress(seeded_db):
 
 
 def test_successful_provisioning_response_marks_success_and_stores_mapping(seeded_db):
+    """2026-09-14 follow-up ("can we use subscription ID? as we are
+    sending to everyticket"): the mapping's external_customer_id is now
+    always THIS app's own subscription_id, set unconditionally - never
+    whatever Everyticket's response body says under "external_customer_id"
+    (here deliberately sent as a different-looking value, "MUSEUM-1001",
+    to prove it's ignored). instance_id is unaffected - still read from
+    Everyticket's response as before."""
     application = _configure_webhook_destination(seeded_db)
     customer, subscription, _txn, _invoice = _paid_subscription(seeded_db, email="prov-success@example.com", mobile="9822400002")
     seeded_db.commit()
@@ -89,8 +96,40 @@ def test_successful_provisioning_response_marks_success_and_stores_mapping(seede
         .filter(CustomerApplicationMapping.customer_id == customer.id, CustomerApplicationMapping.application_id == application.id)
         .one()
     )
-    assert mapping.external_customer_id == "MUSEUM-1001"
+    assert mapping.external_customer_id == subscription.subscription_id
+    assert mapping.external_customer_id != "MUSEUM-1001"
     assert mapping.external_instance_id == "INSTANCE-1001"
+
+
+def test_successful_provisioning_stores_mapping_even_when_everyticket_omits_external_customer_id(seeded_db):
+    """The whole point of the 2026-09-14 follow-up above: Everyticket
+    doesn't need to implement the external_customer_id part of the
+    response contract at all anymore - a bare {"success": true}, with no
+    external_customer_id and no instance_id, must still produce a working
+    mapping (external_customer_id = this app's own subscription_id;
+    external_instance_id stays unset since Everyticket never sent one)."""
+    application = _configure_webhook_destination(seeded_db)
+    customer, subscription, _txn, _invoice = _paid_subscription(
+        seeded_db, email="prov-minimal-response@example.com", mobile="9822400007"
+    )
+    seeded_db.commit()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": True})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    webhook_service.dispatch_pending(seeded_db, http_client=client)
+
+    seeded_db.refresh(subscription)
+    assert subscription.provisioning_status == ProvisioningStatus.SUCCESS.value
+
+    mapping = (
+        seeded_db.query(CustomerApplicationMapping)
+        .filter(CustomerApplicationMapping.customer_id == customer.id, CustomerApplicationMapping.application_id == application.id)
+        .one()
+    )
+    assert mapping.external_customer_id == subscription.subscription_id
+    assert mapping.external_instance_id is None
 
 
 def test_explicit_failure_body_on_2xx_is_treated_as_provisioning_failure(seeded_db):
@@ -187,7 +226,10 @@ def test_provisioning_recovers_on_a_later_successful_retry(seeded_db):
         .filter(CustomerApplicationMapping.customer_id == customer.id, CustomerApplicationMapping.application_id == application.id)
         .one()
     )
-    assert mapping.external_customer_id == "MUSEUM-2002"
+    # Same 2026-09-14 follow-up as the test above: the response's own
+    # "external_customer_id" ("MUSEUM-2002") is ignored - this app's own
+    # subscription_id is what gets stored.
+    assert mapping.external_customer_id == subscription.subscription_id
 
 
 def test_admin_cannot_manually_retry_an_already_succeeded_delivery(client, seeded_db):

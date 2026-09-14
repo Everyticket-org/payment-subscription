@@ -113,13 +113,17 @@ def generate_sso_link(
     application: Application = Depends(verify_api_credentials),
 ):
     """Real production replacement for the TEST_MODE-only admin action -
-    see this module's docstring. Looked up by external_customer_id (the
-    identity Everyticket itself already holds, assigned during
-    onboarding - spec section 32), since by the time a customer clicks
-    "Manage Subscription" inside Everyticket's app, the mapping is
-    guaranteed to already exist. Everyticket's own app then simply
-    redirects (or opens) the returned consume_url - the customer lands
-    signed in, no second password, exactly per spec section 47."""
+    see this module's docstring. Looked up by external_customer_id, which
+    (2026-09-14 follow-up: "can we use subscription ID? as we are sending
+    to everyticket") is this app's own subscription_id - the same value
+    already sent as a fixed field on the subscription.activated webhook
+    payload, stored onto CustomerApplicationMapping the moment that
+    delivery succeeds (app.webhooks.service._handle_activation_outcome) -
+    since by the time a customer clicks "Manage Subscription" inside
+    Everyticket's app, the mapping is guaranteed to already exist.
+    Everyticket's own app then simply redirects (or opens) the returned
+    consume_url - the customer lands signed in, no second password,
+    exactly per spec section 47."""
     mapping = (
         db.query(CustomerApplicationMapping)
         .filter(

@@ -148,7 +148,12 @@ class CustomerApplicationMapping(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"), nullable=False, index=True)
     application_id: Mapped[int] = mapped_column(ForeignKey("applications.id"), nullable=False, index=True)
-    external_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)  # e.g. MUSEUM-4587
+    # 2026-09-14 follow-up ("can we use subscription ID? as we are
+    # sending to everyticket"): always this app's own subscription_id
+    # (e.g. SUB-000123) now, set by app.webhooks.service on every
+    # successful subscription.activated delivery - never a value invented
+    # by Everyticket itself.
+    external_customer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     external_instance_id: Mapped[str | None] = mapped_column(String(100), nullable=True)  # e.g. INSTANCE-1001
 
     customer: Mapped["Customer"] = relationship(back_populates="application_mappings")

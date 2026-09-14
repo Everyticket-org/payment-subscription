@@ -31,16 +31,29 @@ class SsoLinkOut(BaseModel):
 
 class SsoLinkGenerateRequest(BaseModel):
     """Body for POST /api/v1/integration/sso/generate-link (API-key/secret
-    authenticated - see app.api.v1.integration). external_customer_id is
-    the identity Everyticket itself already holds for this customer,
-    assigned back to it in the subscription.activated webhook's response
-    (spec section 32) - by the time a customer clicks "Manage
-    Subscription" inside Everyticket, this mapping is guaranteed to
-    already exist, so it's the natural (and only) key Everyticket needs
-    to pass. user_identifier is optional, free-form context Everyticket
-    can attach (e.g. which of its own admin users triggered this) - it's
-    stored on the SsoSession row for audit/troubleshooting only, never
-    interpreted by this app."""
+    authenticated - see app.api.v1.integration).
+
+    2026-09-14 follow-up ("can we use subscription ID? as we are sending
+    to everyticket"): external_customer_id is this app's OWN
+    subscription_id - the same value already sent as a fixed field on
+    every subscription.activated webhook payload (app.webhooks.payloads),
+    which app.webhooks.service._handle_activation_outcome then stores as
+    CustomerApplicationMapping.external_customer_id the moment that
+    delivery succeeds. Everyticket's backend doesn't invent or manage its
+    own identifier at all - it only has to remember the subscription_id
+    it was given for a customer and echo that same value back here. By
+    the time a customer clicks "Manage Subscription" inside Everyticket,
+    that mapping is guaranteed to already exist, so it's the natural (and
+    only) key Everyticket needs to pass. On a repurchase-after-expiry, a
+    fresh subscription.activated event carries a NEW subscription_id, and
+    the stored mapping is overwritten to match - Everyticket must use
+    whichever subscription_id it was most recently given for that
+    customer, not an older one from a prior subscription.
+
+    user_identifier is optional, free-form context Everyticket can attach
+    (e.g. which of its own admin users triggered this) - it's stored on
+    the SsoSession row for audit/troubleshooting only, never interpreted
+    by this app."""
 
     external_customer_id: str
     user_identifier: str | None = None

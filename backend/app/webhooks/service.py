@@ -41,14 +41,44 @@ override, per that model's own docstring).
 
 PROVISIONING (spec sections 32, 37): a "subscription.activated" delivery
 is special-cased. Everyticket's response body - not just the HTTP status -
-carries the real provisioning result (spec section 32: "Everyticket should
-return its external identity" as {success, external_customer_id,
-instance_id}), so _handle_activation_outcome() below parses it and:
+still carries the real provisioning result ({success, instance_id}), so
+_handle_activation_outcome() below parses it and:
   - on success: sets Subscription.provisioning_status=SUCCESS and
     upserts the CustomerApplicationMapping (permanent customer<->
-    external-identity mapping, spec section 8) with whatever identity
-    Everyticket returned - never inserting a second mapping row for the
-    same customer+application (spec section 32: no duplicate instances).
+    external-identity mapping, spec section 8) - never inserting a second
+    mapping row for the same customer+application (spec section 32: no
+    duplicate instances).
+
+    2026-09-14 follow-up ("can we use subscription ID? as we are sending
+    to everyticket" - Vishal, re: the SSO API access help text asking
+    what value Everyticket has to send back as external_customer_id):
+    the mapping's external_customer_id is now ALWAYS this app's own
+    subscription.subscription_id, set unconditionally by this app itself
+    at the moment provisioning succeeds - never whatever (if anything)
+    Everyticket's response body says under an "external_customer_id" key,
+    which is no longer read at all. This removes any dependency on
+    Everyticket implementing that part of the response contract
+    correctly (or at all): subscription_id is already a FIXED field on
+    every subscription.activated payload (app.webhooks.payloads), so
+    Everyticket's backend doesn't need to invent or manage its own
+    identifier - it only has to remember the subscription_id it was
+    given and echo that same value back to POST /api/v1/integration/
+    sso/generate-link later. instance_id is unaffected - still whatever
+    Everyticket's response says, still optional, still just their own
+    reference metadata never used for lookup.
+
+    This still self-heals correctly across a repurchase-after-expiry
+    (spec section 41: a fresh subscription.activated event, with a brand
+    new subscription_id since create_pending_subscription() always
+    mints one - see app.subscriptions.service): _upsert_external_mapping
+    finds the SAME mapping row (keyed by customer_id+application_id, not
+    by the old external_customer_id) and overwrites external_customer_id
+    with the new subscription_id, so Everyticket's SSO calls immediately
+    start using whichever subscription_id was most recently issued. An
+    upgrade/downgrade never fires subscription.activated at all (it
+    mutates the existing Subscription row in place, same subscription_id
+    throughout - app.subscriptions.service.apply_plan_change), so the
+    mapping is untouched by those and stays correct in between.
   - on failure (network error, non-2xx, or a 2xx body that explicitly
     says success:false): sets provisioning_status=FAILED and sends a
     one-time "provisioning_issue" notification (spec section 37: "Customer
@@ -366,9 +396,15 @@ def _handle_activation_outcome(
     queues an event without a real Subscription row) is logged and
     ignored rather than raised, so this never breaks delivery dispatch
     itself.
+
+    2026-09-14 follow-up: the response body's own "external_customer_id"
+    (if Everyticket sends one at all) is deliberately never read anymore -
+    see this module's own docstring above for why subscription_id is used
+    instead, unconditionally, on every success. "instance_id" is still
+    read from the response as before (Everyticket's own optional
+    reference, never used for lookup).
     """
     provisioning_ok = http_succeeded
-    external_customer_id: str | None = None
     external_instance_id: str | None = None
 
     if http_succeeded and response_body:
@@ -379,7 +415,6 @@ def _handle_activation_outcome(
         if isinstance(parsed, dict):
             if parsed.get("success") is False:
                 provisioning_ok = False
-            external_customer_id = parsed.get("external_customer_id")
             external_instance_id = parsed.get("instance_id")
 
     subscription = db.query(Subscription).filter(Subscription.subscription_id == subscription_id).first()
@@ -394,12 +429,15 @@ def _handle_activation_outcome(
     db.add(subscription)
 
     if provisioning_ok:
-        if application is not None and (external_customer_id or external_instance_id):
+        if application is not None:
             _upsert_external_mapping(
                 db,
                 customer_id=subscription.customer_id,
                 application_id=application.id,
-                external_customer_id=external_customer_id,
+                # This app's own subscription_id, not anything parsed from
+                # Everyticket's response - see the module docstring's
+                # 2026-09-14 follow-up.
+                external_customer_id=subscription.subscription_id,
                 external_instance_id=external_instance_id,
             )
     elif not was_failed:
@@ -424,7 +462,11 @@ def _upsert_external_mapping(
     application) - update it in place rather than inserting a second one,
     which is also what makes a repurchase-after-expiry re-activation (spec
     section 41: "reuse external_customer_id", no new museum) safe even
-    though it re-sends a fresh subscription.activated event."""
+    though it re-sends a fresh subscription.activated event: the caller
+    (_handle_activation_outcome) passes the subscription's own, freshly
+    generated subscription_id each time, and this just overwrites the
+    same row's external_customer_id with it - no new row, no unique-
+    constraint conflict."""
     mapping = (
         db.query(CustomerApplicationMapping)
         .filter(

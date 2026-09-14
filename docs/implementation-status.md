@@ -3497,3 +3497,231 @@ is unaffected. Manually verified in a real browser (Playwright, logged in
 as the seeded admin) that `/admin/config/integration` renders the new
 block with `external_customer_id`, `user_identifier`, `consume_url`, and
 `X-Api-Key` all present and readable. No migration needed.
+
+## 2026-09-14 (follow-up 16): external_customer_id is now always this app's own subscription_id - Everyticket no longer invents or manages its own customer identifier
+
+Vishal, following straight on from the SSO help-text follow-up above:
+"how to get `external_customer_id`/`user_identifier`... can we use
+subscription ID? as we are sending to everyticket." Yes - this is a real
+behavior change, not just documentation.
+
+**Before**: `CustomerApplicationMapping.external_customer_id` (the value
+Everyticket must send back to `POST /api/v1/integration/sso/generate-link`
+to identify a customer) was whatever Everyticket's own backend chose to
+return in its response body to a `subscription.activated` delivery
+(`{success, external_customer_id, instance_id}` - spec section 32).
+Everyticket had to invent and manage its own identifier (e.g.
+"MUSEUM-4587") and implement that part of the response contract
+correctly, or SSO would never work for that customer.
+
+**After**: `app/webhooks/service.py`'s `_handle_activation_outcome()` no
+longer reads `external_customer_id` from Everyticket's response body at
+all - it now always sets `CustomerApplicationMapping.external_customer_id`
+to `subscription.subscription_id` (this app's own ID, already a FIXED
+field on every `subscription.activated` webhook payload -
+`app/webhooks/payloads.py`), unconditionally, on every successful
+delivery. `instance_id` is unaffected - still read from Everyticket's
+response as before, still optional, still just their own reference
+metadata never used for lookup. Practically this means Everyticket's
+backend no longer needs its own customer-identity scheme for this
+integration at all: it only has to remember the `subscription_id` this
+app already sent it and echo that same value back when calling
+`/sso/generate-link`.
+
+This still self-heals correctly across a repurchase-after-expiry (spec
+section 41): `create_pending_subscription()`
+(`app/subscriptions/service.py`) always mints a brand new
+`subscription_id` for a fresh subscription row, so a repurchase fires a
+fresh `subscription.activated` event carrying that new ID, and
+`_upsert_external_mapping()` (unchanged, keyed by `customer_id` +
+`application_id`, not by the old `external_customer_id`) overwrites the
+same mapping row with it - no duplicate row, no unique-constraint
+conflict. Everyticket must therefore always use whichever
+`subscription_id` it was MOST RECENTLY given for a customer, not an
+older one from a prior subscription. An upgrade/downgrade never fires
+`subscription.activated` at all (`apply_plan_change()` mutates the
+existing `Subscription` row in place, same `subscription_id` throughout),
+so the mapping is untouched by those and stays correct the whole time a
+subscription is active.
+
+**What changed**: `app/webhooks/service.py` (module docstring,
+`_handle_activation_outcome()`'s parsing + call to
+`_upsert_external_mapping()`, `_upsert_external_mapping()`'s docstring),
+`app/webhooks/payloads.py` (stale comment in `build_activated_payload()`
+corrected), `app/sso/schemas.py` (`SsoLinkGenerateRequest.
+external_customer_id`'s docstring), `app/api/v1/integration.py`
+(`generate_sso_link()`'s docstring), `app/applications/models.py`
+(`CustomerApplicationMapping.external_customer_id`'s inline comment).
+Frontend: `frontend/src/pages/admin/config/ConfigSections.tsx`'s SSO API
+access help text (added in follow-up 15 just above) now shows an
+example `external_customer_id` shaped like a real subscription_id
+(`SUB-000123` - which, by coincidence of both using the same sample
+generator, is literally the same value shown in the subscription.activated
+sample JSON right below it on the same screen) instead of an invented
+`ET-CUST-...`-style value, and the explanatory paragraph underneath was
+rewritten to describe the new behavior, including the repurchase caveat
+above.
+
+**New/updated tests** (`tests/test_provisioning.py`):
+`test_successful_provisioning_response_marks_success_and_stores_mapping`
+now asserts `mapping.external_customer_id == subscription.subscription_id`
+(and explicitly `!= "MUSEUM-1001"`, the value the mock Everyticket
+response still sends, to prove it's ignored);
+`test_provisioning_recovers_on_a_later_successful_retry` similarly
+updated. New test
+`test_successful_provisioning_stores_mapping_even_when_everyticket_omits_external_customer_id`
+sends a bare `{"success": true}` response (no `external_customer_id`,
+no `instance_id` at all) and confirms the mapping still gets a working
+`external_customer_id` (this app's own subscription_id) with
+`external_instance_id` left `None` - proving Everyticket genuinely
+doesn't need to implement that part of the contract at all anymore.
+`tests/test_webhook_payloads.py`'s
+`test_expiry_webhook_payload_is_subscription_id_only` assertion updated
+the same way. `tests/test_integration_sso.py` needed no changes - it
+exercises `/sso/generate-link` against a manually-inserted mapping row
+and never cared what convention the value follows.
+
+**Verification**: full backend suite 210/210 (209 existing + 1 new
+test). `npx tsc -b` and `npm run build` both clean. Manually verified in
+a real browser (Playwright) that the updated SSO help text on
+`/admin/config/integration` shows `SUB-000123`, no longer shows the old
+`ET-CUST-...` example, and mentions "repurchase". No migration needed -
+`CustomerApplicationMapping.external_customer_id` was already a plain
+nullable string column with no format constraint.
+
+## 2026-09-14 (follow-up 17): Communication configuration page - proper visual design
+
+Purely visual/frontend redesign of `Configuration - Communication`
+("make proper design for communication configuration in admin panel").
+No backend, schema, or API changes.
+
+**What changed** (`frontend/src/pages/admin/config/ConfigSections.tsx`'s
+`NotificationSection`, `frontend/src/index.css`):
+
+- Replaced the two plain HTML checkboxes ("Enable Notifications?", "Use
+  TLS") with a real toggle-switch component: a visually-hidden native
+  `<input type="checkbox">` plus a CSS-drawn pill/track sibling
+  (`.toggle-switch` / `.toggle-switch-track`, state read via a plain
+  `:checked` sibling selector, no JS) - fully keyboard and
+  screen-reader accessible since the underlying checkbox never leaves
+  the DOM.
+- "Enable Notifications?" is now a highlighted master-switch card
+  (`.toggle-switch-row`, tinted background) with its label and
+  explanatory hint text next to the switch, making it read as the one
+  control that gates everything below it (which now visibly dims via
+  `opacity: 0.5` + `pointerEvents: none` when off, same behavior as
+  before, just clearer visually).
+- The previously flat list of SMTP fields is now split into two
+  labeled `<fieldset><legend>` groups: "SMTP transport" (host, port,
+  username, password, and "Use TLS" as a compact inline toggle
+  (`.toggle-switch-row-compact`) at the bottom of the same fieldset)
+  and "Sender identity" (sender name, sender address, reply-to).
+- Added global CSS for `.admin-panel fieldset` / `legend` (bordered,
+  rounded, accent-colored uppercase legend) that every admin config
+  page picks up - as a side effect this also visibly improves the
+  Payment Gateway page's existing "Redirect & webhook URLs" fieldset
+  (screenshotted and confirmed) with no code change needed there.
+- Removed the now-fully-unused old `.toggle-row` / `.toggle-row
+  input[type="checkbox"]` CSS rules (confirmed via grep no other page
+  referenced them before deleting).
+
+**Bug found and fixed during verification**: the new `fieldset` styling
+introduced a horizontal-overflow regression at narrow viewport widths
+(reproduced at 480px via Playwright - `fieldset`, and the inputs/labels
+inside it, rendered wider than the viewport and pushed a horizontal
+scrollbar onto the whole admin shell). Root cause: `<fieldset>` has a
+long-standing browser UA-stylesheet quirk where it gets an intrinsic
+min-width based on its content that ignores the parent's actual
+available width, regardless of `box-sizing: border-box` (already set
+globally). Confirmed this was newly introduced (not the pre-existing,
+different, wider-threshold `.admin-shell`/`.admin-content` flexbox
+issue tracked in follow-up 12) by comparison-testing the Dashboard page
+at the same 480px width, which showed no overflow. Fixed by adding
+`min-width: 0` to the `.admin-panel fieldset` rule, which lets it
+shrink normally like any other block box; re-verified afterward with
+the same Playwright script - zero overflowing elements at 480px.
+
+**Verification**: `npx tsc -b` and `npm run build` both clean (this is
+a CSS/TSX-only change, so the backend test suite is unaffected and was
+not re-run). Manually verified in a real browser (Playwright) at both
+1300px and 480px viewport widths, and with notifications toggled both
+on and off, that: the toggle switches render and reflect checked state
+correctly, both fieldsets group their fields with a visible legend, the
+disabled (notifications off) state visibly dims both fieldsets, and no
+element overflows the viewport at 480px. Also confirmed the Payment
+Gateway page's existing fieldset renders correctly with the new global
+CSS. No migration needed - purely CSS/JSX.
+
+## 2026-09-14 (follow-up 18): Same design treatment applied to the other three Configuration pages
+
+Follow-up to follow-up 17 ("similarly can you change other configuration
+pages"): the toggle-switch/fieldset design language from the
+Communication page's redesign is now applied consistently to General,
+Payment Gateway, and Everyticket Integration too. No backend, schema, or
+API changes - purely frontend layout (`ConfigSections.tsx`).
+
+**General page** (`GeneralSection`): "Live / Test mode" - previously
+just another `<select>` in a flat field row - is now its own
+highlighted toggle-switch card ("Live mode") at the top of the page,
+the same treatment "Enable Notifications?" got on the Communication
+page, since it's the one setting here with a real, immediate effect on
+whether payments are for real money. The rest of the fields are now
+grouped into two fieldsets: "Application details" (name, currency) and
+"Thank-you message" (the post-subscription message textarea + its
+hint). `gatewayMode`'s underlying string value ("test"/"live") and the
+save payload are completely unchanged - only the control's appearance
+and the surrounding markup changed.
+
+**Payment Gateway page** (`PaymentGatewaySection`): the top "Payment
+gateway" selector is now wrapped in its own "Gateway selection"
+fieldset (kept as a `<select>`, not a toggle, since
+`available_gateways` already anticipates more than today's two options
+and isn't a strict on/off setting). The existing "Redirect & webhook
+URLs" / "PayU test credentials" / "PayU live credentials" fieldsets are
+unchanged in structure, just re-spaced to the same 16px rhythm used
+elsewhere.
+
+**Everyticket Integration page** (`IntegrationSection`) - the biggest of
+the three: the previously flat top field row (secret key, webhook URL,
+retry limit, archive-after-days) and the three plain `<h3>` section
+headers ("SSO API access...", "Webhook events", "If all retries fail")
+are now four fieldsets with legends - "Webhook destination & retries",
+"SSO API access (Manage Subscription link)", "Webhook events", and
+"Escalation on failure" - matching the grouping style used on the other
+three pages. This is layout only: the live JSON preview that updates as
+webhook field checkboxes are ticked, the SSO help JSON block, the
+event-type picker, and the save/submit logic are all byte-for-byte
+unchanged. The per-event field checklist still uses plain checkboxes
+rather than toggle switches, deliberately - toggle switches are reserved
+for a single on/off setting (Live mode, Enable Notifications, Use TLS),
+while a list of independently tickable fields is a multi-select and
+reads better as a checkbox list.
+
+**Bugs found and fixed during verification** (both pre-existing,
+unrelated to today's fieldset changes, surfaced only because this was
+the first time the Integration page was checked at a narrow viewport
+width): (1) the global `code` element had no `overflow-wrap`, so long
+unbroken inline text (e.g. `POST /api/v1/integration/sso/generate-link`
+in the SSO help block's header) forced its flex/grid container wider
+than a 480px viewport instead of wrapping - fixed by adding
+`overflow-wrap: anywhere` to the global `code` rule in `index.css`. (2)
+`.webhook-field-checklist`'s grid used a bare `1fr` second column, which
+(a standard CSS Grid default, unrelated to the `<fieldset>` min-width
+quirk fixed in follow-up 17) still won't shrink below its content's
+min-content width - a long field label like "Subscription expiry
+date/time" forced the whole checklist, and the page, wider than the
+viewport - fixed by changing it to `minmax(0, 1fr)`, which lets long
+labels wrap onto a second line instead.
+
+**Verification**: `npx tsc -b` and `npm run build` both clean; full
+backend suite re-run for good measure (210/210 passed, confirming this
+frontend-only change didn't regress anything). Manually verified in a
+real browser (Playwright) at both 1300px and 480px viewport widths, for
+all three pages, that: the new toggle switch and fieldset groupings
+render correctly, Payment Gateway's PayU-only credential fieldsets still
+appear/disappear correctly when switching gateways, the Integration
+page's live JSON preview still updates instantly as webhook field
+checkboxes are ticked, and - the specific regression check - no element
+on any of the three pages overflows the viewport at 480px (all four
+Configuration pages, including Communication from follow-up 17, now
+pass this check). No migration needed - purely CSS/JSX.

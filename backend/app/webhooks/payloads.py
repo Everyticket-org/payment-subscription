@@ -160,15 +160,18 @@ def onboarding_payload(
     overwrite subscription_id/email/phone_number/plan/price/trial/expiry.
 
     Still no customer_id or external identity in the FIXED shape -
-    trimmed to exactly the fields Vishal originally asked to keep.
-    Everyticket's own response to THIS delivery is what assigns the
-    external identity (spec section 32) - see
+    trimmed to exactly the fields Vishal originally asked to keep. This
+    app itself assigns the external identity (spec section 8) at the
+    moment THIS delivery succeeds - see
     app.webhooks.service._handle_activation_outcome, which upserts
-    CustomerApplicationMapping from that response. customer_id (and the
-    plan/payment/invoice detail params above) are available as OPT-IN
-    extras an admin can select via Configuration > Everyticket
-    integration - see app.webhooks.field_catalog.AVAILABLE_FIELDS[
-    "subscription.activated"]."""
+    CustomerApplicationMapping.external_customer_id with this same
+    subscription_id (2026-09-14 follow-up: "can we use subscription ID?
+    as we are sending to everyticket" - yes, this app now uses it
+    directly rather than waiting on anything Everyticket's own response
+    says). customer_id (and the plan/payment/invoice detail params above)
+    are available as OPT-IN extras an admin can select via Configuration
+    > Everyticket integration - see app.webhooks.field_catalog.
+    AVAILABLE_FIELDS["subscription.activated"]."""
     fixed = {
         "subscription_id": subscription_id,
         "email": email,

@@ -95,45 +95,73 @@ export function GeneralSection({ initial, token }: { initial: ApplicationGeneral
           void save();
         }}
       >
-        <div className="inline-form">
-          <label>
-            Application name
-            <input value={name} onChange={(e) => setName(e.target.value)} />
-          </label>
-          <label>
-            Currency
-            <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
-              {CURRENCIES.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Live / Test mode
-            <select value={gatewayMode} onChange={(e) => setGatewayMode(e.target.value)}>
-              <option value="test">Test</option>
-              <option value="live">Live</option>
-            </select>
-          </label>
-        </div>
-        <label style={{ display: "block", marginTop: 12 }}>
-          Post-subscription message
-          <textarea
-            rows={2}
-            value={postSubscriptionMessage}
-            onChange={(e) => setPostSubscriptionMessage(e.target.value)}
-            placeholder="You have successfully subscribed, you will get your credentials in sometime."
-            style={{ width: "100%" }}
-          />
+        {/* 2026-09-14 follow-up ("similarly can you change other
+            configuration pages"): Live/Test mode is the one setting here
+            with a real, immediate effect on whether payments are for
+            real money - same reasoning that gave "Enable Notifications?"
+            its own highlighted master-switch card on the Communication
+            page, so this gets the same treatment instead of sitting as
+            just another dropdown in the field grid below. */}
+        <label className="toggle-switch-row">
+          <span className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={gatewayMode === "live"}
+              onChange={(e) => setGatewayMode(e.target.checked ? "live" : "test")}
+            />
+            <span className="toggle-switch-track" aria-hidden="true" />
+          </span>
+          <span>
+            <strong>Live mode</strong>
+            <p className="hint" style={{ margin: "4px 0 0" }}>
+              Off runs Test mode - the gateway's test credentials are used and no real money moves. On switches every
+              new payment to the gateway's Live credentials (set on the Payment Gateway page) immediately.
+            </p>
+          </span>
         </label>
-        <p className="hint">
-          Shown on the thank-you screen after a brand-new customer's first payment succeeds (never for an existing
-          customer renewing or changing plans - they already have their credentials). Leave blank to use the default
-          text above.
-        </p>
-        <SaveButton saving={saving} savedAt={savedAt} />
+
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>Application details</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Application name
+              <input value={name} onChange={(e) => setName(e.target.value)} />
+            </label>
+            <label>
+              Currency
+              <select value={currency} onChange={(e) => setCurrency(e.target.value)}>
+                {CURRENCIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </fieldset>
+
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>Thank-you message</legend>
+          <label style={{ display: "block" }}>
+            Post-subscription message
+            <textarea
+              rows={2}
+              value={postSubscriptionMessage}
+              onChange={(e) => setPostSubscriptionMessage(e.target.value)}
+              placeholder="You have successfully subscribed, you will get your credentials in sometime."
+              style={{ width: "100%" }}
+            />
+          </label>
+          <p className="hint">
+            Shown on the thank-you screen after a brand-new customer's first payment succeeds (never for an existing
+            customer renewing or changing plans - they already have their credentials). Leave blank to use the
+            default text above.
+          </p>
+        </fieldset>
+
+        <div style={{ marginTop: 16 }}>
+          <SaveButton saving={saving} savedAt={savedAt} />
+        </div>
       </form>
     </Section>
   );
@@ -202,20 +230,29 @@ export function PaymentGatewaySection({ initial, token }: { initial: PaymentGate
           void save();
         }}
       >
-        <div className="inline-form">
-          <label>
-            Payment gateway
-            <select value={defaultGateway} onChange={(e) => setDefaultGateway(e.target.value)}>
-              {initial.available_gateways.map((g) => (
-                <option key={g} value={g}>
-                  {g}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
+        {/* 2026-09-14 follow-up ("similarly can you change other
+            configuration pages"): wrapped in its own fieldset so this
+            page's spacing/grouping matches the other three Configuration
+            pages, even though it's a single field today - available_gateways
+            already anticipates more than the two current options
+            (mock/payu), so this stays a <select>, not a toggle switch. */}
+        <fieldset>
+          <legend>Gateway selection</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Payment gateway
+              <select value={defaultGateway} onChange={(e) => setDefaultGateway(e.target.value)}>
+                {initial.available_gateways.map((g) => (
+                  <option key={g} value={g}>
+                    {g}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </fieldset>
 
-        <fieldset style={{ marginTop: 12 }}>
+        <fieldset style={{ marginTop: 16 }}>
           <legend>Redirect &amp; webhook URLs</legend>
           <p className="hint">
             Both fall back to a local-development default (localhost) when left blank - set these for any real
@@ -245,7 +282,7 @@ export function PaymentGatewaySection({ initial, token }: { initial: PaymentGate
 
         {defaultGateway === "payu" ? (
           <>
-            <fieldset style={{ marginTop: 12 }}>
+            <fieldset style={{ marginTop: 16 }}>
               <legend>PayU test credentials</legend>
               <div className="inline-form">
                 <label>
@@ -258,7 +295,7 @@ export function PaymentGatewaySection({ initial, token }: { initial: PaymentGate
                 </label>
               </div>
             </fieldset>
-            <fieldset style={{ marginTop: 12 }}>
+            <fieldset style={{ marginTop: 16 }}>
               <legend>PayU live credentials</legend>
               <div className="inline-form">
                 <label>
@@ -276,7 +313,7 @@ export function PaymentGatewaySection({ initial, token }: { initial: PaymentGate
           <p className="hint">The mock gateway needs no credentials.</p>
         )}
 
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 16 }}>
           <SaveButton saving={saving} savedAt={savedAt} />
         </div>
       </form>
@@ -431,192 +468,221 @@ export function IntegrationSection({ initial, token }: { initial: EveryticketInt
     >
       <ErrorBanner error={error} />
       <form onSubmit={handleSubmit}>
-        <div className="inline-form">
-          <label>
-            Secret key {secretKeyIsSet && <span className="hint">(configured)</span>}
-            <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder="leave blank to keep current" />
-          </label>
-          <label>
-            Webhook URL
-            <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://everyticket.example.com/webhooks/subscription" />
-          </label>
-          <label>
-            Retry limit
-            <input
-              type="number"
-              min="0"
-              value={retryLimit}
-              onChange={(e) => setRetryLimit(e.target.value)}
-              placeholder={`default: ${initial.default_retry_limit}`}
-            />
-          </label>
-          <label>
-            Archive/delete after (days)
-            <input
-              type="number"
-              min="0"
-              value={archiveAfterDays}
-              onChange={(e) => setArchiveAfterDays(e.target.value)}
-              placeholder="disabled"
-            />
-            <span className="hint">
-              Days an expired subscription can stay unrenewed before the archive webhook below fires. Blank disables
-              archiving.
-            </span>
-          </label>
-        </div>
+        {/* 2026-09-14 follow-up ("similarly can you change other
+            configuration pages"): the flat field list and the plain <h3>
+            section headers below are now fieldsets with legends, matching
+            the grouping already applied to the Communication/General/
+            Payment Gateway pages. Nothing about validation, submission,
+            or the live JSON preview logic changed - this is layout only. */}
+        <fieldset>
+          <legend>Webhook destination &amp; retries</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Secret key {secretKeyIsSet && <span className="hint">(configured)</span>}
+              <input type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} placeholder="leave blank to keep current" />
+            </label>
+            <label>
+              Webhook URL
+              <input value={webhookUrl} onChange={(e) => setWebhookUrl(e.target.value)} placeholder="https://everyticket.example.com/webhooks/subscription" />
+            </label>
+            <label>
+              Retry limit
+              <input
+                type="number"
+                min="0"
+                value={retryLimit}
+                onChange={(e) => setRetryLimit(e.target.value)}
+                placeholder={`default: ${initial.default_retry_limit}`}
+              />
+            </label>
+            <label>
+              Archive/delete after (days)
+              <input
+                type="number"
+                min="0"
+                value={archiveAfterDays}
+                onChange={(e) => setArchiveAfterDays(e.target.value)}
+                placeholder="disabled"
+              />
+              <span className="hint">
+                Days an expired subscription can stay unrenewed before the archive webhook below fires. Blank disables
+                archiving.
+              </span>
+            </label>
+          </div>
+        </fieldset>
 
-        <h3 style={{ marginTop: 16 }}>SSO API access (for Everyticket's "Manage Subscription" link)</h3>
-        <p className="hint">
-          Everyticket's own backend calls <code>POST /api/v1/integration/sso/generate-link</code> with these two
-          values (as <code>X-Api-Key</code> / <code>X-Api-Secret</code> headers) to mint a one-time login link for a
-          customer, so clicking "Manage Subscription" inside Everyticket signs them straight into this portal - no
-          second password. Generate a pair below, save, then share both values with Everyticket's integration team
-          out of band (the same way as the secret key above) - this app never sends them anywhere itself.
-        </p>
-        <div className="inline-form">
-          <label>
-            API key
-            <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="not configured" />
-          </label>
-          <label>
-            API secret {apiSecretIsSet && !apiSecret && <span className="hint">(configured, hidden)</span>}
-            <input
-              value={apiSecret}
-              onChange={(e) => setApiSecret(e.target.value)}
-              placeholder="leave blank to keep current"
-            />
-          </label>
-          <button type="button" className="button button-secondary" onClick={handleGenerateApiCredentials}>
-            Generate random values
-          </button>
-        </div>
-        {apiSecret && (
-          <p className="hint hint-dev">
-            Copy this API secret now - after you save, it's stored but never shown again in full.
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>SSO API access (Manage Subscription link)</legend>
+          <p className="hint">
+            Everyticket's own backend calls <code>POST /api/v1/integration/sso/generate-link</code> with these two
+            values (as <code>X-Api-Key</code> / <code>X-Api-Secret</code> headers) to mint a one-time login link for a
+            customer, so clicking "Manage Subscription" inside Everyticket signs them straight into this portal - no
+            second password. Generate a pair below, save, then share both values with Everyticket's integration team
+            out of band (the same way as the secret key above) - this app never sends them anywhere itself.
           </p>
-        )}
-        {/* 2026-09-14 follow-up: "What parameters Everyticket has to send
-            apart from key and secret... please show json as help text" -
-            the key/secret above only authenticate the call (as headers);
-            this is the full request/response contract for the call
-            itself, straight from app.sso.schemas.SsoLinkGenerateRequest/
-            SsoLinkOut and app.api.v1.integration.generate_sso_link - kept
-            here so it can be handed to Everyticket's integration team
-            alongside the credentials without them needing the backend
-            source. */}
-        <div className="webhook-sample" style={{ marginTop: 12, maxWidth: 560 }}>
-          <div className="webhook-sample-header">
-            <code>POST /api/v1/integration/sso/generate-link</code>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              API key
+              <input value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="not configured" />
+            </label>
+            <label>
+              API secret {apiSecretIsSet && !apiSecret && <span className="hint">(configured, hidden)</span>}
+              <input
+                value={apiSecret}
+                onChange={(e) => setApiSecret(e.target.value)}
+                placeholder="leave blank to keep current"
+              />
+            </label>
+            <button type="button" className="button button-secondary" onClick={handleGenerateApiCredentials}>
+              Generate random values
+            </button>
           </div>
-          <pre className="webhook-sample-body">
-            {JSON.stringify(
-              {
-                headers: {
-                  "X-Api-Key": "<the API key above>",
-                  "X-Api-Secret": "<the API secret above>",
-                },
-                body: {
-                  external_customer_id: "ET-CUST-10432",
-                  user_identifier: "admin-42",
-                },
-                response: {
-                  sso_token: "eyJhbGciOi...",
-                  consume_url: "https://subscribe.everyticket.com/sso/consume?token=eyJhbGciOi...",
-                  expires_at: "2026-09-14T07:15:00+00:00",
-                },
-              },
-              null,
-              2,
-            )}
-          </pre>
-        </div>
-        <p className="hint">
-          <code>external_customer_id</code> (required) is the same value Everyticket's own backend already
-          returned when it responded to the subscription.activated webhook (its success/external_customer_id/
-          instance_id reply), so it's always on hand by the time a customer clicks "Manage Subscription".{" "}
-          <code>user_identifier</code> is optional, free-form context (e.g. which of Everyticket's own admin
-          users triggered this) stored for audit only and never interpreted by this app. Everyticket's app then
-          just opens the returned <code>consume_url</code> - the customer lands signed in, no second password.
-        </p>
-
-        <h3 style={{ marginTop: 16 }}>Webhook events</h3>
-        <p className="hint">
-          Pick an event to see exactly what it sends: fields marked "always sent" are on every delivery already;
-          tick any of the rest to have Everyticket receive those too - e.g. tick "Plan price" and "Subscription
-          expiry date/time" for Renew so it gets those without a separate lookup. The sample JSON on the right
-          updates instantly as you tick boxes; Save to make the change take effect on the next real delivery.
-        </p>
-        <label className="webhook-event-picker">
-          Event
-          <select value={selectedEventType} onChange={(e) => setSelectedEventType(e.target.value)}>
-            {eventTypes.map((eventType) => (
-              <option key={eventType} value={eventType}>
-                {eventType}
-              </option>
-            ))}
-          </select>
-        </label>
-        <div className="webhook-event-detail">
-          <div className="webhook-field-event">
-            <div className="webhook-field-checklist">
-              {fixedFields[selectedEventType]?.map((entry) => (
-                <label key={`fixed-${entry.field}`} className="webhook-field-checkbox webhook-field-checkbox-fixed">
-                  <input type="checkbox" checked disabled />
-                  <span>
-                    {entry.label} <span className="hint">(always sent)</span>
-                  </span>
-                </label>
-              ))}
-              {fieldCatalog[selectedEventType]?.map((entry) => (
-                <label key={entry.field} className="webhook-field-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={(fieldSelection[selectedEventType] ?? []).includes(entry.field)}
-                    onChange={() => toggleWebhookField(selectedEventType, entry.field)}
-                  />
-                  <span>{entry.label}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-          {livePreviewSample && (
-            <div className="webhook-sample" key={livePreviewSample.event}>
-              <div className="webhook-sample-header">
-                <code>{livePreviewSample.event}</code>
-                <span className="hint">{livePreviewSample.trigger}</span>
-              </div>
-              <pre className="webhook-sample-body">{JSON.stringify(livePreviewSample.payload, null, 2)}</pre>
-            </div>
+          {apiSecret && (
+            <p className="hint hint-dev">
+              Copy this API secret now - after you save, it's stored but never shown again in full.
+            </p>
           )}
-        </div>
+          {/* 2026-09-14 follow-up: "What parameters Everyticket has to send
+              apart from key and secret... please show json as help text" -
+              the key/secret above only authenticate the call (as headers);
+              this is the full request/response contract for the call
+              itself, straight from app.sso.schemas.SsoLinkGenerateRequest/
+              SsoLinkOut and app.api.v1.integration.generate_sso_link - kept
+              here so it can be handed to Everyticket's integration team
+              alongside the credentials without them needing the backend
+              source.
 
-        <h3 style={{ marginTop: 16 }}>If all retries fail</h3>
-        <div className="inline-form">
-          <label>
-            Notify email(s)
-            <input
-              value={escalationEmails}
-              onChange={(e) => setEscalationEmails(e.target.value)}
-              placeholder="ops@example.com, billing@example.com"
+              2026-09-14 follow-up 2 ("can we use subscription ID? as we
+              are sending to everyticket"): yes - external_customer_id is
+              now always THIS app's own subscription_id (see
+              app.webhooks.service._handle_activation_outcome), so the
+              example below uses a SUB-xxxxxx-shaped value instead of an
+              invented "ET-CUST-..." one, to make that literal. */}
+          <div className="webhook-sample" style={{ marginTop: 12, maxWidth: 560 }}>
+            <div className="webhook-sample-header">
+              <code>POST /api/v1/integration/sso/generate-link</code>
+            </div>
+            <pre className="webhook-sample-body">
+              {JSON.stringify(
+                {
+                  headers: {
+                    "X-Api-Key": "<the API key above>",
+                    "X-Api-Secret": "<the API secret above>",
+                  },
+                  body: {
+                    external_customer_id: "SUB-000123",
+                    user_identifier: "admin-42",
+                  },
+                  response: {
+                    sso_token: "eyJhbGciOi...",
+                    consume_url: "https://subscribe.everyticket.com/sso/consume?token=eyJhbGciOi...",
+                    expires_at: "2026-09-14T07:15:00+00:00",
+                  },
+                },
+                null,
+                2,
+              )}
+            </pre>
+          </div>
+          <p className="hint">
+            <code>external_customer_id</code> (required) is this app's own subscription ID - the exact{" "}
+            <code>subscription_id</code> value already sent as a fixed field on every subscription.activated
+            webhook payload below. Everyticket doesn't need to invent or manage its own customer identifier at
+            all: it only has to remember the subscription_id it was given for a customer and send that same
+            value back here - by the time a customer clicks "Manage Subscription", this app has already stored
+            it against that customer, so the lookup always succeeds. If a customer's subscription later expires
+            and they repurchase, a brand new subscription_id is issued and this app updates the stored value to
+            match - Everyticket must use whichever subscription_id it was most recently given for that customer,
+            not an older one from a prior subscription. <code>user_identifier</code> is optional, free-form
+            context (e.g. which of Everyticket's own admin users triggered this) stored for audit only and never
+            interpreted by this app. Everyticket's app then just opens the returned <code>consume_url</code> -
+            the customer lands signed in, no second password.
+          </p>
+        </fieldset>
+
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>Webhook events</legend>
+          <p className="hint">
+            Pick an event to see exactly what it sends: fields marked "always sent" are on every delivery already;
+            tick any of the rest to have Everyticket receive those too - e.g. tick "Plan price" and "Subscription
+            expiry date/time" for Renew so it gets those without a separate lookup. The sample JSON on the right
+            updates instantly as you tick boxes; Save to make the change take effect on the next real delivery.
+          </p>
+          <label className="webhook-event-picker">
+            Event
+            <select value={selectedEventType} onChange={(e) => setSelectedEventType(e.target.value)}>
+              {eventTypes.map((eventType) => (
+                <option key={eventType} value={eventType}>
+                  {eventType}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="webhook-event-detail">
+            <div className="webhook-field-event">
+              <div className="webhook-field-checklist">
+                {fixedFields[selectedEventType]?.map((entry) => (
+                  <label key={`fixed-${entry.field}`} className="webhook-field-checkbox webhook-field-checkbox-fixed">
+                    <input type="checkbox" checked disabled />
+                    <span>
+                      {entry.label} <span className="hint">(always sent)</span>
+                    </span>
+                  </label>
+                ))}
+                {fieldCatalog[selectedEventType]?.map((entry) => (
+                  <label key={entry.field} className="webhook-field-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={(fieldSelection[selectedEventType] ?? []).includes(entry.field)}
+                      onChange={() => toggleWebhookField(selectedEventType, entry.field)}
+                    />
+                    <span>{entry.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            {livePreviewSample && (
+              <div className="webhook-sample" key={livePreviewSample.event}>
+                <div className="webhook-sample-header">
+                  <code>{livePreviewSample.event}</code>
+                  <span className="hint">{livePreviewSample.trigger}</span>
+                </div>
+                <pre className="webhook-sample-body">{JSON.stringify(livePreviewSample.payload, null, 2)}</pre>
+              </div>
+            )}
+          </div>
+        </fieldset>
+
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>Escalation on failure</legend>
+          <p className="hint">If every retry for a delivery fails, one escalation email is sent to the recipients below.</p>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Notify email(s)
+              <input
+                value={escalationEmails}
+                onChange={(e) => setEscalationEmails(e.target.value)}
+                placeholder="ops@example.com, billing@example.com"
+              />
+            </label>
+            <label>
+              Email subject
+              <input value={escalationSubject} onChange={(e) => setEscalationSubject(e.target.value)} placeholder="Webhook delivery failed" />
+            </label>
+          </div>
+          <label style={{ display: "block", marginTop: 12 }}>
+            Email content
+            <RichTextEditor
+              key={editorKey}
+              name="escalation_email_body"
+              defaultValue={initial.escalation_email_body}
+              placeholder="A webhook delivery has failed after all retries..."
             />
           </label>
-          <label>
-            Email subject
-            <input value={escalationSubject} onChange={(e) => setEscalationSubject(e.target.value)} placeholder="Webhook delivery failed" />
-          </label>
-        </div>
-        <label>
-          Email content
-          <RichTextEditor
-            key={editorKey}
-            name="escalation_email_body"
-            defaultValue={initial.escalation_email_body}
-            placeholder="A webhook delivery has failed after all retries..."
-          />
-        </label>
+        </fieldset>
 
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: 16 }}>
           <SaveButton saving={saving} savedAt={savedAt} />
         </div>
       </form>
@@ -683,54 +749,81 @@ export function NotificationSection({ initial, token }: { initial: NotificationC
           void save();
         }}
       >
-        <label className="toggle-row">
-          <input
-            type="checkbox"
-            checked={notificationsEnabled}
-            onChange={(e) => setNotificationsEnabled(e.target.checked)}
-          />
-          Enable Notifications?
+        {/* 2026-09-14 follow-up ("make proper design for communication
+            configuration"): the master switch is now its own highlighted
+            card up top (a real toggle switch instead of a plain
+            checkbox), and the fields below are split into two themed
+            fieldsets - SMTP transport and Sender identity - instead of
+            one flat, ungrouped row of inputs. */}
+        <label className="toggle-switch-row">
+          <span className="toggle-switch">
+            <input
+              type="checkbox"
+              checked={notificationsEnabled}
+              onChange={(e) => setNotificationsEnabled(e.target.checked)}
+            />
+            <span className="toggle-switch-track" aria-hidden="true" />
+          </span>
+          <span>
+            <strong>Enable Notifications?</strong>
+            <p className="hint" style={{ margin: "4px 0 0" }}>
+              When off, every email this application would send (OTP, payment/invoice confirmations, renewal
+              reminders, webhook-failure escalation, Test Email, ...) is skipped and logged as SKIPPED in
+              Notification Logs, regardless of how the SMTP settings below are configured.
+            </p>
+          </span>
         </label>
-        <p className="hint">
-          When off, every email this application would send (OTP, payment/invoice confirmations, renewal
-          reminders, webhook-failure escalation, Test Email, ...) is skipped and logged as SKIPPED in
-          Notification Logs, regardless of how the SMTP settings below are configured.
-        </p>
-        <div className="inline-form" style={notificationsEnabled ? undefined : { opacity: 0.5, pointerEvents: "none" }}>
-          <label>
-            SMTP host
-            <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.example.com" />
+
+        <fieldset style={notificationsEnabled ? { marginTop: 16 } : { marginTop: 16, opacity: 0.5, pointerEvents: "none" }}>
+          <legend>SMTP transport</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              SMTP host
+              <input value={smtpHost} onChange={(e) => setSmtpHost(e.target.value)} placeholder="smtp.example.com" />
+            </label>
+            <label>
+              SMTP port
+              <input type="number" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} placeholder="587" />
+            </label>
+            <label>
+              SMTP username
+              <input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)} />
+            </label>
+            <label>
+              SMTP password {smtpPasswordIsSet && <span className="hint">(configured)</span>}
+              <input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} placeholder="leave blank to keep current" />
+            </label>
+          </div>
+          <label className="toggle-switch-row toggle-switch-row-compact" style={{ marginTop: 14 }}>
+            <span className="toggle-switch">
+              <input type="checkbox" checked={smtpUseTls} onChange={(e) => setSmtpUseTls(e.target.checked)} />
+              <span className="toggle-switch-track" aria-hidden="true" />
+            </span>
+            <span>Use TLS</span>
           </label>
-          <label>
-            SMTP port
-            <input type="number" value={smtpPort} onChange={(e) => setSmtpPort(e.target.value)} placeholder="587" />
-          </label>
-          <label>
-            SMTP username
-            <input value={smtpUsername} onChange={(e) => setSmtpUsername(e.target.value)} />
-          </label>
-          <label>
-            SMTP password {smtpPasswordIsSet && <span className="hint">(configured)</span>}
-            <input type="password" value={smtpPassword} onChange={(e) => setSmtpPassword(e.target.value)} placeholder="leave blank to keep current" />
-          </label>
-          <label>
-            Use TLS
-            <input type="checkbox" checked={smtpUseTls} onChange={(e) => setSmtpUseTls(e.target.checked)} />
-          </label>
-          <label>
-            Sender name
-            <input value={senderName} onChange={(e) => setSenderName(e.target.value)} placeholder="Everyticket Subscriptions" />
-          </label>
-          <label>
-            Sender address
-            <input value={senderAddress} onChange={(e) => setSenderAddress(e.target.value)} placeholder="no-reply@example.com" />
-          </label>
-          <label>
-            Reply-to
-            <input value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="support@example.com" />
-          </label>
+        </fieldset>
+
+        <fieldset style={notificationsEnabled ? { marginTop: 16 } : { marginTop: 16, opacity: 0.5, pointerEvents: "none" }}>
+          <legend>Sender identity</legend>
+          <div className="inline-form" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
+            <label>
+              Sender name
+              <input value={senderName} onChange={(e) => setSenderName(e.target.value)} placeholder="Everyticket Subscriptions" />
+            </label>
+            <label>
+              Sender address
+              <input value={senderAddress} onChange={(e) => setSenderAddress(e.target.value)} placeholder="no-reply@example.com" />
+            </label>
+            <label>
+              Reply-to
+              <input value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="support@example.com" />
+            </label>
+          </div>
+        </fieldset>
+
+        <div style={{ marginTop: 16 }}>
+          <SaveButton saving={saving} savedAt={savedAt} />
         </div>
-        <SaveButton saving={saving} savedAt={savedAt} />
       </form>
     </Section>
   );

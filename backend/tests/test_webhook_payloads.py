@@ -185,8 +185,9 @@ def test_expiry_webhook_payload_is_subscription_id_only(client, seeded_db):
 
     # Simulate Everyticket's own successful response to the onboarding
     # webhook (real provisioning still happens - CustomerApplicationMapping
-    # is upserted from Everyticket's response, unaffected by the payload
-    # trim, which only concerns what THIS app sends out).
+    # is upserted with this app's own subscription_id, 2026-09-14
+    # follow-up, unaffected by the payload trim, which only concerns what
+    # THIS app sends out).
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"success": True, "external_customer_id": "MUSEUM-9001", "instance_id": "INSTANCE-9001"})
 
@@ -196,7 +197,7 @@ def test_expiry_webhook_payload_is_subscription_id_only(client, seeded_db):
         .filter(CustomerApplicationMapping.customer_id == subscription.customer_id, CustomerApplicationMapping.application_id == application.id)
         .one()
     )
-    assert mapping.external_customer_id == "MUSEUM-9001"
+    assert mapping.external_customer_id == subscription.subscription_id
 
     seeded_db.refresh(subscription)
     subscription.expires_at = datetime.now(timezone.utc) - timedelta(days=1)
