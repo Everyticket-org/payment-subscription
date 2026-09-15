@@ -9,6 +9,13 @@
  * Reuses the same upgrade/downgrade endpoints and the same mock-payment
  * "simulate a callback" step PortalPage's inline form used - only the
  * layout changes, not the underlying mechanics.
+ *
+ * Visual redesign (2026-09-15 follow-up, same pass as PortalPage - see
+ * that file's header comment for the full request). Every handler,
+ * state variable and conditional branch is unchanged; only the markup
+ * and classNames changed, scoped under the new portal- and
+ * change-plan-page classes in index.css so nothing outside the customer
+ * portal is affected.
  */
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -116,7 +123,7 @@ export function ChangePlanPage() {
 
   if (!portal) {
     return (
-      <section>
+      <section className="change-plan-page">
         <h1>Change plan</h1>
         <ErrorBanner error={error} />
         {!error && <p>Loading...</p>}
@@ -126,12 +133,14 @@ export function ChangePlanPage() {
 
   if (!portal.active_subscription) {
     return (
-      <section>
+      <section className="change-plan-page">
         <h1>Change plan</h1>
-        <p>You don't have an active subscription to change. </p>
-        <Link className="button button-primary" to="/">
-          Browse plans
-        </Link>
+        <div className="portal-card" style={{ maxWidth: 480 }}>
+          <p style={{ marginBottom: 16 }}>You don't have an active subscription to change.</p>
+          <Link className="button button-primary" to="/">
+            Browse plans
+          </Link>
+        </div>
       </section>
     );
   }
@@ -139,23 +148,32 @@ export function ChangePlanPage() {
   // Free trial plans are never a valid upgrade/downgrade target (a trial
   // can only ever be a brand-new subscription, checked server-side too).
   const otherPlans = plans.filter((p) => p.plan_code !== portal.active_subscription!.plan_code && !p.is_trial);
+  const currentPrice = plans.find((c) => c.plan_code === portal.active_subscription!.plan_code)?.price ?? 0;
 
   return (
-    <section>
-      <div className="page-header-row">
-        <h1>Change plan</h1>
+    <section className="change-plan-page">
+      <div className="portal-page-head">
+        <div>
+          <div className="portal-eyebrow">
+            My Subscription <span className="sep">/</span> Change plan
+          </div>
+          <h1>Change plan</h1>
+          {step === "select" && (
+            <p>
+              You're currently on <b>{portal.active_subscription.plan_name}</b>. Pick a plan below to switch - you'll
+              complete payment before the change takes effect.
+            </p>
+          )}
+        </div>
         <Link className="button button-secondary" to="/portal">
           Back to my account
         </Link>
       </div>
+
       <ErrorBanner error={error} />
 
       {step === "select" && (
         <>
-          <p className="hint">
-            You're currently on <strong>{portal.active_subscription.plan_name}</strong>. Pick a plan below to switch -
-            you'll complete payment before the change takes effect.
-          </p>
           <div className="plan-grid">
             {otherPlans.map((p) => (
               <div className="card plan-card" key={p.plan_code}>
@@ -163,21 +181,27 @@ export function ChangePlanPage() {
                 <p className="plan-price">
                   {p.currency} {p.price.toFixed(2)}
                 </p>
-                {p.description && <div className="plan-description" dangerouslySetInnerHTML={{ __html: sanitizeHtml(p.description) }} />}
+                {p.description && (
+                  <div
+                    className="plan-description"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(p.description) }}
+                  />
+                )}
                 <button className="button button-primary" disabled={busy} onClick={() => handlePick(p)}>
-                  {p.price > (plans.find((c) => c.plan_code === portal.active_subscription!.plan_code)?.price ?? 0)
-                    ? "Upgrade to this plan"
-                    : "Downgrade to this plan"}
+                  {p.price > currentPrice ? "Upgrade to this plan" : "Downgrade to this plan"}
                 </button>
               </div>
             ))}
           </div>
           {otherPlans.length === 0 && <p className="hint">No other plans available to switch to right now.</p>}
+          <p className="hint" style={{ marginTop: 20 }}>
+            No proration &middot; no refund &middot; the change applies immediately at the target plan's full price.
+          </p>
         </>
       )}
 
       {step === "payment" && pendingPayment && (
-        <div className="card">
+        <div className="portal-card" style={{ maxWidth: 480 }}>
           <h2>Almost there - complete payment</h2>
           <dl className="summary-list">
             <dt>Amount</dt>
@@ -192,7 +216,7 @@ export function ChangePlanPage() {
       )}
 
       {step === "done" && callbackResult && (
-        <div className="card">
+        <div className="portal-card" style={{ maxWidth: 480 }}>
           {callbackResult.subscription.status === "ACTIVE" ? (
             <>
               <h2>Plan changed</h2>

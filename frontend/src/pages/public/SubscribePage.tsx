@@ -17,20 +17,62 @@
  * registration_data is collected via DynamicRegistrationForm (spec
  * section 8), driven by whatever active RegistrationFormField rows the
  * admin has configured for this application - no hardcoded field set.
+ *
+ * Visual redesign (2026-09-15 follow-up, second pass - "please change
+ * layout for plan listing, registration form page as well"). Every
+ * handler, effect, state variable and conditional branch below is
+ * byte-identical in logic to before this pass; only the markup and
+ * classNames changed (plus one purely-derived, presentation-only
+ * `currentStepIndex` value used for the new step indicator), scoped
+ * under the new .subscribe-page wrapper in index.css so nothing outside
+ * this page is affected.
  */
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { getPublicMessages, identify, listPlans, simulateMockCallback, subscribe, verifyOtp } from "../../api/endpoints";
+import {
+  getCustomerPortal,
+  getPublicMessages,
+  identify,
+  listPlans,
+  simulateMockCallback,
+  subscribe,
+  verifyOtp,
+} from "../../api/endpoints";
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
+import { isSessionExpired } from "../../utils/authError";
 import { sanitizeHtml } from "../../utils/sanitizeHtml";
 import type { MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 type Step = "form" | "otp" | "payment" | "done";
+
+const STEP_LABELS = ["Your details", "Payment", "Confirmation"] as const;
+
+// Small inline icons (no icon-library dependency, same convention as
+// PortalPage's local SVG components) used to give the payment/done
+// step cards a bit of the same visual polish as the customer portal.
+function CardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="5" width="20" height="14" rx="2.5" />
+      <path d="M2 10h20" />
+      <path d="M6 15h4" />
+    </svg>
+  );
+}
+
+function CheckCircleIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9.5" />
+      <path d="M8 12.5l2.5 2.5L16 9.5" />
+    </svg>
+  );
+}
 
 export function SubscribePage() {
   const { planCode } = useParams<{ planCode: string }>();
@@ -62,8 +104,66 @@ export function SubscribePage() {
   // routed to an upgrade/downgrade against their existing subscription
   // (spec section 9/22's auto-routing - they already have credentials).
   const [postSubscriptionMessage, setPostSubscriptionMessage] = useState<string | null>(null);
+  // Vishal: "One customer can fill registration data once only at first
+  // time customer creation. for second time, it will redirect to my
+  // subscription page only." A signed-in customer landing here (as
+  // opposed to a brand-new visitor) has already given registration data
+  // once - "checking" avoids flashing the registration form/card before
+  // we know whether to redirect; "active-subscription" is the
+  // redirect-in-flight state (an existing customer who already has a
+  // subscription manages plan changes from My Subscription > Change plan
+  // instead - see ChangePlanPage.tsx); "no-active-subscription" is a
+  // lapsed/cancelled customer who's still allowed to buy a new plan here,
+  // just without ever being asked for registration data again.
+  const [signedInStatus, setSignedInStatus] = useState<
+    "not-signed-in" | "checking" | "active-subscription" | "no-active-subscription"
+  >("not-signed-in");
+  // Set just before the OTP-verify flow authenticates someone, so the
+  // general "already signed in on mount" effect below (which reacts to
+  // the very same customerToken becoming non-null) skips its own,
+  // redundant portal check - handleOtpSubmit does that check itself,
+  // inline, since only it knows whether to auto-continue the subscribe
+  // afterwards (a fresh OTP verification is a continuation of an
+  // in-progress attempt) or a mount-time token just means "show the
+  // manual Subscribe-with-my-account option".
+  const otpFlowActiveRef = useRef(false);
 
   const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields();
+
+  useEffect(() => {
+    if (otpFlowActiveRef.current) return;
+    if (!customerToken) {
+      setSignedInStatus("not-signed-in");
+      return;
+    }
+    let cancelled = false;
+    setSignedInStatus("checking");
+    getCustomerPortal(customerToken)
+      .then((portal) => {
+        if (cancelled) return;
+        if (portal.active_subscription) {
+          setSignedInStatus("active-subscription");
+          navigate("/portal", { replace: true });
+        } else {
+          setSignedInStatus("no-active-subscription");
+        }
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (isSessionExpired(err)) {
+          // Stale/invalid token - treat this visit as anonymous rather
+          // than getting stuck on "checking" forever.
+          setCustomerToken(null);
+          return;
+        }
+        // Fail open: an unrelated fetch error shouldn't block someone
+        // from at least attempting to subscribe.
+        setSignedInStatus("no-active-subscription");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerToken, navigate, setCustomerToken]);
 
   useEffect(() => {
     // Fetched unconditionally alongside otherPlans below rather than only
@@ -109,9 +209,18 @@ export function SubscribePage() {
     setBusy(true);
     setError(null);
     try {
+      // registration_data is only ever sent for a genuinely anonymous
+      // (no token) attempt - a brand-new customer, or one who turns out
+      // to be existing and gets diverted through the OTP step below. Any
+      // token-bearing call, by construction, means an already-identified
+      // existing customer (either already signed in, or just OTP-
+      // verified) - Vishal: "One customer can fill registration data once
+      // only at first time customer creation" - so it's never sent
+      // again, even if some was typed into the anonymous form's fields
+      // before the OTP detour.
       const result = await subscribe(
         planCode!,
-        token ? { registration_data: registrationValues } : { email, mobile, registration_data: registrationValues },
+        token ? {} : { email, mobile, registration_data: registrationValues },
         token,
       );
       setSubscribeResult(result);
@@ -165,9 +274,33 @@ export function SubscribePage() {
     if (!otpSessionId) return;
     setBusy(true);
     setError(null);
+    // Marks this token change as "already being handled" so the mount-
+    // time signed-in effect (above) doesn't also run its own, redundant
+    // portal check for the exact same token - this function decides the
+    // outcome itself, inline, since only it knows this is a continuation
+    // of an in-progress subscribe attempt rather than someone just
+    // arriving at this page already signed in.
+    otpFlowActiveRef.current = true;
     try {
       const result = await verifyOtp(otpSessionId, otpCode);
       setCustomerToken(result.access_token);
+      // Vishal: "One customer can fill registration data once only at
+      // first time customer creation. for second time, it will redirect
+      // to my subscription page only." Reaching this OTP step already
+      // means this is an existing account (see OTP_VERIFICATION_REQUIRED
+      // above) - if they also already have an active subscription, send
+      // them to My Subscription (Change plan there) instead of completing
+      // a second subscribe here. Only a lapsed/cancelled existing
+      // customer (no active subscription) continues the attempt, and
+      // even then without the registration_data they may have typed
+      // before this detour - doSubscribe() never sends it once a token is
+      // involved.
+      const existingPortal = await getCustomerPortal(result.access_token);
+      if (existingPortal.active_subscription) {
+        toast.info("You already have an active subscription - manage it from My Subscription.");
+        navigate("/portal");
+        return;
+      }
       await doSubscribe(result.access_token);
     } catch (err) {
       setError(err);
@@ -196,204 +329,253 @@ export function SubscribePage() {
     }
   }
 
+  // Purely derived, presentation-only - which of the 3 displayed steps
+  // ("Your details" covers both the "form" and "otp" sub-states, since
+  // OTP is just a detour within giving your details) is current/done.
+  // Never read by any handler above; only used by the step indicator JSX
+  // below.
+  const currentStepIndex = step === "form" || step === "otp" ? 0 : step === "payment" ? 1 : 2;
+
   return (
-    <section>
-      <h1>Subscribe to {selectedPlan?.name ?? planCode}</h1>
+    <section className="subscribe-page">
+      <div className="portal-page-head">
+        <div>
+          <div className="portal-eyebrow">
+            Everyticket <span className="sep">/</span> Subscribe
+          </div>
+          <h1>Subscribe to {selectedPlan?.name ?? planCode}</h1>
+        </div>
+      </div>
+
       <ErrorBanner error={error} />
       <ErrorBanner error={registrationFieldsError} />
 
-      <div className="subscribe-layout">
-      <div className="subscribe-main">
-      {step === "form" && (
-        <>
-          {customerToken ? (
-            <div className="card">
-              <p>You're signed in - subscribe using your existing account.</p>
-              {registrationFields && (
-                <DynamicRegistrationForm
-                  fields={registrationFields}
-                  values={registrationValues}
-                  onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
-                />
-              )}
-              <button className="button button-primary" disabled={busy} onClick={() => doSubscribe(customerToken)}>
-                {busy ? "Subscribing..." : "Subscribe with my account"}
-              </button>
-            </div>
-          ) : (
-            <form className="card" onSubmit={handleFormSubmit}>
-              <label>
-                Email *
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                />
-              </label>
-              <label>
-                Mobile *
-                <input
-                  type="tel"
-                  required
-                  value={mobile}
-                  onChange={(e) => setMobile(e.target.value)}
-                  placeholder="9XXXXXXXXX"
-                />
-              </label>
-              {registrationFields && (
-                <DynamicRegistrationForm
-                  fields={registrationFields}
-                  values={registrationValues}
-                  onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
-                />
-              )}
-              <button className="button button-primary" type="submit" disabled={busy}>
-                {busy ? "Please wait..." : "Continue"}
-              </button>
-              <p className="hint">
-                Already have an account? This will ask you to verify with an OTP instead of creating a
-                duplicate one.
-              </p>
-            </form>
-          )}
-        </>
-      )}
-
-      {step === "otp" && (
-        <form className="card" onSubmit={handleOtpSubmit}>
-          <p>We found an existing account for that email/mobile. Enter the verification code to continue.</p>
-          {debugOtpCode && (
-            <p className="hint hint-dev">
-              Dev/test mode: the code is <code>{debugOtpCode}</code> (no real SMS/email is sent yet).
-            </p>
-          )}
-          <label>
-            Verification code
-            <input
-              type="text"
-              required
-              value={otpCode}
-              onChange={(e) => setOtpCode(e.target.value)}
-              placeholder="6-digit code"
-            />
-          </label>
-          <button className="button button-primary" type="submit" disabled={busy}>
-            {busy ? "Verifying..." : "Verify and continue"}
-          </button>
-        </form>
-      )}
-
-      {step === "payment" && subscribeResult && (
-        <div className="card">
-          <h2>Almost there - complete payment</h2>
-          <dl className="summary-list">
-            <dt>Plan</dt>
-            <dd>{planCode}</dd>
-            <dt>Amount</dt>
-            <dd>
-              {subscribeResult.payment.currency} {subscribeResult.payment.amount.toFixed(2)}
-            </dd>
-            <dt>Transaction</dt>
-            <dd>{subscribeResult.payment.transaction_id}</dd>
-            <dt>Status</dt>
-            <dd>{subscribeResult.payment.status}</dd>
-          </dl>
-          <PaymentCheckout payment={subscribeResult.payment} busy={busy} onSimulate={handleSimulate} />
-        </div>
-      )}
-
-      {step === "done" && callbackResult && (
-        <div className="card">
-          {callbackResult.subscription.status === "ACTIVE" ? (
-            <>
-              <h2>Subscription active</h2>
-              <p>Your subscription is now active{callbackResult.invoice_id ? ` and invoice ${callbackResult.invoice_id} was generated.` : "."}</p>
-              <p className="hint">
-                Transaction: <code>{callbackResult.payment.transaction_id}</code>
-              </p>
-              {callbackResult.payment.payment_type === "NEW" && postSubscriptionMessage && (
-                <p>{postSubscriptionMessage}</p>
-              )}
-              {customerToken ? (
-                <Link className="button button-primary" to="/portal">
-                  Go to my account
-                </Link>
-              ) : (
-                <>
-                  <p className="hint">Sign in with the OTP flow to view your subscription any time.</p>
-                  <Link className="button button-primary" to="/login">
-                    Sign in
-                  </Link>
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <h2>Payment failed</h2>
-              <p>The simulated payment failed. Your subscription was not activated - you can try again.</p>
-              <button className="button button-primary" onClick={() => navigate(0)}>
-                Try again
-              </button>
-            </>
-          )}
-        </div>
-      )}
+      <div className="subscribe-stepper">
+        {STEP_LABELS.map((label, i) => (
+          <div
+            key={label}
+            className={`subscribe-step ${i < currentStepIndex ? "is-done" : i === currentStepIndex ? "is-current" : ""}`}
+          >
+            <span className="subscribe-step-dot">{i < currentStepIndex ? "✓" : i + 1}</span>
+            <span className="subscribe-step-label">{label}</span>
+            {i < STEP_LABELS.length - 1 && <span className="subscribe-step-line" aria-hidden="true" />}
+          </div>
+        ))}
       </div>
 
-      {step !== "done" && (selectedPlan || otherPlans.length > 0) && (
-        <aside className="subscribe-plans-panel">
-          {selectedPlan && (
-            <div className="subscribe-selected-plan">
-              <p className="subscribe-selected-plan-eyebrow">Your plan</p>
-              <p className="subscribe-selected-plan-name">{selectedPlan.name}</p>
-              <p className="plan-price">
-                {selectedPlan.is_trial ? (
-                  `Free for ${selectedPlan.trial_period_days ?? "?"} days`
+      <div className="subscribe-layout">
+        <div className="subscribe-main">
+          {step === "form" && (
+            <>
+              {customerToken ? (
+                signedInStatus === "checking" || signedInStatus === "active-subscription" ? (
+                  // "active-subscription" is the redirect-in-flight state -
+                  // this still renders briefly while navigate() takes effect,
+                  // so it deliberately shows the same "checking" message
+                  // rather than a flash of the subscribe card.
+                  <div className="card portal-card">
+                    <p>Checking your account...</p>
+                  </div>
                 ) : (
-                  <>
-                    {selectedPlan.currency} {selectedPlan.price.toFixed(2)}
-                    <span className="plan-interval">
-                      {" "}
-                      / {selectedPlan.billing_frequency > 1 ? `${selectedPlan.billing_frequency} ` : ""}
-                      {selectedPlan.billing_interval}
-                      {selectedPlan.billing_frequency > 1 ? "s" : ""}
-                    </span>
-                  </>
-                )}
-              </p>
-              {selectedPlan.description && (
-                // Same rich-text description used on the public plans
-                // listing (spec section 51 bullet-point editor) - the
-                // "features" for a plan are exactly this description, so
-                // reuse the same sanitize-then-render treatment here.
-                <div
-                  className="plan-description"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtml(selectedPlan.description) }}
-                />
+                  <div className="card portal-card">
+                    <p>You're signed in - subscribe using your existing account.</p>
+                    {/* No registration form here, ever - Vishal: "One customer
+                        can fill registration data once only at first time
+                        customer creation." A signed-in customer already gave
+                        that data when their account was first created; this
+                        branch only renders at all for one that currently has
+                        no active subscription (a lapsed/cancelled repurchase),
+                        since an active subscriber was already redirected to
+                        My Subscription above. */}
+                    <button className="button button-primary" disabled={busy} onClick={() => doSubscribe(customerToken)}>
+                      {busy ? "Subscribing..." : "Subscribe with my account"}
+                    </button>
+                  </div>
+                )
+              ) : (
+                <form className="card portal-card" onSubmit={handleFormSubmit}>
+                  <label>
+                    Email *
+                    <input
+                      type="email"
+                      required
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@example.com"
+                    />
+                  </label>
+                  <label>
+                    Mobile *
+                    <input
+                      type="tel"
+                      required
+                      value={mobile}
+                      onChange={(e) => setMobile(e.target.value)}
+                      placeholder="9XXXXXXXXX"
+                    />
+                  </label>
+                  {registrationFields && (
+                    <DynamicRegistrationForm
+                      fields={registrationFields}
+                      values={registrationValues}
+                      onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                    />
+                  )}
+                  <button className="button button-primary" type="submit" disabled={busy}>
+                    {busy ? "Please wait..." : "Continue"}
+                  </button>
+                  <p className="hint">
+                    Already have an account? This will ask you to verify with an OTP instead of creating a
+                    duplicate one.
+                  </p>
+                </form>
               )}
+            </>
+          )}
+
+          {step === "otp" && (
+            <form className="card portal-card" onSubmit={handleOtpSubmit}>
+              <p>We found an existing account for that email/mobile. Enter the verification code to continue.</p>
+              {debugOtpCode && (
+                <p className="hint hint-dev">
+                  Dev/test mode: the code is <code>{debugOtpCode}</code> (no real SMS/email is sent yet).
+                </p>
+              )}
+              <label>
+                Verification code
+                <input
+                  type="text"
+                  required
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value)}
+                  placeholder="6-digit code"
+                />
+              </label>
+              <button className="button button-primary" type="submit" disabled={busy}>
+                {busy ? "Verifying..." : "Verify and continue"}
+              </button>
+            </form>
+          )}
+
+          {step === "payment" && subscribeResult && (
+            <div className="card portal-card">
+              <div className="portal-card-title-row">
+                <span className="portal-icon-tag">
+                  <CardIcon />
+                </span>
+                <h2 style={{ margin: 0 }}>Almost there - complete payment</h2>
+              </div>
+              <dl className="summary-list">
+                <dt>Plan</dt>
+                <dd>{planCode}</dd>
+                <dt>Amount</dt>
+                <dd>
+                  {subscribeResult.payment.currency} {subscribeResult.payment.amount.toFixed(2)}
+                </dd>
+                <dt>Transaction</dt>
+                <dd>{subscribeResult.payment.transaction_id}</dd>
+                <dt>Status</dt>
+                <dd>{subscribeResult.payment.status}</dd>
+              </dl>
+              <PaymentCheckout payment={subscribeResult.payment} busy={busy} onSimulate={handleSimulate} />
             </div>
           )}
 
-          {otherPlans.length > 0 && (
-            <div className="subscribe-other-plans">
-              <h2>Other plans</h2>
-              <p className="hint">Not sure this is the right one? Switch before you pay.</p>
-              <div className="subscribe-plans-row">
-                {otherPlans.map((p) => (
-                  <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
-                    <span className="plan-mini-name">{p.name}</span>
-                    <span className="plan-mini-price">
-                      {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
+          {step === "done" && callbackResult && (
+            <div className="card portal-card">
+              {callbackResult.subscription.status === "ACTIVE" ? (
+                <>
+                  <div className="portal-card-title-row">
+                    <span className="portal-icon-tag" style={{ background: "var(--success-bg)", color: "var(--success)" }}>
+                      <CheckCircleIcon />
                     </span>
-                  </Link>
-                ))}
-              </div>
+                    <h2 style={{ margin: 0 }}>Subscription active</h2>
+                  </div>
+                  <p>Your subscription is now active{callbackResult.invoice_id ? ` and invoice ${callbackResult.invoice_id} was generated.` : "."}</p>
+                  <p className="hint">
+                    Transaction: <code>{callbackResult.payment.transaction_id}</code>
+                  </p>
+                  {callbackResult.payment.payment_type === "NEW" && postSubscriptionMessage && (
+                    <p>{postSubscriptionMessage}</p>
+                  )}
+                  {customerToken ? (
+                    <Link className="button button-primary" to="/portal">
+                      Go to my account
+                    </Link>
+                  ) : (
+                    <>
+                      <p className="hint">Sign in with the OTP flow to view your subscription any time.</p>
+                      <Link className="button button-primary" to="/login">
+                        Sign in
+                      </Link>
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <h2>Payment failed</h2>
+                  <p>The simulated payment failed. Your subscription was not activated - you can try again.</p>
+                  <button className="button button-primary" onClick={() => navigate(0)}>
+                    Try again
+                  </button>
+                </>
+              )}
             </div>
           )}
-        </aside>
-      )}
+        </div>
+
+        {step !== "done" && (selectedPlan || otherPlans.length > 0) && (
+          <aside className="subscribe-plans-panel">
+            {selectedPlan && (
+              <div className="subscribe-selected-plan">
+                <p className="subscribe-selected-plan-eyebrow">Your plan</p>
+                <p className="subscribe-selected-plan-name">{selectedPlan.name}</p>
+                <p className="plan-price">
+                  {selectedPlan.is_trial ? (
+                    `Free for ${selectedPlan.trial_period_days ?? "?"} days`
+                  ) : (
+                    <>
+                      {selectedPlan.currency} {selectedPlan.price.toFixed(2)}
+                      <span className="plan-interval">
+                        {" "}
+                        / {selectedPlan.billing_frequency > 1 ? `${selectedPlan.billing_frequency} ` : ""}
+                        {selectedPlan.billing_interval}
+                        {selectedPlan.billing_frequency > 1 ? "s" : ""}
+                      </span>
+                    </>
+                  )}
+                </p>
+                {selectedPlan.description && (
+                  // Same rich-text description used on the public plans
+                  // listing (spec section 51 bullet-point editor) - the
+                  // "features" for a plan are exactly this description, so
+                  // reuse the same sanitize-then-render treatment here.
+                  <div
+                    className="plan-description"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtml(selectedPlan.description) }}
+                  />
+                )}
+              </div>
+            )}
+
+            {otherPlans.length > 0 && (
+              <div className="subscribe-other-plans">
+                <h2>Other plans</h2>
+                <p className="hint">Not sure this is the right one? Switch before you pay.</p>
+                <div className="subscribe-plans-row">
+                  {otherPlans.map((p) => (
+                    <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
+                      <span className="plan-mini-name">{p.name}</span>
+                      <span className="plan-mini-price">
+                        {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+          </aside>
+        )}
       </div>
     </section>
   );

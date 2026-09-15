@@ -186,6 +186,38 @@ code {
   cursor: pointer;
 }
 
+/* 2026-09-15 follow-up: this header had no narrow-viewport rule at all -
+   at phone widths, "Plans" / "My Subscriptions" / "Sign out" simply
+   overflowed the header's right edge instead of shrinking, cut off
+   rather than wrapping. Caught while making the customer portal pages
+   responsive (Vishal: "...proper spacing, responsive..."); this header
+   is shared with the public Plans/Subscribe/Login pages too, so the fix
+   is a pure bug fix here (shrink to fit, wrap as a last resort) rather
+   than a redesign - nothing about the header's look changes above this
+   breakpoint. */
+@media (max-width: 640px) {
+  .app-header {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .app-header .brand-logo {
+    height: 24px;
+  }
+
+  .app-header nav {
+    gap: 14px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .app-header nav a,
+  .app-header-signout {
+    font-size: 13px;
+  }
+}
+
 .app-header-signout:hover {
   border-color: rgba(247, 236, 232, 0.6);
   color: var(--header-text);
@@ -1578,6 +1610,793 @@ textarea {
   margin: 6px 0;
   padding-left: 22px;
   text-align: left;
+}
+
+/* ---------- Customer portal redesign (2026-09-15 follow-up) ----------
+   "Current Front end design is very simple and ordinary... suggest one
+   page redesign very elegant, proper spacing, responsive, customer
+   experience centric... now change all customer portal pages with such
+   good design." Scoped entirely under .portal-page (PortalPage.tsx /
+   "My Subscription") and .change-plan-page (ChangePlanPage.tsx) so it
+   never touches the public marketing pages (Plans/Subscribe/Login) or
+   the admin console, which share the same .card/.button/.badge/.detail-
+   grid primitives used above - this section only ADDS new classes, it
+   never redefines an existing one. Every color still reads the shared
+   --text/--accent/--success/etc. tokens (or derives from them with
+   color-mix()) so both the light theme and the existing
+   prefers-color-scheme:dark override above keep working here with zero
+   extra dark-mode rules needed. No external font - the brand's own
+   local-asset-only convention (see Layout.tsx's logo comment) already
+   ruled out depending on a webfont CDN being reachable; weight contrast
+   on the existing system-font stack carries the "elegant" feel instead. */
+
+.portal-page,
+.change-plan-page {
+  max-width: 1180px;
+}
+
+/* .app-main (Layout.tsx's shared public-site wrapper, also used by
+   Plans/Subscribe/Login) caps at 960px - fine for those single-column
+   pages, but too narrow for this page's two-column layout, which then
+   overflowed its own card into the sidebar column. Widen app-main only
+   when a portal page is the thing it's wrapping, via :has() (already
+   used elsewhere in this file - see .radio-option:has(input:checked) -
+   so this introduces no new browser-support assumption), rather than
+   raising max-width for every public page. */
+.app-main:has(> .portal-page),
+.app-main:has(> .change-plan-page) {
+  max-width: 1180px;
+}
+
+.portal-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.6;
+  margin: 0 0 6px;
+}
+
+.portal-eyebrow .sep {
+  opacity: 0.6;
+}
+
+.portal-page-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 28px;
+}
+
+.portal-page-head h1 {
+  margin-bottom: 4px;
+}
+
+.portal-page-head p {
+  margin: 0;
+  color: var(--text);
+  opacity: 0.75;
+  font-size: 15px;
+}
+
+.portal-layout {
+  display: grid;
+  grid-template-columns: 1.7fr 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .portal-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.portal-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+}
+
+/* ---- Hero: active subscription card ---- */
+
+.portal-hero {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04), 0 20px 40px -24px var(--accent);
+  padding: 32px;
+  max-width: none;
+  margin-bottom: 0;
+}
+
+.portal-hero::before {
+  content: "";
+  position: absolute;
+  top: -100px;
+  right: -100px;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-bg), transparent 70%);
+  pointer-events: none;
+}
+
+.portal-hero-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  position: relative;
+}
+
+.portal-plan-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+}
+
+.portal-plan-name {
+  font-size: 30px;
+  margin: 0 0 6px;
+  letter-spacing: -0.02em;
+}
+
+.portal-plan-price {
+  margin: 0;
+  font-size: 14.5px;
+  color: var(--text);
+  opacity: 0.8;
+}
+
+.portal-plan-price b {
+  color: var(--text-h);
+  opacity: 1;
+  font-size: 15.5px;
+}
+
+.portal-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--success-bg);
+  color: var(--success);
+  font-weight: 700;
+  font-size: 12.5px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.portal-status-pill .ring {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.portal-status-pill.is-idle {
+  background: var(--surface-alt);
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.portal-meter {
+  position: relative;
+  margin: 24px 0 26px;
+}
+
+.portal-meter-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text);
+  opacity: 0.65;
+  margin-bottom: 9px;
+  font-weight: 500;
+  gap: 12px;
+}
+
+.portal-meter-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.portal-meter-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, white));
+}
+
+.portal-hero-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  position: relative;
+  align-items: center;
+}
+
+.portal-hero-actions .button-primary {
+  padding: 13px 22px;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px -8px var(--accent);
+}
+
+.portal-hero-actions .button-secondary {
+  padding: 13px 20px;
+  border-radius: 12px;
+}
+
+.portal-link-danger {
+  background: transparent;
+  border: none;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--danger);
+  cursor: pointer;
+  padding: 8px 4px;
+}
+
+.portal-link-danger:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.portal-link-danger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.portal-cancel-panel {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px dashed var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  position: relative;
+  max-width: 420px;
+}
+
+.portal-cancel-panel label {
+  font-size: 13px;
+}
+
+/* ---- Section card shell (history, info cards) ---- */
+
+.portal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: var(--shadow-sm);
+  max-width: none;
+  margin-bottom: 0;
+  padding: 28px;
+}
+
+.portal-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.portal-section-head h2 {
+  margin: 0;
+}
+
+.portal-section-head .portal-count {
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.portal-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.portal-icon-tag {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  background: var(--accent-bg);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.portal-icon-tag svg {
+  width: 17px;
+  height: 17px;
+}
+
+.portal-card-title-row h3 {
+  margin: 0;
+  font-size: 15.5px;
+}
+
+.portal-card-title-row .portal-card-sub {
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.6;
+  margin-top: 1px;
+}
+
+/* ---- History list (replaces a plain <table> with a card-row list -
+   same data, same columns' meaning, laid out so each record reads as one
+   scannable unit instead of a dense grid of cells). ---- */
+
+.portal-history-list {
+  display: flex;
+  flex-direction: column;
+  /* 2026-09-15 follow-up ("Keep GRID horizonal scrollable when overflow"):
+     .portal-history-head/-row's 5 minmax() columns have a combined
+     minimum content width (~618px) that can exceed the actual space
+     available in the two-column .portal-layout (e.g. a ~900-1100px
+     viewport, where the 1.7fr history column is squeezed by the sidebar)
+     - without this, the grid either forced the whole page wider or
+     silently overlapped the sidebar. overflow-x:auto here, plus the
+     min-width floor on the head/row grids below (>720px only - the
+     stacked single-column mobile layout never needs it and must stay
+     unconstrained), contains that overflow to just this list: it gets
+     its own horizontal scrollbar instead, with header and rows staying
+     column-aligned since they scroll together as one container. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.portal-history-head {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.6fr) minmax(100px, 1fr) minmax(100px, 1fr) minmax(120px, 1fr) minmax(80px, 0.8fr);
+  gap: 12px;
+  padding: 0 4px 12px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text);
+  opacity: 0.55;
+}
+
+.portal-history-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1.6fr) minmax(100px, 1fr) minmax(100px, 1fr) minmax(120px, 1fr) minmax(80px, 0.8fr);
+  gap: 12px;
+  align-items: center;
+  padding: 16px 4px;
+  border-top: 1px solid var(--border);
+}
+
+.portal-history-row:hover {
+  background: var(--surface-alt);
+}
+
+.portal-plan-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.portal-plan-badge {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 13px;
+  color: #fff;
+  flex: none;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 60%, #7c3aed));
+}
+
+.portal-plan-badge.tone-2 {
+  background: linear-gradient(135deg, #7c3aed, #4f46e5);
+}
+
+.portal-plan-badge.tone-3 {
+  background: linear-gradient(135deg, #9ca3af, #6b7280);
+}
+
+.portal-plan-cell .txt {
+  min-width: 0;
+}
+
+.portal-plan-cell .txt b {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-h);
+  overflow-wrap: break-word;
+}
+
+.portal-plan-cell .txt span {
+  font-size: 12.5px;
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.portal-cell-main {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text-h);
+}
+
+.portal-cell-sub {
+  font-size: 12px;
+  color: var(--text);
+  opacity: 0.6;
+  margin-top: 2px;
+}
+
+.portal-cell-dim {
+  font-size: 12.5px;
+  color: var(--text);
+  opacity: 0.5;
+}
+
+.portal-inv-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 0;
+}
+
+.portal-inv-link:hover {
+  text-decoration: underline;
+}
+
+.portal-inv-link svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+@media (max-width: 720px) {
+  .portal-history-head {
+    display: none;
+  }
+  .portal-history-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 18px 4px;
+  }
+  .portal-history-row-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+  }
+  .portal-history-row-line .portal-cell-label {
+    color: var(--text);
+    opacity: 0.55;
+    font-size: 12px;
+  }
+}
+
+@media (min-width: 721px) {
+  .portal-history-row-line {
+    display: contents;
+  }
+  .portal-cell-label {
+    display: none;
+  }
+  /* Floor matching the grid's own minmax() minimums (170+100+100+120+80
+     + 4*12px gaps = 618px) so the columns can never be squeezed
+     narrower than intended - once the container is tighter than this,
+     .portal-history-list's overflow-x:auto above takes over instead. */
+  .portal-history-head,
+  .portal-history-row {
+    min-width: 618px;
+  }
+}
+
+/* ---- Sidebar info cards (Account / Registration details) ---- */
+
+.portal-info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 13px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.portal-info-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.portal-info-row:first-child {
+  padding-top: 0;
+}
+
+.portal-info-row .k {
+  font-size: 13px;
+  color: var(--text);
+  opacity: 0.65;
+  flex: none;
+}
+
+.portal-info-row .v {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-h);
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: break-word;
+}
+
+@media (max-width: 480px) {
+  .portal-card {
+    padding: 20px;
+  }
+  .portal-hero {
+    padding: 24px 20px;
+  }
+  .portal-plan-name {
+    font-size: 25px;
+  }
+}
+
+/* ---------- Public plan-listing + subscribe-flow redesign
+   (2026-09-15 follow-up, second pass) ----------
+   "please change layout for plan listing, registration form page as
+   well" - the same elegant/spacious/responsive treatment already
+   shipped for the customer portal pages above, now extended to the two
+   pages a brand-new visitor sees first: the public Plans listing and
+   the Subscribe (signup/registration) flow.
+
+   Scoped under new .plans-page / .subscribe-page wrapper classes, with
+   one deliberate exception each, same reasoning as the portal section
+   above:
+     - .app-main:has(> .plans-page)/.has(> .subscribe-page) widens the
+       shared 960px-capped .app-main only for these two pages, exactly
+       like the existing portal-page/change-plan-page rule already does.
+     - .plans-page .plan-card / .plan-grid are DESCENDANT selectors, not
+       redefinitions of the shared .plan-card/.plan-grid classes -
+       ChangePlanPage.tsx reuses those same two classes for its own
+       "pick a new plan" grid (inside .change-plan-page, not
+       .plans-page), so it is completely unaffected by anything here.
+   Everything else (.subscribe-layout, .subscribe-main, .subscribe-
+   plans-panel, .subscribe-selected-plan*, .subscribe-plans-row,
+   .plan-mini-card*) is restyled directly rather than via a new class,
+   because those classes are only ever used on this one page. All colors
+   still read the shared --text/--accent/--success/etc. tokens (or
+   derive from them with color-mix()), so the dark-mode override above
+   keeps working here with zero extra rules. */
+
+.plans-page,
+.subscribe-page {
+  max-width: 1180px;
+}
+
+.app-main:has(> .plans-page),
+.app-main:has(> .subscribe-page) {
+  max-width: 1180px;
+}
+
+/* ---- Plans listing ---- */
+
+.plans-page .plan-grid {
+  gap: 22px;
+  margin-top: 6px;
+}
+
+.plans-page .plan-card {
+  border-radius: 18px;
+  padding: 26px;
+}
+
+.plans-page .plan-card .button-primary {
+  margin-top: auto;
+  width: 100%;
+}
+
+.plans-page .plan-price {
+  font-size: 26px;
+}
+
+/* At this larger font-size, "INR 15000.00 / month" no longer reliably
+   fits one line inside a ~280px card column - rather than let it wrap
+   mid-unit at an arbitrary point, put the interval on its own line
+   deliberately (a common pricing-card convention: big number, small
+   "/ month" underneath). Also applies to the subscribe-page's selected-
+   plan panel for the same reason at its own (smaller) font-size, should
+   a long plan name ever push that column narrower too. */
+.plans-page .plan-interval,
+.subscribe-page .plan-interval {
+  display: block;
+  margin-top: 2px;
+}
+
+.plans-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.plans-card-badge {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  color: #fff;
+  flex: none;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #7c3aed));
+}
+
+.plans-card-badge.tone-2 {
+  background: linear-gradient(135deg, #7c3aed, #4f46e5);
+}
+
+.plans-card-badge.tone-3 {
+  background: linear-gradient(135deg, #9ca3af, #6b7280);
+}
+
+.plans-trial-tag {
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--success);
+  background: var(--success-bg);
+  padding: 5px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* ---- Subscribe flow: step indicator ---- */
+
+.subscribe-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 4px 0 28px;
+  max-width: 560px;
+  flex-wrap: wrap;
+  row-gap: 12px;
+}
+
+.subscribe-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  opacity: 0.55;
+}
+
+.subscribe-step.is-current,
+.subscribe-step.is-done {
+  opacity: 1;
+}
+
+.subscribe-step-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12.5px;
+  font-weight: 700;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  flex: none;
+}
+
+.subscribe-step.is-current .subscribe-step-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.subscribe-step.is-done .subscribe-step-dot {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+.subscribe-step-label {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.subscribe-step-line {
+  width: 32px;
+  height: 1.5px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.subscribe-step.is-done .subscribe-step-line {
+  background: var(--accent);
+}
+
+@media (max-width: 480px) {
+  .subscribe-step-label {
+    display: none;
+  }
+  .subscribe-step-line {
+    width: 18px;
+  }
+}
+
+/* ---- Subscribe flow: form/otp/payment/done cards ----
+   .card supplies the flex/gap layout (form.card) and .portal-card
+   supplies the rounded/shadow/padding treatment already used by the
+   customer portal - combined on the same element, later rules in this
+   file win per-property (max-width/padding/border-radius), which is why
+   .portal-card's later position here safely overrides .card's narrower
+   defaults without editing .card itself. */
+
+.subscribe-page input,
+.subscribe-page select,
+.subscribe-page textarea {
+  padding: 10px 13px;
+  border-radius: 9px;
+}
+
+.subscribe-page label {
+  font-size: 13.5px;
+}
+
+/* ---- Subscribe flow: "your plan" / "other plans" side panel ---- */
+
+.subscribe-layout {
+  gap: 28px;
+}
+
+.subscribe-plans-panel {
+  border-radius: 18px;
+  padding: 24px;
+}
+
+@media (min-width: 861px) {
+  .subscribe-plans-panel {
+    position: sticky;
+    top: 88px;
+  }
+}
+
+.plan-mini-card {
+  border-radius: 12px;
 }
 
 /* ---------- Drag-to-reorder ---------- */
