@@ -26,6 +26,10 @@ export interface Customer {
   email_verified: boolean;
   mobile_verified: boolean;
   status: string;
+  // 2026-09-15 follow-up (admin Customer detail page redesign): backend
+  // CustomerOut now always includes this (existing TimestampMixin column,
+  // just newly surfaced) - used for the detail page's "Customer since".
+  created_at: string;
 }
 
 export interface SubscriptionOut {
@@ -227,6 +231,30 @@ export interface PageOut<T> {
   offset: number;
 }
 
+export interface RevenueMonthPoint {
+  month: string; // "2026-04"
+  month_label: string; // "Apr 2026"
+  amount: number;
+}
+
+export interface PlanMixItem {
+  plan_code: string;
+  plan_name: string;
+  count: number;
+  percentage: number;
+}
+
+export interface RecentSubscriptionItem {
+  subscription_id: string;
+  customer_id: string;
+  customer_email: string;
+  plan_name: string;
+  status: string;
+  amount: number | null;
+  currency: string;
+  created_at: string;
+}
+
 export interface DashboardStatsOut {
   active_subscriptions: number;
   new_subscriptions_30d: number;
@@ -237,6 +265,16 @@ export interface DashboardStatsOut {
   expired_total: number;
   provisioning_failures: number;
   webhook_failures: number;
+  // 2026-09-15 dashboard redesign: previous-30-day-window comparators (raw
+  // values, not a pre-computed percentage - see the backend's own comment
+  // on why active_subscriptions has no "_prev" counterpart) plus the
+  // revenue trend / plan mix / recent activity the redesigned page shows.
+  new_subscriptions_30d_prev: number;
+  revenue_30d_prev: number;
+  failed_payments_30d_prev: number;
+  revenue_by_month: RevenueMonthPoint[];
+  plan_mix: PlanMixItem[];
+  recent_subscriptions: RecentSubscriptionItem[];
 }
 
 export interface PlanFeatureAdminOut {
@@ -301,6 +339,14 @@ export interface CustomerAdminListItem {
   mobile: string;
   status: string;
   created_at: string;
+  // 2026-09-15 follow-up ("Change Customer Page now"): the customer's
+  // current subscription (prefers ACTIVE, else falls back to the most
+  // recently created one) - a separate concept from `status` above,
+  // which is the account-level ACTIVE/SUSPENDED flag. All three are
+  // null only for a customer with no subscription at all.
+  current_plan_code: string | null;
+  current_plan_name: string | null;
+  current_subscription_status: string | null;
 }
 
 export interface RegistrationDataOut {

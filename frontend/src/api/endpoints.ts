@@ -190,7 +190,7 @@ export const adminDeletePlanTransition = (transitionId: number, token: string) =
 // --- Admin: customers ---
 
 export const adminListCustomers = (
-  params: { q?: string; status?: string; limit?: number; offset?: number },
+  params: { q?: string; status?: string; plan_code?: string; limit?: number; offset?: number },
   token: string,
 ) => api.get<PageOut<CustomerAdminListItem>>(withQuery("/api/v1/admin/customers", params), token);
 

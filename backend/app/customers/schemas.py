@@ -32,6 +32,13 @@ class CustomerOut(BaseModel):
     email_verified: bool
     mobile_verified: bool
     status: str
+    # 2026-09-15 follow-up (admin Customer detail page redesign): the
+    # Customer model already carries this via TimestampMixin - it was
+    # just never surfaced on this schema before. Used for the detail
+    # page's "Customer since" field; harmless to also return it on the
+    # customer-facing portal/OTP responses that share this schema (it's
+    # not sensitive - a customer already knows when they signed up).
+    created_at: datetime
 
 
 class IdentifyRequest(BaseModel):
@@ -64,13 +71,32 @@ class OtpVerifyResponse(BaseModel):
 
 
 class CustomerAdminListItem(BaseModel):
-    """One row in the admin 'Customers' list (spec section 51/53)."""
+    """One row in the admin 'Customers' list (spec section 51/53).
+
+    2026-09-15 follow-up ("Change Customer Page now" - implementing the
+    approved admin-panel mockup's Customers list): `status` above is the
+    account-level Customer.status (ACTIVE/SUSPENDED - the admin's real
+    suspend/activate action). The three fields below are a SEPARATE,
+    additive concept - the customer's current subscription - computed in
+    app.api.v1.admin_customers.list_customers, not read directly off the
+    Customer row, so this schema can no longer be built with a plain
+    model_validate(customer) alone. "Current" prefers an ACTIVE
+    subscription; with none, it falls back to the most recently created
+    one, so a customer who has only ever had a PENDING_PAYMENT or
+    CANCELLED subscription still shows something rather than a blank.
+    All three are None only for a customer with no subscription at all
+    (not expected in practice, since public signup always creates one,
+    but handled rather than assumed away).
+    """
     model_config = ConfigDict(from_attributes=True)
     customer_id: str
     email: str
     mobile: str
     status: str
     created_at: datetime
+    current_plan_code: str | None = None
+    current_plan_name: str | None = None
+    current_subscription_status: str | None = None
 
 
 class RegistrationDataOut(BaseModel):

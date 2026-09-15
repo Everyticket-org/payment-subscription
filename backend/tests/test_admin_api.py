@@ -40,7 +40,7 @@ def test_admin_endpoint_requires_auth(client, seeded_db):
 
 
 def test_dashboard_returns_stats(client, seeded_db):
-    _new_active_subscription(client, "basic", "dash@example.com", "9800000001")
+    subscription_id = _new_active_subscription(client, "basic", "dash@example.com", "9800000001")
     headers = _admin_headers(client)
 
     resp = client.get("/api/v1/admin/dashboard", headers=headers)
@@ -48,6 +48,57 @@ def test_dashboard_returns_stats(client, seeded_db):
     body = resp.json()
     assert body["active_subscriptions"] >= 1
     assert body["revenue_30d"] >= 2000.0
+
+    # 2026-09-15 dashboard redesign: the previous-window comparators,
+    # revenue trend, plan mix, and recent-subscriptions fields are all
+    # additive to the original 9-field response - assert their shape and
+    # that they reflect the subscription/payment just created above.
+    assert body["new_subscriptions_30d_prev"] >= 0
+    assert body["revenue_30d_prev"] >= 0
+    assert body["failed_payments_30d_prev"] >= 0
+
+    assert len(body["revenue_by_month"]) == 6
+    # The subscription above was just created, so its payment falls in the
+    # current (last) bucket.
+    current_month_point = body["revenue_by_month"][-1]
+    assert current_month_point["amount"] >= 2000.0
+
+    plan_mix_by_code = {item["plan_code"]: item for item in body["plan_mix"]}
+    assert "BASIC" in plan_mix_by_code
+    assert plan_mix_by_code["BASIC"]["count"] >= 1
+    total_percentage = round(sum(item["percentage"] for item in body["plan_mix"]), 0)
+    assert total_percentage == 100
+
+    recent_by_id = {item["subscription_id"]: item for item in body["recent_subscriptions"]}
+    assert subscription_id in recent_by_id
+    created_row = recent_by_id[subscription_id]
+    assert created_row["customer_email"] == "dash@example.com"
+    assert created_row["plan_name"] == "Basic"
+    assert created_row["amount"] == 2000.0
+    assert created_row["currency"] == "INR"
+
+
+def test_dashboard_prev_window_and_failed_payments(client, seeded_db):
+    """A payment failure should count in failed_payments_30d but never in
+    revenue (revenue only sums SUCCESS transactions), and a fresh app with
+    no history should report a zero previous window rather than erroring."""
+    headers = _admin_headers(client)
+
+    resp = client.post(
+        "/api/v1/public/plans/basic/subscribe",
+        json={"email": "faildash@example.com", "mobile": "9800000099", "registration_data": {}},
+    )
+    transaction_id = resp.json()["payment"]["transaction_id"]
+    client.post("/api/v1/payment/mock/callback", json={"transaction_id": transaction_id, "scenario": "FAILED"})
+
+    resp = client.get("/api/v1/admin/dashboard", headers=headers)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["failed_payments_30d"] >= 1
+    # No activity happened 30-60 days ago in this fresh test DB.
+    assert body["new_subscriptions_30d_prev"] == 0
+    assert body["revenue_30d_prev"] == 0
+    assert body["failed_payments_30d_prev"] == 0
 
 
 def test_plans_full_crud_flow(client, seeded_db):
@@ -124,6 +175,14 @@ def test_customers_list_detail_suspend_activate(client, seeded_db):
     assert listing.json()["total"] >= 1
     customer_id = listing.json()["items"][0]["customer_id"]
 
+    # 2026-09-15 follow-up ("Change Customer Page now"): the list row now
+    # also carries the customer's current plan/subscription status,
+    # additive fields computed from the subscription just created above.
+    listed_row = listing.json()["items"][0]
+    assert listed_row["current_plan_code"] == "BASIC"
+    assert listed_row["current_plan_name"] == "Basic"
+    assert listed_row["current_subscription_status"] == "ACTIVE"
+
     detail = client.get(f"/api/v1/admin/customers/{customer_id}", headers=headers)
     assert detail.status_code == 200, detail.text
     assert detail.json()["customer"]["customer_id"] == customer_id
@@ -138,6 +197,45 @@ def test_customers_list_detail_suspend_activate(client, seeded_db):
     activate = client.post(f"/api/v1/admin/customers/{customer_id}/activate", headers=headers)
     assert activate.status_code == 200
     assert activate.json()["status"] == "ACTIVE"
+
+
+def test_customers_list_plan_filter_and_current_subscription_fallback(client, seeded_db):
+    """2026-09-15 follow-up ("Change Customer Page now"): the Customers
+    list's new Plan filter, and the current-subscription "prefer ACTIVE,
+    else fall back to most recent" rule for a customer whose only
+    subscription never became ACTIVE (a failed payment)."""
+    headers = _admin_headers(client)
+    _new_active_subscription(client, "basic", "planfilter-basic@example.com", "9800000010")
+    _new_active_subscription(client, "professional", "planfilter-pro@example.com", "9800000011")
+
+    # A subscription whose payment failed never reaches ACTIVE - its
+    # subscription.status stays PAYMENT_FAILED - so this exercises the
+    # fallback branch of _pick_current_subscription, not the ACTIVE one.
+    resp = client.post(
+        "/api/v1/public/plans/enterprise/subscribe",
+        json={"email": "planfilter-failed@example.com", "mobile": "9800000012", "registration_data": {}},
+    )
+    transaction_id = resp.json()["payment"]["transaction_id"]
+    client.post("/api/v1/payment/mock/callback", json={"transaction_id": transaction_id, "scenario": "FAILED"})
+
+    basic_only = client.get("/api/v1/admin/customers", params={"plan_code": "basic"}, headers=headers)
+    assert basic_only.status_code == 200, basic_only.text
+    basic_emails = {item["email"] for item in basic_only.json()["items"]}
+    assert "planfilter-basic@example.com" in basic_emails
+    assert "planfilter-pro@example.com" not in basic_emails
+    assert all(item["current_plan_code"] == "BASIC" for item in basic_only.json()["items"])
+
+    pro_only = client.get("/api/v1/admin/customers", params={"plan_code": "PROFESSIONAL"}, headers=headers)
+    assert pro_only.status_code == 200, pro_only.text
+    assert {item["email"] for item in pro_only.json()["items"]} == {"planfilter-pro@example.com"}
+
+    failed = client.get(
+        "/api/v1/admin/customers", params={"q": "planfilter-failed"}, headers=headers
+    )
+    assert failed.status_code == 200, failed.text
+    failed_row = failed.json()["items"][0]
+    assert failed_row["current_plan_code"] == "ENTERPRISE"
+    assert failed_row["current_subscription_status"] == "PAYMENT_FAILED"
 
 
 def test_subscriptions_payments_invoices_read_only(client, seeded_db):

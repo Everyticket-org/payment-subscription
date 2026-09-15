@@ -26,6 +26,11 @@
      rules) independent of the light/dark tokens above - it always uses
      these, regardless of the visitor's OS color scheme. */
   --admin-sidebar-bg: #2a0f1c;
+  /* 2026-09-15 sidebar redesign: a second stop for the sidebar's
+     top-to-bottom gradient (see .admin-sidebar) - the original flat
+     --admin-sidebar-bg is kept as the gradient's lower stop so nothing
+     else that already reads --admin-sidebar-bg needs to change. */
+  --admin-sidebar-bg-2: #3a1224;
   --admin-sidebar-text: #e9d6de;
   --admin-sidebar-border: #431a2e;
 
@@ -837,9 +842,9 @@ select:focus {
 }
 
 .admin-sidebar {
-  width: 232px;
+  width: 264px;
   flex-shrink: 0;
-  background: var(--admin-sidebar-bg);
+  background: linear-gradient(180deg, var(--admin-sidebar-bg-2) 0%, var(--admin-sidebar-bg) 60%);
   color: var(--admin-sidebar-text);
   display: flex;
   flex-direction: column;
@@ -848,10 +853,14 @@ select:focus {
 }
 
 .admin-brand {
-  display: inline-flex;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
   text-decoration: none;
-  padding: 8px 10px 20px;
+  padding: 8px 10px 18px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--admin-sidebar-border);
 }
 
 .admin-brand-logo {
@@ -860,18 +869,29 @@ select:focus {
   width: auto;
 }
 
+.admin-brand-caption {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--admin-sidebar-text);
+  opacity: 0.55;
+}
+
 .admin-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .admin-nav-link {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   padding: 9px 10px;
   border-radius: 8px;
   color: var(--admin-sidebar-text);
@@ -879,6 +899,21 @@ select:focus {
   font-size: 14px;
   font-weight: 600;
   opacity: 0.85;
+}
+
+.admin-nav-link svg {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  opacity: 0.85;
+}
+
+/* The label span grows to fill the row so a trailing element (the
+   group-header caret) lands at the far right instead of `justify-
+   content: space-between` splitting icon/label/caret evenly apart. */
+.admin-nav-link span:first-of-type {
+  flex: 1;
+  text-align: left;
 }
 
 .admin-nav-link:hover {
@@ -889,6 +924,11 @@ select:focus {
 .admin-nav-link.active {
   background: var(--accent);
   color: #fff;
+  opacity: 1;
+  box-shadow: 0 6px 16px -6px rgba(213, 3, 85, 0.7);
+}
+
+.admin-nav-link.active svg {
   opacity: 1;
 }
 
@@ -920,35 +960,25 @@ select:focus {
   gap: 2px;
 }
 
+/* 2026-09-15 sidebar redesign: the group header now carries
+   .admin-nav-link too (see AdminLayout.tsx), so it already gets that
+   class's full visual treatment (icon sizing, padding, hover, active-
+   adjacent color) - this block only resets the <button> chrome a
+   <button> needs that a styled <a> doesn't (border/background/font/
+   cursor/alignment). The caret's own rule further down still pushes to
+   the far right via the label span's flex: 1. */
 .admin-nav-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-  padding: 9px 10px;
-  border-radius: 8px;
   border: none;
   background: none;
-  color: var(--admin-sidebar-text);
   font: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  opacity: 0.65;
   cursor: pointer;
   text-align: left;
-}
-
-.admin-nav-group-header:hover {
-  background: var(--admin-sidebar-border);
-  opacity: 1;
 }
 
 .admin-nav-caret {
   display: inline-block;
   font-size: 11px;
+  opacity: 0.6;
   transition: transform 0.15s ease;
   transform: rotate(-90deg);
 }
@@ -961,10 +991,12 @@ select:focus {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding-left: 8px;
 }
 
+/* Indented to land under the group label's text (icon width + gap +
+   the row's own left padding), not under the icon itself. */
 .admin-nav-sublink {
+  padding-left: 40px;
   font-size: 13px;
 }
 
@@ -972,6 +1004,84 @@ select:focus {
   border-top: 1px solid var(--admin-sidebar-border);
   margin-top: 8px;
   padding-top: 16px;
+  flex-shrink: 0;
+}
+
+/* ---- Sidebar footer: real admin identity (GET /admin/me) + sign out,
+   2026-09-15 sidebar redesign - replaces nothing, sits below the existing
+   "Back to public site" link which keeps its original behavior/position. ---- */
+.admin-sidebar-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--admin-sidebar-border);
+  margin-top: 10px;
+  padding: 14px 10px 4px;
+  flex-shrink: 0;
+}
+
+.admin-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff8fb3, var(--accent));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 12px;
+  flex: none;
+}
+
+.admin-sidebar-who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.admin-sidebar-who b {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-sidebar-who span {
+  font-size: 11.5px;
+  color: var(--admin-sidebar-text);
+  opacity: 0.6;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-sidebar-signout {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--admin-sidebar-text);
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.admin-sidebar-signout:hover {
+  background: var(--admin-sidebar-border);
+  opacity: 1;
+}
+
+.admin-sidebar-signout svg {
+  width: 16px;
+  height: 16px;
 }
 
 .admin-main {
@@ -1014,12 +1124,12 @@ select:focus {
   /* A CSS grid item's default min-width is `auto`, meaning it refuses to
      shrink below its content's min-content size (e.g. a wide data-table)
      even though that content has its own overflow-x:auto scroller
-     (.table-wrap) - without this, an .admin-panel used inside
-     .detail-grid/.detail-grid-3col (Subscriptions/Payments/Invoices on
-     the admin Customer detail page) forced the whole page wider than the
-     viewport on narrow screens instead of collapsing to one column and
-     letting its own table scroll horizontally. Harmless when .admin-panel
-     is used standalone (not a grid/flex item), which is most places. */
+     (.table-wrap) - without this, an .admin-panel used inside .detail-grid
+     (the customer portal's card grid, PortalPage.tsx) forced the whole
+     page wider than the viewport on narrow screens instead of collapsing
+     to one column and letting its own table scroll horizontally. Harmless
+     when .admin-panel is used standalone (not a grid/flex item), which is
+     most places. */
   min-width: 0;
 }
 
@@ -1050,6 +1160,224 @@ select:focus {
 
 .data-table tr.clickable {
   cursor: pointer;
+}
+
+/* ---------- Admin Customers list redesign (2026-09-15 follow-up) ----------
+   Scoped to new classes only - .admin-panel/.admin-toolbar/.data-table/
+   .table-wrap/.clickable/.badge (StatusBadge)/.hint are all reused as-is
+   from other admin pages, unchanged. */
+
+.admin-toolbar-search {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.cust-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cust-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.cust-cell-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cust-cell-text b {
+  font-size: 14px;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
+.cust-cell-text span {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.plan-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-h);
+  white-space: nowrap;
+}
+
+.plan-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.admin-customers-table td.cust-chevron {
+  text-align: right;
+  font-size: 18px;
+  opacity: 0.35;
+  width: 1%;
+}
+
+/* ---------- Admin Customer detail redesign (2026-09-15 follow-up) ----------
+   Scoped to new classes only - .admin-panel/.page-header-row/.button-row/
+   .summary-list/.inline-form/.table-wrap/.data-table/.hint/.badge
+   (StatusBadge)/.cust-avatar/.plan-pill(-dot) are all reused as-is from
+   other admin pages, unchanged. */
+
+.customer-detail-id {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  /* Without min-width:0 here, this flex item refuses to shrink below its
+     text child's min-content width (a long email as one "word" for
+     layout purposes) and forces .page-header-row - and the whole page -
+     wider than the viewport at narrow widths instead of wrapping the
+     email under the avatar. Same class of fix as .summary-list dd
+     already has for the same reason (see its comment above). */
+  min-width: 0;
+}
+
+/* Same circular avatar as the Customers list's .cust-avatar, just bigger
+   for a page header (32px reads too small next to an <h1>). */
+.customer-detail-avatar {
+  width: 52px;
+  height: 52px;
+  font-size: 16px;
+  flex: none;
+}
+
+.customer-detail-id > div {
+  min-width: 0;
+}
+
+.customer-detail-id h1 {
+  margin: 0 0 2px;
+  font-size: 19px;
+  overflow-wrap: break-word;
+}
+
+.customer-detail-cid {
+  margin: 0;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  opacity: 0.6;
+  overflow-wrap: break-word;
+}
+
+/* Below this same ~560px breakpoint .summary-list already stacks at
+   (see its comment above) - the avatar+email row runs out of usable
+   width even after min-width:0/break-word, wrapping the email letter by
+   letter. Stacking the avatar above the text instead gives the email the
+   panel's full width to wrap at normal word-break points. */
+@media (max-width: 560px) {
+  .customer-detail-id {
+    flex-direction: column;
+    /* align-items sets the CROSS axis in a column flex container, i.e.
+       width here - flex-start would shrink-to-fit the text div to its
+       own (long, unwrapped) content width instead of the row's actual
+       available width, undoing the min-width:0/break-word fix above and
+       overflowing the page again. stretch (the default the base rule's
+       align-items:center was overriding) is what actually lets it wrap. */
+    align-items: stretch;
+  }
+}
+
+.customer-detail-tags {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* Registration data's collapsible toggle - a <button> wrapping the panel's
+   <h2>, so it needs its native button chrome stripped back to look like
+   the plain heading row it replaces. */
+.collapsible-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+
+.collapsible-head h2 {
+  margin: 0;
+}
+
+.collapsible-chevron {
+  width: 16px;
+  height: 16px;
+  opacity: 0.5;
+  flex: none;
+  transition: transform 0.15s ease;
+}
+
+.collapsible-chevron.open {
+  transform: rotate(180deg);
+}
+
+/* Subscriptions/Payments/Invoices tabs, replacing the old fixed 3-column
+   grid (.detail-grid-3col, removed below) that squeezed all three tables
+   into a third of the page width each regardless of viewport size. */
+.detail-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  margin: -6px 0 16px;
+  flex-wrap: wrap;
+}
+
+.detail-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 10px 4px;
+  margin-right: 22px;
+  font: inherit;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: var(--text);
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.detail-tab:hover {
+  opacity: 0.85;
+}
+
+.detail-tab.active {
+  color: var(--accent);
+  opacity: 1;
+  border-bottom-color: var(--accent);
+}
+
+.detail-tab-count {
+  font-weight: 700;
+  opacity: 0.7;
+  margin-left: 3px;
 }
 
 .pagination {
@@ -1164,6 +1492,233 @@ select:focus {
   opacity: 0.65;
 }
 
+/* ---------- Admin dashboard redesign (2026-09-15 follow-up) ----------
+   Scoped under .admin-dashboard / dash- prefixes so nothing here touches
+   .stat-grid/.stat-card's base rules above (still used only by this page)
+   or any other admin page's shared classes (.admin-panel, .table-wrap,
+   .data-table, .button-secondary, .clickable, .hint, .badge). */
+
+.stat-card .trend-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-top: 8px;
+}
+
+.trend-chip.trend-good {
+  color: var(--success);
+}
+
+.trend-chip.trend-bad {
+  color: var(--danger);
+}
+
+.trend-chip.trend-flat,
+.trend-chip.trend-neutral {
+  color: var(--text);
+  opacity: 0.6;
+}
+
+.trend-chip-context {
+  font-weight: 500;
+  opacity: 0.7;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.dash-attention-panel h2,
+.dash-grid-2 .admin-panel h2,
+.admin-dashboard .admin-panel > h2 {
+  margin-top: 0;
+  font-size: 15px;
+}
+
+.dash-attention-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.dash-attention-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s ease;
+}
+
+.dash-attention-item:hover {
+  border-color: var(--accent);
+}
+
+.dash-attention-value {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-h);
+}
+
+.dash-attention-value.is-warning {
+  color: #b45309;
+}
+
+.dash-attention-value.is-danger {
+  color: var(--danger);
+}
+
+.dash-attention-label {
+  font-size: 12px;
+  opacity: 0.75;
+}
+
+.dash-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 20px;
+  align-items: stretch;
+}
+
+.dash-chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 14px;
+  height: 180px;
+  margin-top: 16px;
+  padding-top: 8px;
+}
+
+.dash-chart-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 1;
+  height: 100%;
+}
+
+.dash-chart-col-value {
+  font-size: 11px;
+  font-weight: 700;
+  opacity: 0.7;
+}
+
+.dash-chart-bar-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  max-width: 36px;
+  height: 100%;
+  background: var(--surface-alt);
+  border-radius: 6px 6px 0 0;
+  overflow: hidden;
+}
+
+.dash-chart-bar {
+  width: 100%;
+  min-height: 2px;
+  background: var(--accent);
+  border-radius: 6px 6px 0 0;
+}
+
+.dash-chart-col-label {
+  font-size: 11px;
+  opacity: 0.65;
+  white-space: nowrap;
+}
+
+.dash-planmix-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.dash-planmix-row {
+  display: grid;
+  grid-template-columns: 10px minmax(80px, auto) 1fr 40px 28px;
+  align-items: center;
+  gap: 10px;
+}
+
+.dash-planmix-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.dash-planmix-name {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dash-planmix-bar-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-alt);
+  overflow: hidden;
+}
+
+.dash-planmix-bar {
+  height: 100%;
+  border-radius: 999px;
+}
+
+.dash-planmix-pct {
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.dash-planmix-count {
+  font-size: 12px;
+  opacity: 0.6;
+  text-align: right;
+}
+
+.dash-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.dash-panel-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.dash-table-subtle {
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.dash-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+/* .admin-panel already carries margin-bottom: 20px for spacing between
+   panels; .stat-grid isn't a panel, so it needs the same gap explicitly
+   before the "Needs attention" panel that follows it. */
+.admin-dashboard .stat-grid {
+  margin-bottom: 20px;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -1171,23 +1726,10 @@ select:focus {
   align-items: start;
 }
 
-/* 2026-09-14 follow-up ("Make full width GRID for Subscription,
-   payments and invoices sections", admin Customer detail page only):
-   the shared .detail-grid above is also used by the customer portal
-   (PortalPage.tsx) and its auto-fit sizing is left alone there - this
-   modifier is additive (used alongside .detail-grid, never in place of
-   it) so it only changes the admin Customer detail page's three cards,
-   forcing them into one always-3-equal-column row that spans the full
-   panel width instead of auto-fit's width-dependent column count. */
-.detail-grid-3col {
-  grid-template-columns: repeat(3, 1fr);
-}
-
-@media (max-width: 860px) {
-  .detail-grid-3col {
-    grid-template-columns: 1fr;
-  }
-}
+/* .detail-grid-3col (the admin Customer detail page's old always-3-column
+   modifier, added 2026-09-14) was removed 2026-09-15 when that page's
+   Subscriptions/Payments/Invoices cards became tabs instead - .detail-grid
+   above is still used as-is by the customer portal (PortalPage.tsx). */
 
 .breadcrumb {
   font-size: 13px;

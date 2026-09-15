@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_application, get_db
 from app.api.v1.admin_common import DEFAULT_LIMIT, MAX_LIMIT, PageOut, paginate
@@ -20,7 +20,7 @@ from app.audit import service as audit_service
 from app.auth.deps import require_permission, require_test_mode
 from app.auth.models import AdminUser
 from app.core.config import get_settings
-from app.core.enums import CustomerStatus
+from app.core.enums import CustomerStatus, SubscriptionStatus
 from app.core.exceptions import CustomerNotFound
 from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.schemas import (
@@ -33,6 +33,7 @@ from app.customers.schemas import (
 )
 from app.invoices.models import Invoice
 from app.payments.models import PaymentTransaction
+from app.plans.models import Plan
 from app.subscriptions.models import Subscription
 from app.sso import service as sso_service
 from app.sso.schemas import SsoLinkOut
@@ -55,10 +56,38 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _pick_current_subscription(subscriptions: list[Subscription]) -> Subscription | None:
+    """Of one customer's subscriptions, the "current" one for list-view
+    display purposes: an ACTIVE one if there is one (there can be at most
+    one per the app's own active-subscription-per-customer rule), else
+    the most recently created - so a customer whose only subscription is
+    PENDING_PAYMENT, CANCELLED, EXPIRED, etc. still shows that rather than
+    nothing. Done in Python over an already-small batch (one page of
+    customers' subscriptions), same pattern as the admin dashboard's
+    recent-subscriptions/latest-payment lookups - not a SQL GROUP BY/
+    window function, so it stays trivially portable across MySQL/SQLite."""
+    if not subscriptions:
+        return None
+    active = next((s for s in subscriptions if s.status == SubscriptionStatus.ACTIVE.value), None)
+    if active is not None:
+        return active
+    return max(subscriptions, key=lambda s: s.created_at)
+
+
 @router.get("", response_model=PageOut[CustomerAdminListItem])
 def list_customers(
     q: str | None = Query(default=None, description="Search by email, mobile, or customer_id"),
     status_filter: str | None = Query(default=None, alias="status"),
+    # 2026-09-15 follow-up: "Plan: All" filter on the redesigned Customers
+    # list. Matches list_subscriptions' own plan_code filter precedent
+    # (app/api/v1/admin_subscriptions.py) - both are deliberately NOT
+    # scoped to a single Application, same as every other filter already
+    # on this endpoint. Semantics: "has ever had a subscription on this
+    # plan" (any status, not just the current one) - simpler and more
+    # honestly documented than trying to filter on "current plan only",
+    # which would need the same current-subscription logic below to also
+    # run inside the SQL WHERE clause rather than after pagination.
+    plan_code: str | None = Query(default=None),
     limit: int = Query(default=DEFAULT_LIMIT, ge=1, le=MAX_LIMIT),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -72,10 +101,51 @@ def list_customers(
         )
     if status_filter:
         query = query.filter(Customer.status == status_filter.upper())
+    if plan_code:
+        query = (
+            query.join(Subscription, Subscription.customer_id == Customer.id)
+            .join(Plan, Subscription.plan_id == Plan.id)
+            .filter(Plan.plan_code == plan_code.upper())
+            .distinct()
+        )
     query = query.order_by(Customer.created_at.desc())
 
     items, total = paginate(query, limit=limit, offset=offset)
-    return PageOut(items=[CustomerAdminListItem.model_validate(c) for c in items], total=total, limit=limit, offset=offset)
+
+    # 2026-09-15 follow-up ("Change Customer Page now"): the redesigned
+    # list shows each customer's current plan/subscription status - not
+    # on the Customer row itself, so batch-fetch this page's subscriptions
+    # in one extra query (not one per row) and pick each customer's
+    # current one in Python (see _pick_current_subscription above).
+    customer_ids = [c.id for c in items]
+    subscriptions_by_customer: dict[int, list[Subscription]] = {}
+    if customer_ids:
+        subscription_rows = (
+            db.query(Subscription)
+            .options(joinedload(Subscription.plan))
+            .filter(Subscription.customer_id.in_(customer_ids))
+            .all()
+        )
+        for sub in subscription_rows:
+            subscriptions_by_customer.setdefault(sub.customer_id, []).append(sub)
+
+    result_items = []
+    for c in items:
+        current = _pick_current_subscription(subscriptions_by_customer.get(c.id, []))
+        result_items.append(
+            CustomerAdminListItem(
+                customer_id=c.customer_id,
+                email=c.email,
+                mobile=c.mobile,
+                status=c.status,
+                created_at=c.created_at,
+                current_plan_code=current.plan.plan_code if current else None,
+                current_plan_name=current.plan.name if current else None,
+                current_subscription_status=current.status if current else None,
+            )
+        )
+
+    return PageOut(items=result_items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{customer_id}", response_model=CustomerAdminDetailOut)
