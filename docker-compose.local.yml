@@ -15,7 +15,7 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
 #
 # Then open http://localhost:8080 - frontend and API both served from
-# that one origin, exactly like https://plans.stramcom.com will be in
+# that one origin, exactly like https://plans.stramcon.com will be in
 # production.
 
 services:
