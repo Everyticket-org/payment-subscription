@@ -4,19 +4,41 @@ version: "3.9"
 # worker/beat containers backend needs to actually function (see the
 # note on those below). MySQL and the reverse proxy (nginx) are NOT run
 # here - both are already installed directly on the host per this
-# deployment's setup, so:
-#   - backend/worker/scheduler/seed reach the host's MySQL via
-#     `host.docker.internal` (see extra_hosts below + backend/.env.example
-#     for the MySQL grant/bind-address prerequisites that requires).
-#   - the host's own nginx reverse-proxies to whatever ports backend
-#     (8002) and frontend (3000) publish below - this file doesn't touch
-#     that nginx config at all.
+# deployment's setup.
 #
-# Why worker/scheduler are here even though you asked for "two
-# containers": they're Celery processes, not optional extras - per
-# README.md, without them queued webhook deliveries and renewal
-# reminders silently sit at PENDING forever (nothing errors, they just
-# never get attempted). Ask if you genuinely want to run without them.
+# backend/worker/scheduler/seed use `network_mode: host` (a deliberate
+# choice over the bridge-network + host.docker.internal alternative -
+# see git history for that version if you ever want it back): the
+# container shares the host's network namespace directly, so
+# "localhost" inside it IS the host's localhost - DATABASE_URL and
+# REDIS_URL/CELERY_*_URL can just say "localhost", exactly like running
+# these processes bare-metal would. Trade-off: less network isolation
+# than the bridge+port-mapping approach (the container can reach/bind
+# anything the host's network stack can) - a deliberate choice for this
+# deployment, not a default to copy elsewhere without thinking about it.
+#
+# LINUX ONLY: network_mode: host is a real, native feature on Linux
+# Docker Engine (which is what the production server runs), but Docker
+# Desktop (Windows/Mac) does NOT actually support it - Desktop runs
+# containers inside its own Linux VM, so "host" there means the VM's
+# network namespace, not the real host's, and this silently does NOT
+# work (accepted without error, but "localhost" doesn't reach anything
+# on the actual machine). Confirmed by testing on Windows during this
+# setup - could not be verified end-to-end there for that reason. Test
+# this for real on the actual Linux server before relying on it.
+#
+# frontend is DELIBERATELY NOT host-networked: its internal nginx
+# listens on port 80, which would collide directly with the host's own
+# (real) nginx also on port 80. It stays on the normal bridge network
+# with an explicit port mapping instead (3000:80) - the host's nginx
+# reverse-proxies to that port same as it would with host networking,
+# just via an explicit published port instead of a shared stack.
+#
+# Because backend is host-networked, it can't resolve "redis" as a
+# service name (no virtual network to resolve that on) - redis keeps
+# its normal bridge networking but ALSO publishes its port to the host
+# (6379:6379) so host-networked backend/worker/scheduler can reach it
+# at localhost:6379, same as DATABASE_URL.
 #
 # Usage (run from the repo root):
 #   cp backend/.env.example backend/.env     # backend runtime secrets
@@ -29,6 +51,8 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     command: redis-server --appendonly yes   # persist queued/pending Celery tasks across restarts
+    ports:
+      - "6379:6379"   # required so host-networked backend/worker/scheduler can reach it via localhost - see file header
     volumes:
       - redis_data:/data
     healthcheck:
@@ -36,8 +60,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # No ports published - only backend/worker/scheduler (on this same
-    # compose network, reachable by service name "redis") ever need it.
 
   backend:
     build:
@@ -46,13 +68,14 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # lets DATABASE_URL reach the host's MySQL (Linux; Docker Desktop already does this natively)
+    network_mode: host   # see file header - lets DATABASE_URL/REDIS_URL just say "localhost"
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "8002:8002"
+    # No `ports:` - meaningless with network_mode: host (the container
+    # binds directly to the host's ports; Dockerfile's CMD already binds
+    # uvicorn to :8002, so that's what's actually listening on the host).
+    #
     # No bind-mounted source on a real server (unlike a dev compose file)
     # - the image already has the code baked in from the build above, so
     # a code change means rebuilding the image, not editing a live mount.
@@ -64,8 +87,7 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     depends_on:
       redis:
         condition: service_healthy
@@ -78,8 +100,7 @@ services:
     restart: unless-stopped
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     depends_on:
       redis:
         condition: service_healthy
@@ -100,8 +121,7 @@ services:
       dockerfile: Dockerfile
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    network_mode: host
     profiles: ["tools"]
     entrypoint: []
     command: python -m app.core.seed

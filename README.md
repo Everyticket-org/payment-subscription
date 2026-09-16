@@ -186,7 +186,7 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
 ```
 
 Open http://localhost:8080 - that one port now serves everything, the
-same way `https://plans.everyticket.in` will in production.
+same way `https://plans.stramcom.com` will in production.
 
 ### Frontend (without Docker)
 
