@@ -1,24 +1,101 @@
-# LOCAL-ONLY overlay - adds a containerized nginx in front of backend +
-# frontend so local testing matches production's actual shape (one
-# origin, path-routed) instead of two bare ports with nothing in front.
-# Production does NOT use this file - the host's own nginx (already
-# installed there) plays this same role; see nginx.local.conf's header
-# comment for the production-equivalent location blocks to add there.
+# Complete, standalone local stack - NOT an overlay on docker-compose.yml
+# (the production file), because that one uses network_mode: host,
+# which does NOT work on Docker Desktop (Windows/Mac) - confirmed by
+# testing during this setup (see docker-compose.yml's own header
+# comment). This file uses ordinary bridge networking +
+# host.docker.internal instead, which DOES work here, plus a
+# containerized nginx so local testing matches production's actual
+# single-origin shape (see nginx.local.conf's header comment).
 #
-# Usage (run from the repo root, alongside the normal files):
-#   cp .env.example .env
-#   # then set VITE_API_BASE_URL=http://localhost:8080 in that .env -
-#   # NOT :8002 - the browser now goes through nginx on :8080, matching
-#   # how it'll go through your real domain in production. This has to
-#   # be right at BUILD time (see frontend/Dockerfile's own comment).
-#   cp backend/.env.example backend/.env
-#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
+# Uses backend/.env.local (not backend/.env) - a separate file so this
+# never depends on or interferes with whatever backend/.env is set to
+# for the network_mode: host production setup.
 #
-# Then open http://localhost:8080 - frontend and API both served from
-# that one origin, exactly like https://plans.stramcon.com will be in
-# production.
+# Usage (run from the repo root):
+#   docker compose -f docker-compose.local.yml up --build -d
+#   docker compose -f docker-compose.local.yml run --rm seed   # first time only
+#   open http://localhost:8080
 
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_local_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A app.core.celery_app beat --loglevel=info --schedule=/app/var/celerybeat-schedule
+
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles: ["tools"]
+    entrypoint: []
+    command: python -m app.core.seed
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
@@ -29,3 +106,6 @@ services:
     depends_on:
       - backend
       - frontend
+
+volumes:
+  redis_local_data:
