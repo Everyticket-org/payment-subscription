@@ -168,6 +168,26 @@ Backend API docs once it's up: http://localhost:8002/docs (Swagger) or
 `proxy_pass` at whichever of these two ports each of its routes should
 reach - that reverse-proxy config isn't part of this repo.
 
+#### Local testing with the same single-origin routing as production
+
+`docker-compose.local.yml` adds a *containerized* nginx (local-only -
+production uses your host's own nginx instead) so you can test the
+exact same one-domain, path-routed shape locally: the browser talks to
+one origin, nginx sends `/api/*` to `backend` and everything else to
+`frontend`. This also means frontend and API become the same origin
+locally, so CORS never enters into testing that path.
+
+```bash
+cp .env.example .env
+# then set VITE_API_BASE_URL=http://localhost:8080 in that .env (NOT
+# :8002 - see nginx.local.conf's header comment for why), then:
+cp backend/.env.example backend/.env
+docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
+```
+
+Open http://localhost:8080 - that one port now serves everything, the
+same way `https://plans.everyticket.in` will in production.
+
 ### Frontend (without Docker)
 
 ```bash

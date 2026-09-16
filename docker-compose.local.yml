@@ -1,0 +1,31 @@
+# LOCAL-ONLY overlay - adds a containerized nginx in front of backend +
+# frontend so local testing matches production's actual shape (one
+# origin, path-routed) instead of two bare ports with nothing in front.
+# Production does NOT use this file - the host's own nginx (already
+# installed there) plays this same role; see nginx.local.conf's header
+# comment for the production-equivalent location blocks to add there.
+#
+# Usage (run from the repo root, alongside the normal files):
+#   cp .env.example .env
+#   # then set VITE_API_BASE_URL=http://localhost:8080 in that .env -
+#   # NOT :8002 - the browser now goes through nginx on :8080, matching
+#   # how it'll go through your real domain in production. This has to
+#   # be right at BUILD time (see frontend/Dockerfile's own comment).
+#   cp backend/.env.example backend/.env
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
+#
+# Then open http://localhost:8080 - frontend and API both served from
+# that one origin, exactly like https://plans.everyticket.in will be in
+# production.
+
+services:
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    volumes:
+      - ./nginx.local.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+      - frontend
