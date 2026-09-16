@@ -8,12 +8,42 @@ version: "3.9"
 # reverse-proxy to this backend. MySQL is also NOT run here - both MySQL and nginx
 # are already installed directly on the host per this deployment's
 # setup, so:
-#   - backend/worker/scheduler/seed reach the host's MySQL via
-#     `host.docker.internal` (see extra_hosts below + backend/.env.example
-#     for the MySQL grant/bind-address prerequisites that requires).
-#   - the host's own nginx reverse-proxies to whatever port backend
-#     (8002) publishes below, and serves the frontend's built static
-#     files itself - this file doesn't touch that nginx config at all.
+#   - redis/backend/worker/scheduler/seed all use `network_mode: host`
+#     (see each service below) - this makes them share the HOST's own
+#     network namespace directly, rather than Compose's isolated bridge
+#     network. That's what lets DATABASE_URL/REDIS_URL just say
+#     `localhost` (see backend/.env.example) instead of needing the
+#     `host.docker.internal` + `extra_hosts:` workaround - with host
+#     networking, the container's `localhost` genuinely IS the host's.
+#   - the host's own nginx reverse-proxies to the backend's port 8002
+#     directly on the host (no Docker port-mapping involved anymore -
+#     see the note on `ports:` below), and serves the frontend's built
+#     static files itself - this file doesn't touch that nginx config.
+#
+# IMPORTANT trade-offs of `network_mode: host` (why it's not the
+# default choice, and why adminer below deliberately does NOT use it):
+#   - Linux-only. Docker Desktop (Mac/Windows) does not support host
+#     networking the same way - containers there would NOT reach the
+#     host or each other as expected. Fine for this deployment (a real
+#     Linux server), but do not assume this compose file behaves the
+#     same on a Windows/Mac dev machine.
+#   - Removes network *isolation* between these containers and the
+#     host, not just convenience: a compromised backend/worker process
+#     can now reach (and bind to) anything on the host's network
+#     interfaces directly, the same as a native process could - there's
+#     no bridge/NAT boundary in the way anymore. Acceptable here since
+#     these containers already needed host DB access either way, but
+#     worth knowing before copying this pattern elsewhere.
+#   - `ports:` mappings do nothing under host networking (the process
+#     just binds the host port directly, like a non-Docker service
+#     would) - kept out of the services below to avoid implying
+#     otherwise. Double-check nothing else on the host already listens
+#     on 8002 before deploying.
+#   - Services under host networking can no longer reach each other by
+#     Compose service name (e.g. `redis`) - only by `localhost`, since
+#     they're not on an isolated Compose network together anymore. That
+#     is why redis/backend/worker/scheduler/seed ALL use host
+#     networking together here (consistently, or not at all).
 #
 # Why worker/scheduler are here even though this is "just the API":
 # they're Celery processes, not optional extras - per README.md, without
@@ -30,6 +60,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    network_mode: host   # see the header comment above - shares the host's network directly
     command: redis-server --appendonly yes   # persist queued/pending Celery tasks across restarts
     volumes:
       - redis_data:/data
@@ -38,23 +69,25 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    # No ports published - only backend/worker/scheduler (on this same
-    # compose network, reachable by service name "redis") ever need it.
+    # Binds directly to the host's 6379 (network_mode: host, no `ports:`
+    # needed/possible) - reachable by backend/worker/scheduler below via
+    # `localhost:6379`, since they share this same host network too.
+    # Make sure nothing else on the host is already using 6379.
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    network_mode: host   # see the header comment above - lets DATABASE_URL/REDIS_URL just use "localhost"
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # lets DATABASE_URL reach the host's MySQL (Linux; Docker Desktop already does this natively)
     depends_on:
       redis:
         condition: service_healthy
-    ports:
-      - "8002:8002"
+    # No `ports:` - meaningless under host networking (see header
+    # comment); the app binds directly to the host's 8002, same as
+    # host nginx's proxy_pass expects (127.0.0.1:8002).
     # No bind-mounted source on a real server (unlike a dev compose file)
     # - the image already has the code baked in from the build above, so
     # a code change means rebuilding the image, not editing a live mount.
@@ -64,10 +97,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    network_mode: host
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
@@ -78,10 +110,9 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    network_mode: host
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy
@@ -100,10 +131,9 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    network_mode: host
     env_file:
       - ./backend/.env
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     profiles: ["tools"]
     entrypoint: []
     command: python -m app.core.seed
@@ -146,6 +176,12 @@ services:
   #     you specifically need to confirm host connectivity/grants).
   # Stop it again as soon as you're done testing:
   #   docker compose --profile tools stop adminer
+  #
+  # Deliberately stays on Compose's normal bridge network (NOT
+  # network_mode: host like the services above) - it only ever needs to
+  # reach the host's MySQL, which `host.docker.internal` already gives
+  # it, and keeping it bridged means its `ports:` mapping below still
+  # works normally (host networking would make that mapping a no-op).
   adminer:
     image: adminer:4.8.1
     restart: "no"

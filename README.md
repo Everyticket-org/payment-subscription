@@ -174,7 +174,7 @@ npm install
 cp .env.example .env
 # Set VITE_API_BASE_URL to the real public ORIGIN (no /api suffix) the
 # browser will use to reach the API in production, e.g.
-# https://plans-everyticket.stramcon.com - the frontend already calls paths like
+# https://payment-subscription.everyticket.in - the frontend already calls paths like
 # "/api/v1/public/plans" itself (see frontend/src/api/endpoints.ts), so
 # BASE_URL must be just the origin, matching the host nginx's /api/
 # location. This is baked into the build at build time, not read at
