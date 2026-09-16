@@ -140,42 +140,66 @@ Then use the same `DATABASE_URL` as Option A
 (`mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4`)
 and continue with `alembic upgrade head` etc. above.
 
-### Option B: Docker Compose (backend + frontend)
+### Option B: Docker Compose (API only) + host nginx serving the frontend
 
-The root `docker-compose.yml` brings up two app containers - `backend`
-(the API) and `frontend` (the built React app, served by nginx inside
-the container) - plus `redis`, `worker`, and `scheduler` (the latter two
-are Celery processes backend needs, not optional extras - see the file's
-own header comment). MySQL and the reverse proxy in front of these two
-ports are NOT part of this file - both are already installed directly
-on the host in this deployment; see the compose file's header comment
-and `backend/.env.example`'s `DATABASE_URL` section for the
-`host.docker.internal` + MySQL grant/bind-address setup that requires.
-
-Two separate `.env` files, for two different reasons (see each
-`.env.example`'s own comment for why they can't be merged):
+The root `docker-compose.yml` is **API-only**: `backend`, plus `redis`,
+`worker`, and `scheduler` (the latter two are Celery processes backend
+needs, not optional extras - see the file's own header comment). The
+frontend is **not** built or served by Docker in this deployment -
+MySQL and nginx are already installed directly on the host, so the
+frontend is built as a static bundle and served by that same host
+nginx, which also reverse-proxies to the backend container (see the
+production nginx config deployed on the server itself for the full
+setup - proxy `/api/` to `127.0.0.1:8002`, serve `frontend/dist/` as
+static files with an SPA fallback).
 
 ```bash
-cp .env.example .env                     # compose-level only: VITE_API_BASE_URL build arg
 cp backend/.env.example backend/.env     # backend runtime secrets/config
-# fill in both, then:
+# fill in backend/.env, then:
 docker compose up --build -d
 docker compose run --rm seed             # first time only: seed plans/admin user
 ```
 
 Backend API docs once it's up: http://localhost:8002/docs (Swagger) or
-/redoc. Frontend: http://localhost:3000. Point your host nginx's
-`proxy_pass` at whichever of these two ports each of its routes should
-reach - that reverse-proxy config isn't part of this repo.
+/redoc (backend/worker/scheduler reach the host's MySQL via
+`host.docker.internal` - see the compose file's header comment and
+`backend/.env.example`'s `DATABASE_URL` section for the grant/bind-address
+setup that requires).
 
-#### Local testing with the same single-origin routing as production
+Frontend build (run on the same server, outside Docker):
 
-`docker-compose.local.yml` adds a *containerized* nginx (local-only -
-production uses your host's own nginx instead) so you can test the
-exact same one-domain, path-routed shape locally: the browser talks to
-one origin, nginx sends `/api/*` to `backend` and everything else to
-`frontend`. This also means frontend and API become the same origin
-locally, so CORS never enters into testing that path.
+```bash
+cd frontend
+npm install
+cp .env.example .env
+# Set VITE_API_BASE_URL to the real public ORIGIN (no /api suffix) the
+# browser will use to reach the API in production, e.g.
+# https://plans-everyticket.stramcon.com - the frontend already calls paths like
+# "/api/v1/public/plans" itself (see frontend/src/api/endpoints.ts), so
+# BASE_URL must be just the origin, matching the host nginx's /api/
+# location. This is baked into the build at build time, not read at
+# runtime (see frontend/README.md).
+npm run build   # output in frontend/dist/
+```
+
+Point host nginx's `root` at `frontend/dist/` (or wherever you deploy
+that directory) and its `/api/` location at the backend container's
+published port (127.0.0.1:8002), with an SPA fallback (`try_files $uri
+$uri/ /index.html;`) for react-router. Since frontend and API now share
+one public origin through nginx, also set `backend/.env`'s
+`CORS_ORIGINS`/`FRONTEND_URL` to that real domain (not just the
+localhost defaults).
+
+#### Local testing with a containerized frontend + nginx (Docker only, not used in production)
+
+`docker-compose.local.yml` is a separate, self-contained overlay for
+local Docker testing only - it defines its own `frontend` (built from
+`frontend/Dockerfile`) and a containerized `nginx` (`nginx.local.conf`)
+in front of `backend` + `frontend`, so you can test the same
+one-domain, path-routed shape locally that production's host nginx
+provides, without needing nginx installed on your own machine. This is
+NOT part of `docker-compose.yml` and does not affect production - it's
+purely a local convenience layered on top with `-f`.
 
 ```bash
 cp .env.example .env
@@ -185,8 +209,9 @@ cp backend/.env.example backend/.env
 docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
 ```
 
-Open http://localhost:8080 - that one port now serves everything, the
-same way `https://plans.everyticket.in` will in production.
+Open http://localhost:8080 - that one port now serves everything
+(frontend and API on the same origin, so CORS doesn't enter into
+testing this path), the same way your real production domain will.
 
 ### Frontend (without Docker)
 
@@ -250,6 +275,9 @@ automatically, without an admin manually clicking Attempt every time.
 ## Environment variables
 
 See `backend/.env.example` for the full backend config list with
-comments, and the root `.env.example` for the one Docker-Compose-level
-variable (`VITE_API_BASE_URL`) - see that file's own comment for why
-it's separate. Never commit a real `.env` file - both are gitignored.
+comments, and `frontend/.env.example` for the frontend's one build-time
+variable (`VITE_API_BASE_URL`). The root `.env.example` is only used by
+the local `docker-compose.local.yml` overlay above (its own
+`VITE_API_BASE_URL` build arg, for the containerized frontend) - the
+production `docker-compose.yml` doesn't build a frontend, so it doesn't
+need it. Never commit a real `.env` file - none of these are.

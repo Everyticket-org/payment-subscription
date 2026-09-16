@@ -1,26 +1,28 @@
 version: "3.9"
 
-# Two app containers - backend and frontend - plus Redis and the Celery
-# worker/beat containers backend needs to actually function (see the
-# note on those below). MySQL and the reverse proxy (nginx) are NOT run
-# here - both are already installed directly on the host per this
-# deployment's setup, so:
+# API-only stack: backend, plus Redis and the Celery worker/beat
+# containers backend needs to actually function (see the note on those
+# below). The frontend is NOT built or served by Docker/Compose at all -
+# it's built as a static bundle (`npm run build` in frontend/, outside
+# Docker) and served directly by the host's own nginx alongside its
+# reverse-proxy to this backend. MySQL is also NOT run here - both MySQL and nginx
+# are already installed directly on the host per this deployment's
+# setup, so:
 #   - backend/worker/scheduler/seed reach the host's MySQL via
 #     `host.docker.internal` (see extra_hosts below + backend/.env.example
 #     for the MySQL grant/bind-address prerequisites that requires).
-#   - the host's own nginx reverse-proxies to whatever ports backend
-#     (8002) and frontend (3000) publish below - this file doesn't touch
-#     that nginx config at all.
+#   - the host's own nginx reverse-proxies to whatever port backend
+#     (8002) publishes below, and serves the frontend's built static
+#     files itself - this file doesn't touch that nginx config at all.
 #
-# Why worker/scheduler are here even though you asked for "two
-# containers": they're Celery processes, not optional extras - per
-# README.md, without them queued webhook deliveries and renewal
-# reminders silently sit at PENDING forever (nothing errors, they just
-# never get attempted). Ask if you genuinely want to run without them.
+# Why worker/scheduler are here even though this is "just the API":
+# they're Celery processes, not optional extras - per README.md, without
+# them queued webhook deliveries and renewal reminders silently sit at
+# PENDING forever (nothing errors, they just never get attempted). Ask
+# if you genuinely want to run without them.
 #
 # Usage (run from the repo root):
 #   cp backend/.env.example backend/.env     # backend runtime secrets
-#   cp .env.example .env                     # compose-level build args (VITE_API_BASE_URL)
 #   docker compose up --build -d
 #   docker compose run --rm seed              # first time only
 
@@ -106,22 +108,52 @@ services:
     entrypoint: []
     command: python -m app.core.seed
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        # BUILD-time only (see frontend/Dockerfile's own comment) - must
-        # be a URL the BROWSER can reach (your public domain/host nginx
-        # path to the backend), never a Docker-internal service name.
-        # Set the real value in this file's own .env (compose-level,
-        # NOT backend/.env) - see .env.example.
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8002}
-    restart: unless-stopped
+  # Optional, testing-only: a lightweight web UI to browse/query the
+  # host's MySQL from inside this Compose network - the quickest way to
+  # confirm containers can actually reach the host-installed database
+  # via `host.docker.internal` (same mechanism backend/worker/scheduler
+  # use for DATABASE_URL above) before trusting the app's own connection.
+  #
+  # NOT part of the normal `docker compose up` run (same `tools` profile
+  # as `seed` above) - a database admin UI should never be running by
+  # default, especially not on a production server.
+  #
+  # SECURITY WARNING: bound to 0.0.0.0 (all interfaces), so port 8081 is
+  # reachable from anywhere that can route to this host - including the
+  # public internet, unless your host firewall/cloud security group
+  # blocks it. A full DB-admin login panel exposed like this is a real
+  # compromise vector (credential brute-forcing, or a future Adminer
+  # CVE). Before starting it:
+  #   - Confirm 8081/tcp is NOT open to 0.0.0.0/0 in your firewall/cloud
+  #     security group - allow only your own IP(s) if you must open it
+  #     at all.
+  #   - Prefer restricting the compose binding itself to your LAN
+  #     subnet/known IP instead of 0.0.0.0, e.g. "10.0.0.0/24" isn't
+  #     valid here, but a single known client IP is:
+  #     "<your-ip>:8081:8080" (Compose port bindings don't support CIDR
+  #     ranges) - or bind to the server's LAN NIC address only, e.g.
+  #     "192.168.1.50:8081:8080".
+  #   - Stop the container the moment you're done testing (below) -
+  #     don't leave it running.
+  #
+  # Start it only when you need it:
+  #   docker compose --profile tools up -d adminer
+  # Then open http://<server-ip>:8081 and log in with:
+  #   System:   MySQL
+  #   Server:   host.docker.internal
+  #   Username/Password: the app DB user from backend/.env.example's
+  #     DATABASE_URL section (or your MySQL root credentials, only if
+  #     you specifically need to confirm host connectivity/grants).
+  # Stop it again as soon as you're done testing:
+  #   docker compose --profile tools stop adminer
+  adminer:
+    image: adminer:4.8.1
+    restart: "no"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles: ["tools"]
     ports:
-      - "3000:80"
-    depends_on:
-      - backend
+      - "8081:8080"
 
 volumes:
   redis_data:

@@ -1,9 +1,16 @@
-# LOCAL-ONLY overlay - adds a containerized nginx in front of backend +
-# frontend so local testing matches production's actual shape (one
-# origin, path-routed) instead of two bare ports with nothing in front.
-# Production does NOT use this file - the host's own nginx (already
-# installed there) plays this same role; see nginx.local.conf's header
-# comment for the production-equivalent location blocks to add there.
+# LOCAL-ONLY overlay - adds a containerized frontend + nginx in front of
+# backend so local testing matches production's actual routing shape
+# (one origin, path-routed) instead of bare ports with nothing in
+# front. Production does NOT use this file - there, MySQL/nginx are
+# already installed on the host, and the frontend is a static build
+# served by that host nginx directly (see docker-compose.yml's header
+# comment and README.md's "Option B") - it is NOT containerized in
+# production, unlike here. This file defines its OWN `frontend` service
+# (rather than relying on one in docker-compose.yml, which is
+# intentionally API-only) so this local Docker testing path stays
+# available without reintroducing a frontend container into prod. See
+# nginx.local.conf's header comment for the production-equivalent
+# location blocks to add to your real host nginx config.
 #
 # Usage (run from the repo root, alongside the normal files):
 #   cp .env.example .env
@@ -15,10 +22,24 @@
 #   docker compose -f docker-compose.yml -f docker-compose.local.yml up --build -d
 #
 # Then open http://localhost:8080 - frontend and API both served from
-# that one origin, exactly like https://plans.everyticket.in will be in
-# production.
+# that one origin, exactly like your real production domain will be.
 
 services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # BUILD-time only (see frontend/Dockerfile's own comment) - must
+        # be a URL the BROWSER can reach, matching this overlay's own
+        # nginx port below (8080), never a Docker-internal service name.
+        # Set the real value in this file's own .env (compose-level,
+        # NOT backend/.env) - see .env.example.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8080}
+    restart: unless-stopped
+    # No published port - only reached via the "nginx" service below, on
+    # the same compose network, by service name "frontend".
+
   nginx:
     image: nginx:1.27-alpine
     restart: unless-stopped
