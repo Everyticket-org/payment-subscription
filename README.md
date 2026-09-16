@@ -140,25 +140,35 @@ Then use the same `DATABASE_URL` as Option A
 (`mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4`)
 and continue with `alembic upgrade head` etc. above.
 
-### Option B: Docker Compose (backend only)
+### Option B: Docker Compose (backend + frontend)
 
-`backend/docker-compose.yml` brings up Redis, the backend API, the
-Celery worker, and the Celery beat scheduler - built and verified
-against a real MySQL/MariaDB already running on the host (not a
-container this file manages; see the file's own header comment for why,
-and the `host.docker.internal` + MySQL grant setup that requires). The
-frontend is separate - see below - and isn't part of this file.
+The root `docker-compose.yml` brings up two app containers - `backend`
+(the API) and `frontend` (the built React app, served by nginx inside
+the container) - plus `redis`, `worker`, and `scheduler` (the latter two
+are Celery processes backend needs, not optional extras - see the file's
+own header comment). MySQL and the reverse proxy in front of these two
+ports are NOT part of this file - both are already installed directly
+on the host in this deployment; see the compose file's header comment
+and `backend/.env.example`'s `DATABASE_URL` section for the
+`host.docker.internal` + MySQL grant/bind-address setup that requires.
+
+Two separate `.env` files, for two different reasons (see each
+`.env.example`'s own comment for why they can't be merged):
 
 ```bash
-cd backend
-cp .env.example .env   # fill in real DATABASE_URL/secrets - see file comments
+cp .env.example .env                     # compose-level only: VITE_API_BASE_URL build arg
+cp backend/.env.example backend/.env     # backend runtime secrets/config
+# fill in both, then:
 docker compose up --build -d
-docker compose run --rm seed   # first time only: seed plans/admin user
+docker compose run --rm seed             # first time only: seed plans/admin user
 ```
 
-API docs once it's up: http://localhost:8002/docs (Swagger) or /redoc.
+Backend API docs once it's up: http://localhost:8002/docs (Swagger) or
+/redoc. Frontend: http://localhost:3000. Point your host nginx's
+`proxy_pass` at whichever of these two ports each of its routes should
+reach - that reverse-proxy config isn't part of this repo.
 
-### Frontend
+### Frontend (without Docker)
 
 ```bash
 cd frontend
@@ -219,5 +229,7 @@ automatically, without an admin manually clicking Attempt every time.
 
 ## Environment variables
 
-See `backend/.env.example` for the full list with comments. Never commit
-a real `.env` file - it's gitignored.
+See `backend/.env.example` for the full backend config list with
+comments, and the root `.env.example` for the one Docker-Compose-level
+variable (`VITE_API_BASE_URL`) - see that file's own comment for why
+it's separate. Never commit a real `.env` file - both are gitignored.

@@ -1,17 +1,39 @@
-# Dev-mode container: runs the real Vite dev server (with HMR) against a
-# bind-mounted ./frontend, matching docker-compose.yml's volume setup
-# (source is mounted live; node_modules gets its own anonymous volume so
-# the host's node_modules - or lack thereof - never shadows what's
-# installed here). This replaces the earlier placeholder that predated
-# the actual React app (see docs/implementation-status.md).
+# Production build: compile the React app once (npm run build -> static
+# files in dist/), then serve those with a minimal nginx - not the Vite
+# dev server. This replaces the earlier dev-mode-only version (Vite dev
+# server with HMR), which was fine for local development but was never
+# meant to sit behind a real reverse proxy in production (see
+# docs/implementation-status.md history / this file's own past comment).
 #
-# NOT set up for a production build/serve yet - that would be a separate
-# multi-stage Dockerfile (npm run build -> serve dist/ with a static
-# server), left for when this is actually deployed somewhere.
-FROM node:20-alpine
+# VITE_API_BASE_URL is baked into the compiled JS at BUILD time (Vite
+# inlines import.meta.env.* during `vite build` - unlike the backend, a
+# runtime `environment:` on the container has NO effect here, since by
+# the time the container runs, the bundle is already static). It must be
+# passed as a build ARG (see docker-compose.yml's `build.args`), and it
+# must be a URL the BROWSER can reach - not a Docker-internal service
+# name like "backend:8002".
+
+FROM node:20-alpine AS builder
 WORKDIR /app
+
 COPY package.json package-lock.json ./
 RUN npm ci
+
 COPY . .
-EXPOSE 3000
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "3000"]
+
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+RUN npm run build
+
+
+FROM nginx:1.27-alpine AS runtime
+
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1/ || exit 1
+
+CMD ["nginx", "-g", "daemon off;"]

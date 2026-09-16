@@ -1,0 +1,127 @@
+version: "3.9"
+
+# Two app containers - backend and frontend - plus Redis and the Celery
+# worker/beat containers backend needs to actually function (see the
+# note on those below). MySQL and the reverse proxy (nginx) are NOT run
+# here - both are already installed directly on the host per this
+# deployment's setup, so:
+#   - backend/worker/scheduler/seed reach the host's MySQL via
+#     `host.docker.internal` (see extra_hosts below + backend/.env.example
+#     for the MySQL grant/bind-address prerequisites that requires).
+#   - the host's own nginx reverse-proxies to whatever ports backend
+#     (8002) and frontend (3000) publish below - this file doesn't touch
+#     that nginx config at all.
+#
+# Why worker/scheduler are here even though you asked for "two
+# containers": they're Celery processes, not optional extras - per
+# README.md, without them queued webhook deliveries and renewal
+# reminders silently sit at PENDING forever (nothing errors, they just
+# never get attempted). Ask if you genuinely want to run without them.
+#
+# Usage (run from the repo root):
+#   cp backend/.env.example backend/.env     # backend runtime secrets
+#   cp .env.example .env                     # compose-level build args (VITE_API_BASE_URL)
+#   docker compose up --build -d
+#   docker compose run --rm seed              # first time only
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes   # persist queued/pending Celery tasks across restarts
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # No ports published - only backend/worker/scheduler (on this same
+    # compose network, reachable by service name "redis") ever need it.
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets DATABASE_URL reach the host's MySQL (Linux; Docker Desktop already does this natively)
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+      - "8002:8002"
+    # No bind-mounted source on a real server (unlike a dev compose file)
+    # - the image already has the code baked in from the build above, so
+    # a code change means rebuilding the image, not editing a live mount.
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
+    # Exactly one scheduler container, ever - never scale this service.
+    # Two beat processes double-fire every scheduled task (duplicate
+    # webhook dispatch attempts, duplicate renewal-reminder emails, etc.)
+    # - see backend/app/core/celery_app.py's beat_schedule.
+    command: celery -A app.core.celery_app beat --loglevel=info --schedule=/app/var/celerybeat-schedule
+
+  # One-shot: seeds plans/roles/the bootstrap admin (idempotent - see
+  # backend/app/core/seed.py docstring, safe to re-run). NOT part of the
+  # normal `docker compose up` run - a fresh deploy shouldn't silently
+  # reseed on every restart. Run it explicitly once:
+  #   docker compose run --rm seed
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    profiles: ["tools"]
+    entrypoint: []
+    command: python -m app.core.seed
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # BUILD-time only (see frontend/Dockerfile's own comment) - must
+        # be a URL the BROWSER can reach (your public domain/host nginx
+        # path to the backend), never a Docker-internal service name.
+        # Set the real value in this file's own .env (compose-level,
+        # NOT backend/.env) - see .env.example.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8002}
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+
+volumes:
+  redis_data:
