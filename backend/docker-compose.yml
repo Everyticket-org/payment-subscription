@@ -1,43 +1,48 @@
 version: "3.9"
 
-# Full stack for this app: MySQL + Redis + backend API + Celery worker +
-# Celery beat, all built from the one backend/Dockerfile image (see its
-# own comment - worker/beat just override `command:` below).
+# Backend-only stack: Redis + backend API + Celery worker + Celery beat,
+# all built from the one Dockerfile in this same directory (see its own
+# comment - worker/beat just override `command:` below). The frontend is
+# a separate app/origin (see ../frontend) and isn't part of this file -
+# run it with its own Dockerfile/`npm run dev`, or ask for a dedicated
+# frontend compose file if you want one alongside this.
 #
-# Was previously wired to a "postgres" service, left over from before the
-# 2026-09-13 "change database to mysql" switch (see app/core/config.py's
-# DATABASE_URL comment) - this replaces it with mysql so DATABASE_URL in
-# .env.example actually matches what gets started here.
+# MySQL is NOT run here - this deployment's database (plans-subscription)
+# already lives on an existing MySQL/MariaDB installed directly on the
+# host, so DATABASE_URL in .env points at `host.docker.internal` (Docker's
+# hostname for "the machine this container's engine runs on") rather than
+# a container this file manages. If you're setting this up somewhere that
+# has no pre-existing DB, see the git history for this file - an earlier
+# version bundled a `mysql` service; ask for that version back rather than
+# rebuilding it from scratch.
 #
-# Usage:
+# For host.docker.internal to resolve on Linux (it works out of the box
+# on Docker Desktop for Windows/Mac, but NOT on plain Linux Docker Engine
+# by default), every service below that talks to the host DB carries:
+#   extra_hosts: ["host.docker.internal:host-gateway"]
+# (Docker 20.10+ - if your server's Docker is older than that, upgrade it
+# rather than working around this.)
+#
+# The host MySQL itself also needs two things done to it once, or every
+# container here will get "Access denied"/"Connection refused" even with
+# the extra_hosts entry in place - see the MySQL commands + bind-address
+# note in .env.example's DATABASE_URL comment:
+#   1. bind-address in my.cnf/mariadb.conf.d must not be left at
+#      127.0.0.1-only (that only accepts true loopback, not a container's
+#      bridge-network IP).
+#   2. The DB user in DATABASE_URL must be GRANTed for a host pattern that
+#      covers the Docker bridge network, not just '<user>'@'localhost' -
+#      debian-sys-maint (Debian/Ubuntu's MySQL package-maintenance
+#      account) is @'localhost'-only and CANNOT be widened safely for
+#      this - use a separate, dedicated app user instead (see
+#      .env.example for the exact CREATE USER/GRANT statements).
+#
+# Usage (run from this directory - backend/):
 #   cp .env.example .env   # then fill in real secrets - see file comments
 #   docker compose up --build -d
 #   docker compose run --rm seed   # first time only: seed plans/admin user
 
 services:
-  mysql:
-    image: mysql:8.0
-    restart: unless-stopped
-    environment:
-      # Root password only initializes the container - the app itself
-      # connects as MYSQL_USER (see DATABASE_URL in .env), never root.
-      # No hardcoded fallback for the root password: MySQL refuses to
-      # start without one, which is the right failure mode here rather
-      # than silently booting with a guessable default on a real server.
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
-      MYSQL_DATABASE: ${MYSQL_DB:-subscription}
-      MYSQL_USER: ${MYSQL_USER:-subscription}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-subscription}
-    ports:
-      - "3306:3306"   # remove this on a real server unless you need external DB access
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -54,14 +59,14 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # lets DATABASE_URL reach the host's MySQL - see file header
     depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
     ports:
@@ -72,28 +77,28 @@ services:
 
   worker:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
     command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
 
   scheduler:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
       - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
-      mysql:
-        condition: service_healthy
       redis:
         condition: service_healthy
     # Exactly one scheduler container, ever - never scale this service.
@@ -109,37 +114,15 @@ services:
   #   docker compose run --rm seed
   seed:
     build:
-      context: ./backend
+      context: .
       dockerfile: Dockerfile
     env_file:
       - .env
-    depends_on:
-      mysql:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     profiles: ["tools"]
     entrypoint: []
     command: python -m app.core.seed
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    environment:
-      # The BROWSER (on the host, not this container) calls this URL, so
-      # "localhost" here means the host's localhost - matches backend's
-      # "8002:8002" port publish above. Point this at your real domain
-      # once this is behind a hostname/reverse proxy.
-      - VITE_API_BASE_URL=http://localhost:8002
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
-    # Dev-mode Vite server (see frontend/Dockerfile) - fine for an
-    # internal/staging box, but not a production static build yet. Ask
-    # if you want a production nginx-served build added here.
-    command: npm run dev -- --host 0.0.0.0 --port 3000
-
 volumes:
-  mysql_data:
   redis_data:

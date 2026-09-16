@@ -90,7 +90,7 @@ cd backend
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-cp ../.env.example ../.env   # then edit DATABASE_URL etc. if needed
+cp .env.example .env   # then edit DATABASE_URL etc. if needed
 export DATABASE_URL="mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4"
 export ENVIRONMENT=development
 # Dev-only conveniences - never true in production (enforced backend-side
@@ -138,25 +138,25 @@ docker run -d --name subscription-mysql \
 
 Then use the same `DATABASE_URL` as Option A
 (`mysql+pymysql://subscription:subscription@localhost:3306/subscription?charset=utf8mb4`)
-and continue with `alembic upgrade head` etc. above. (This repo doesn't
-currently have a `docker-compose.yml` covering the whole stack, despite
-Option B below describing one - see docs/implementation-status.md; this
-one-container command is the accurate, verified way to get MySQL running
-in Docker today.)
+and continue with `alembic upgrade head` etc. above.
 
-### Option B: Docker Compose
+### Option B: Docker Compose (backend only)
+
+`backend/docker-compose.yml` brings up Redis, the backend API, the
+Celery worker, and the Celery beat scheduler - built and verified
+against a real MySQL/MariaDB already running on the host (not a
+container this file manages; see the file's own header comment for why,
+and the `host.docker.internal` + MySQL grant setup that requires). The
+frontend is separate - see below - and isn't part of this file.
 
 ```bash
-cp .env.example .env
-docker compose up --build
+cd backend
+cp .env.example .env   # fill in real DATABASE_URL/secrets - see file comments
+docker compose up --build -d
+docker compose run --rm seed   # first time only: seed plans/admin user
 ```
 
-Brings up MySQL, redis, backend, worker, scheduler, and the real
-frontend (built in increment 3 - see below). **Not yet verified/present
-in this pass** - see docs/implementation-status.md for why (no Docker
-daemon available in the environment this was built in, and no
-`docker-compose.yml` has actually been committed to this repo yet). Use
-Option A or A2 above until this is built and verified.
+API docs once it's up: http://localhost:8002/docs (Swagger) or /redoc.
 
 ### Frontend
 
@@ -219,5 +219,5 @@ automatically, without an admin manually clicking Attempt every time.
 
 ## Environment variables
 
-See `.env.example` for the full list with comments. Never commit a real
-`.env` file - it's gitignored.
+See `backend/.env.example` for the full list with comments. Never commit
+a real `.env` file - it's gitignored.
