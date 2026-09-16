@@ -1,28 +1,51 @@
 version: "3.9"
 
+# Full stack for this app: MySQL + Redis + backend API + Celery worker +
+# Celery beat, all built from the one backend/Dockerfile image (see its
+# own comment - worker/beat just override `command:` below).
+#
+# Was previously wired to a "postgres" service, left over from before the
+# 2026-09-13 "change database to mysql" switch (see app/core/config.py's
+# DATABASE_URL comment) - this replaces it with mysql so DATABASE_URL in
+# .env.example actually matches what gets started here.
+#
+# Usage:
+#   cp .env.example .env   # then fill in real secrets - see file comments
+#   docker compose up --build -d
+#   docker compose run --rm seed   # first time only: seed plans/admin user
+
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.0
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-subscription}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-subscription}
-      POSTGRES_DB: ${POSTGRES_DB:-subscription}
+      # Root password only initializes the container - the app itself
+      # connects as MYSQL_USER (see DATABASE_URL in .env), never root.
+      # No hardcoded fallback for the root password: MySQL refuses to
+      # start without one, which is the right failure mode here rather
+      # than silently booting with a guessable default on a real server.
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MYSQL_DATABASE: ${MYSQL_DB:-subscription}
+      MYSQL_USER: ${MYSQL_USER:-subscription}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-subscription}
     ports:
-      - "5432:5432"
+      - "3306:3306"   # remove this on a real server unless you need external DB access
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-subscription}"]
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
 
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    command: redis-server --appendonly yes   # persist queued/pending Celery tasks across restarts
     ports:
-      - "6379:6379"
+      - "6379:6379"   # remove this on a real server unless you need external Redis access
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -37,15 +60,15 @@ services:
     env_file:
       - .env
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
     ports:
-      - "8000:8000"
-    volumes:
-      - ./backend:/app
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      - "8002:8002"
+    # No bind-mounted source on a real server (unlike a dev compose file)
+    # - the image already has the code baked in from the build above, so
+    # a code change means rebuilding the image, not editing a live mount.
 
   worker:
     build:
@@ -55,13 +78,11 @@ services:
     env_file:
       - .env
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: celery -A app.core.celery_app worker --loglevel=info
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4
 
   scheduler:
     build:
@@ -71,13 +92,33 @@ services:
     env_file:
       - .env
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-    volumes:
-      - ./backend:/app
-    command: celery -A app.core.celery_app beat --loglevel=info
+    # Exactly one scheduler container, ever - never scale this service.
+    # Two beat processes double-fire every scheduled task (duplicate
+    # webhook dispatch attempts, duplicate renewal-reminder emails, etc.)
+    # - see app/core/celery_app.py's beat_schedule.
+    command: celery -A app.core.celery_app beat --loglevel=info --schedule=/app/var/celerybeat-schedule
+
+  # One-shot: seeds plans/roles/the bootstrap admin (idempotent - see
+  # app/core/seed.py docstring, safe to re-run). NOT part of the normal
+  # `docker compose up` run - a fresh deploy shouldn't silently reseed on
+  # every restart. Run it explicitly once:
+  #   docker compose run --rm seed
+  seed:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    profiles: ["tools"]
+    entrypoint: []
+    command: python -m app.core.seed
 
   frontend:
     build:
@@ -85,25 +126,20 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     environment:
-      # VITE_API_BASE_URL is baked into the bundle the Vite dev server
-      # serves; the BROWSER (running on the host, not in this container)
-      # is what actually calls it, so "localhost" here means the host's
-      # localhost, not this container's - matches backend's "8000:8000"
-      # port publish below. Not "API_URL" - that was a stale placeholder
-      # name from before the real app existed; the actual code reads
-      # import.meta.env.VITE_API_BASE_URL (see src/api/client.ts).
-      - VITE_API_BASE_URL=http://localhost:8000
+      # The BROWSER (on the host, not this container) calls this URL, so
+      # "localhost" here means the host's localhost - matches backend's
+      # "8002:8002" port publish above. Point this at your real domain
+      # once this is behind a hostname/reverse proxy.
+      - VITE_API_BASE_URL=http://localhost:8002
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     depends_on:
       - backend
-    # "npm start" doesn't exist in package.json (scripts are dev/build/
-    # lint/preview) - that was also a stale placeholder. --port 3000
-    # matches this service's port mapping above (Vite defaults to 5173).
+    # Dev-mode Vite server (see frontend/Dockerfile) - fine for an
+    # internal/staging box, but not a production static build yet. Ask
+    # if you want a production nginx-served build added here.
     command: npm run dev -- --host 0.0.0.0 --port 3000
 
 volumes:
-  postgres_data:
+  mysql_data:
+  redis_data:

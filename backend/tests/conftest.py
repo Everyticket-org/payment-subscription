@@ -38,6 +38,15 @@ os.environ.setdefault("ALLOW_OTP_BYPASS", "true")
 os.environ.setdefault("ALLOW_ADMIN_MFA_BYPASS", "true")
 os.environ.setdefault("ENVIRONMENT", "development")
 os.environ.setdefault("JWT_SECRET", "pytest-only-secret-never-used-outside-tests")
+# Force-blank (not setdefault - a developer's real backend/.env may set these
+# to a real bootstrap password) so app.core.seed.seed() always falls back to
+# its hardcoded dev-default admin login (admin@example.com / ChangeMe123!),
+# matching what tests/test_admin_api.py's _admin_token() helper hardcodes.
+# Without this, a developer's local ADMIN_BOOTSTRAP_EMAIL/PASSWORD (kept in
+# backend/.env for their own real dev database) leaks into the test suite's
+# in-memory DB and every admin-authenticated test fails with 401.
+os.environ["ADMIN_BOOTSTRAP_EMAIL"] = ""
+os.environ["ADMIN_BOOTSTRAP_PASSWORD"] = ""
 
 import pytest
 from fastapi.testclient import TestClient

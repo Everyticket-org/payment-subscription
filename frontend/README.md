@@ -30,7 +30,7 @@ npm run dev
 ```
 
 Requires the backend running separately (see `backend/README.md` at the repo root) - by default
-this expects it at `http://localhost:8000`.
+this expects it at `http://localhost:8002`.
 
 **CORS**: the backend only accepts browser requests from origins listed in its `CORS_ORIGINS`
 setting (default covers `http://localhost:5173` and `http://127.0.0.1:5173` - Vite's default dev

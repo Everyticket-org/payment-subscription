@@ -163,7 +163,7 @@ Option A or A2 above until this is built and verified.
 ```bash
 cd frontend
 npm install
-cp .env.example .env   # adjust VITE_API_BASE_URL if the backend isn't on :8000
+cp .env.example .env   # adjust VITE_API_BASE_URL if the backend isn't on :8002
 npm run dev
 ```
 

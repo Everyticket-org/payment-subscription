@@ -1,0 +1,28 @@
+# Never bake secrets into the image - env vars are injected at container
+# runtime by docker-compose's `env_file:` / `environment:`, so the app
+# never needs .env physically present inside the image.
+.env
+.env.*
+!.env.example
+
+# Local/dev-only artifacts that don't belong in the image
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+
+# Generated at runtime, not build time (invoice PDFs, celery beat schedule file)
+var/
+
+# Stale archive, not needed at runtime (see docs/implementation-status.md)
+migrations_postgres_archive/
+
+# VCS/editor cruft
+.git/
+.gitignore
+.vscode/
+.idea/
