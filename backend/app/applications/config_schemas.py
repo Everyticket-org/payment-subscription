@@ -260,6 +260,9 @@ class NotificationConfigOut(BaseModel):
     email_sender_name: str | None = None
     email_sender_address: str | None = None
     email_reply_to: str | None = None
+    # Blind-copied on every outgoing notification email for this
+    # application, comma-separated - see Application.notification_bcc_emails.
+    notification_bcc_emails: str | None = None
 
 
 class NotificationConfigUpdate(BaseModel):
@@ -273,6 +276,7 @@ class NotificationConfigUpdate(BaseModel):
     email_sender_name: str | None = None
     email_sender_address: str | None = None
     email_reply_to: str | None = None
+    notification_bcc_emails: str | None = None
 
 
 class ApplicationSubscriptionRulesOut(BaseModel):

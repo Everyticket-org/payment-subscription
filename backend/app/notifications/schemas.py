@@ -37,3 +37,12 @@ class NotificationLogOut(BaseModel):
     related_entity_type: str | None = None
     related_entity_id: str | None = None
     created_at: datetime
+    # Retry bookkeeping (see app.notifications.email.service.
+    # retry_pending_emails()) - attempt_count=1/next_retry_at=None on any
+    # row that never needed a retry (SENT on the first try, SKIPPED, or a
+    # non-transient FAILED). A FAILED row WITH next_retry_at set is still
+    # scheduled to retry automatically; EXHAUSTED means every scheduled
+    # retry already failed.
+    attempt_count: int = 1
+    next_retry_at: datetime | None = None
+    bcc: list[str] | None = None

@@ -702,6 +702,7 @@ export function NotificationSection({ initial, token }: { initial: NotificationC
   const [senderName, setSenderName] = useState(initial.email_sender_name ?? "");
   const [senderAddress, setSenderAddress] = useState(initial.email_sender_address ?? "");
   const [replyTo, setReplyTo] = useState(initial.email_reply_to ?? "");
+  const [bccEmails, setBccEmails] = useState(initial.notification_bcc_emails ?? "");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -722,6 +723,7 @@ export function NotificationSection({ initial, token }: { initial: NotificationC
           email_sender_name: senderName || null,
           email_sender_address: senderAddress || null,
           email_reply_to: replyTo || null,
+          notification_bcc_emails: bccEmails || null,
         },
         token,
       );
@@ -819,6 +821,19 @@ export function NotificationSection({ initial, token }: { initial: NotificationC
               <input value={replyTo} onChange={(e) => setReplyTo(e.target.value)} placeholder="support@example.com" />
             </label>
           </div>
+          <label style={{ display: "block", marginTop: 14 }}>
+            BCC on every email (comma-separated)
+            <input
+              value={bccEmails}
+              onChange={(e) => setBccEmails(e.target.value)}
+              placeholder="ops@example.com, audit@example.com"
+            />
+            <span className="hint">
+              Blind-copied on every email this application sends (OTP, payment/invoice confirmations, renewal
+              reminders, cancellations, ...), in addition to any one-off BCC a specific tool (e.g. Test Renewal
+              Reminder) already adds for that send.
+            </span>
+          </label>
         </fieldset>
 
         <div style={{ marginTop: 16 }}>

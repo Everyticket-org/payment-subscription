@@ -175,6 +175,7 @@ export function AdminNotificationsPage() {
                 <th>Template</th>
                 <th>Recipient</th>
                 <th>Status</th>
+                <th>Retry</th>
               </tr>
             </thead>
             <tbody>
@@ -185,6 +186,15 @@ export function AdminNotificationsPage() {
                   <td>{log.recipient}</td>
                   <td>
                     <StatusBadge value={log.status} />
+                  </td>
+                  <td>
+                    {log.next_retry_at ? (
+                      <span className="hint">Next attempt {new Date(log.next_retry_at).toLocaleString()}</span>
+                    ) : log.status === "EXHAUSTED" ? (
+                      <span className="hint">Gave up after {log.attempt_count} attempt(s)</span>
+                    ) : log.attempt_count > 1 ? (
+                      <span className="hint">Sent after {log.attempt_count} attempts</span>
+                    ) : null}
                   </td>
                 </tr>
               ))}

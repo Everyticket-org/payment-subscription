@@ -18,7 +18,7 @@ celery_app = Celery(
     include=[
         "app.webhooks.tasks",
         "app.subscriptions.tasks",
-        # "app.notifications.email.tasks",  # lands with the email service
+        "app.notifications.email.tasks",
     ],
 )
 
@@ -37,6 +37,10 @@ celery_app.conf.update(
         "dispatch-pending-webhooks": {
             "task": "webhooks.dispatch_pending",
             "schedule": 60.0,  # seconds - matches the shortest WEBHOOK_RETRY_SCHEDULE_MINUTES step
+        },
+        "retry-pending-emails": {
+            "task": "notifications.email.retry_pending",
+            "schedule": 60.0,  # seconds - matches the shortest EMAIL_RETRY_SCHEDULE_MINUTES step
         },
         "expire-due-subscriptions": {
             "task": "subscriptions.expire_due",

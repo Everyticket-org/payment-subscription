@@ -128,6 +128,7 @@ def _notification_out(application: Application) -> NotificationConfigOut:
         email_sender_name=application.email_sender_name,
         email_sender_address=application.email_sender_address,
         email_reply_to=application.email_reply_to,
+        notification_bcc_emails=application.notification_bcc_emails,
     )
 
 
@@ -308,6 +309,7 @@ def update_notification_config(
     application.email_sender_name = body.email_sender_name
     application.email_sender_address = body.email_sender_address
     application.email_reply_to = body.email_reply_to
+    application.notification_bcc_emails = body.notification_bcc_emails or None
     db.add(application)
     audit_service.record(
         db, actor=admin.email, action="APPLICATION_CONFIG_UPDATED", entity_type="application",
@@ -317,6 +319,7 @@ def update_notification_config(
             "smtp_host": body.smtp_host, "smtp_port": body.smtp_port,
             "smtp_password_changed": body.smtp_password is not None,
             "email_sender_name": body.email_sender_name, "email_sender_address": body.email_sender_address,
+            "notification_bcc_emails": body.notification_bcc_emails,
         },
         ip_address=_client_ip(request),
     )

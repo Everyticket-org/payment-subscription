@@ -149,6 +149,16 @@ export interface TestEmailResult {
   provider_response: string | null;
 }
 
+export interface TestRenewalReminderResult {
+  sent: boolean;
+  template_code: string;
+  to: string;
+  bcc: string[];
+  expires_at: string;
+  status: string | null;
+  provider_response: string | null;
+}
+
 export interface TestModeStatusOut {
   environment: string;
   test_mode: boolean;
@@ -555,6 +565,7 @@ export interface NotificationConfigOut {
   email_sender_name: string | null;
   email_sender_address: string | null;
   email_reply_to: string | null;
+  notification_bcc_emails: string | null;
 }
 
 export interface NotificationConfigUpdateInput {
@@ -568,6 +579,7 @@ export interface NotificationConfigUpdateInput {
   email_sender_name?: string | null;
   email_sender_address?: string | null;
   email_reply_to?: string | null;
+  notification_bcc_emails?: string | null;
 }
 
 export interface ApplicationSubscriptionRulesOut {
@@ -687,6 +699,9 @@ export interface NotificationLogOut {
   related_entity_type?: string | null;
   related_entity_id?: string | null;
   created_at: string;
+  attempt_count: number;
+  next_retry_at?: string | null;
+  bcc?: string[] | null;
 }
 
 export interface AuditLogOut {

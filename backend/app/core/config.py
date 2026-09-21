@@ -102,6 +102,15 @@ class Settings(BaseSettings):
     # --- Webhook delivery ---
     WEBHOOK_RETRY_SCHEDULE_MINUTES: str = "5,15,60,360,1440"
 
+    # --- Email retry ---
+    # Same shape/default as WEBHOOK_RETRY_SCHEDULE_MINUTES above, kept as
+    # its own setting (not shared) since email and webhook delivery are
+    # independent subsystems that may need different tuning later. Applies
+    # only to a plain (no-attachment) templated email that fails with a
+    # transient SMTP error - see
+    # app.notifications.email.service.send_templated_email().
+    EMAIL_RETRY_SCHEDULE_MINUTES: str = "5,15,60,360,1440"
+
     # --- Renewal reminders (spec section 49) ---
     RENEWAL_REMINDER_DAYS_BEFORE: int = 3
 
@@ -137,6 +146,10 @@ class Settings(BaseSettings):
     @property
     def webhook_retry_schedule(self) -> List[int]:
         return [int(x) for x in self.WEBHOOK_RETRY_SCHEDULE_MINUTES.split(",") if x.strip()]
+
+    @property
+    def email_retry_schedule(self) -> List[int]:
+        return [int(x) for x in self.EMAIL_RETRY_SCHEDULE_MINUTES.split(",") if x.strip()]
 
     def enforce_test_mode_restrictions(self) -> None:
         """

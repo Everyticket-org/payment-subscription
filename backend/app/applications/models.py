@@ -51,6 +51,14 @@ class Application(Base, TimestampMixin):
     email_sender_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_sender_address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     email_reply_to: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Blind-copied on every outgoing notification email for this
+    # application (payment/renewal/cancellation/OTP/... - anything sent via
+    # app.notifications.email.service), in addition to any one-off bcc a
+    # specific call site passes (e.g. the admin Testing "Test renewal
+    # reminder" tool) - the two lists are merged, not one replacing the
+    # other. Comma-separated, same convention as webhook_escalation_emails
+    # below. None/empty = no global BCC.
+    notification_bcc_emails: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
     # --- Subscription rules ---
     allow_upgrade: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

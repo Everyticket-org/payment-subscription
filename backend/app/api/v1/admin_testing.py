@@ -47,11 +47,11 @@ page's new "Test Everyticket webhook" event dropdown.
 """
 import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_application, get_db
@@ -547,6 +547,127 @@ def test_email(
     )
     db.commit()
     return TestEmailResult(sent=sent, status=log.status if log else None, provider_response=log.provider_response if log else None)
+
+
+# --- TEST RENEWAL REMINDER (plan-wise, with BCC) ----------------------------
+
+
+class TestRenewalReminderRequest(BaseModel):
+    plan_code: str
+    to: EmailStr
+    # Extra addresses blind-copied on the send (e.g. an internal
+    # distribution list for a given plan's renewal reminders) - kept
+    # ad-hoc per test-send here rather than a persisted Plan field, since
+    # nothing on the Plan model today models a reminder BCC list.
+    bcc: list[EmailStr] = []
+    # Common/shared override, ad-hoc per test-send only (not persisted,
+    # never affects the real Celery renewal-reminder sweep): lets a
+    # tester pick any expiry offset instead of the plan/settings-derived
+    # default below, e.g. to preview an "expires tomorrow" or "expires in
+    # 30 days" reminder without waiting for a real subscription to reach
+    # that window. Bounded to a sane range purely to reject fat-finger
+    # input (e.g. accidentally pasting a timestamp).
+    days_until_expiry: int | None = Field(default=None, ge=0, le=3650)
+
+
+class TestRenewalReminderResult(BaseModel):
+    sent: bool
+    template_code: str
+    to: str
+    bcc: list[str]
+    expires_at: str
+    status: str | None
+    provider_response: str | None
+
+
+@router.post("/renewal-reminder", response_model=TestRenewalReminderResult)
+def test_renewal_reminder(
+    body: TestRenewalReminderRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+    admin: AdminUser = Depends(require_permission("TESTING_TOOLS_USE")),
+    _test_mode: None = Depends(require_test_mode),
+):
+    """Plan-wise renewal reminder test send: picks the same template the
+    real Celery sweep (subscription_service.send_renewal_reminders) would
+    use for this plan - "trial_ending" for a trial plan, "renewal_reminder"
+    otherwise - renders it with a representative expiry date for that
+    plan, and sends it via send_templated_email() with the admin-supplied
+    BCC list, exactly like TEST EMAIL above but scoped to a specific plan
+    and carrying BCC recipients (spec section 54's TEST EMAIL tool has no
+    BCC support and isn't plan-aware; this is a dedicated variant for
+    that combination).
+
+    `days_until_expiry`, if given, overrides the auto-derived expiry
+    offset below for this one test send only - a common/shared control on
+    the testing tool, not a persisted setting, so it never touches the
+    real reminder sweep's behavior (which still always uses the plan's
+    trial length or the global RENEWAL_REMINDER_DAYS_BEFORE)."""
+    plan = (
+        db.query(Plan)
+        .filter(Plan.application_id == application.id, Plan.plan_code == body.plan_code.upper())
+        .first()
+    )
+    if plan is None:
+        raise PlanNotFound(f"No plan '{body.plan_code}'")
+
+    settings = get_settings()
+    template_code = "trial_ending" if plan.is_trial else "renewal_reminder"
+    if body.days_until_expiry is not None:
+        days_ahead = body.days_until_expiry
+    elif plan.is_trial and plan.trial_period_days:
+        days_ahead = plan.trial_period_days
+    else:
+        days_ahead = settings.RENEWAL_REMINDER_DAYS_BEFORE
+    expires_at = (datetime.now(timezone.utc) + timedelta(days=days_ahead)).date().isoformat()
+    context = {"plan_name": plan.name, "expires_at": expires_at}
+
+    bcc_list = [str(addr) for addr in body.bcc]
+    sent = email_service.send_templated_email(
+        db,
+        template_code=template_code,
+        to=body.to,
+        bcc=bcc_list or None,
+        context=context,
+        related_entity_type="test_renewal_reminder",
+        related_entity_id=f"TEST-RENEWAL-{_short_suffix()}",
+        application=application,
+    )
+    log = (
+        db.query(NotificationLog)
+        .filter(NotificationLog.template_code == template_code, NotificationLog.recipient == body.to)
+        .order_by(NotificationLog.id.desc())
+        .first()
+    )
+    audit_service.record(
+        db,
+        actor=admin.email,
+        action="TEST_RENEWAL_REMINDER_SENT",
+        entity_type="plan",
+        entity_id=plan.plan_code,
+        new_value={
+            "to": body.to,
+            "bcc": bcc_list,
+            "template_code": template_code,
+            "expires_at": expires_at,
+            "days_until_expiry_override": body.days_until_expiry,
+            "sent": sent,
+            "status": log.status if log else None,
+            "provider_response": log.provider_response if log else None,
+        },
+        ip_address=_client_ip(request),
+    )
+    db.commit()
+    return TestRenewalReminderResult(
+        sent=sent,
+        template_code=template_code,
+        expires_at=expires_at,
+        to=body.to,
+        bcc=bcc_list,
+        status=log.status if log else None,
+        provider_response=log.provider_response if log else None,
+    )
 
 
 # --- OTP / MFA BYPASS (spec sections 11, 12, 54, 55) ------------------------

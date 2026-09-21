@@ -55,6 +55,7 @@ import type {
   TestEmailResult,
   TestModeStatusOut,
   TestPaymentResult,
+  TestRenewalReminderResult,
   TestWebhookSendResult,
   SubscribeResponse,
   SubscriptionAdminOut,
@@ -346,6 +347,11 @@ export const testWebhookFailureSimulate = (statusCode: string, token: string) =>
 
 export const testEmail = (body: { template_code: string; to: string }, token: string) =>
   api.post<TestEmailResult>("/api/v1/admin/testing/email", body, token);
+
+export const testRenewalReminder = (
+  body: { plan_code: string; to: string; bcc: string[]; days_until_expiry?: number | null },
+  token: string,
+) => api.post<TestRenewalReminderResult>("/api/v1/admin/testing/renewal-reminder", body, token);
 
 export const getTestModeStatus = (token: string) => api.get<TestModeStatusOut>("/api/v1/admin/testing/status", token);
 

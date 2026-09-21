@@ -104,6 +104,14 @@ _EMAIL_WRAPPER_OPEN = (
 )
 _EMAIL_WRAPPER_CLOSE = "</div></div>"
 
+# Public purchase/renewal portal, linked from any seeded template whose
+# text prompts an action there (renew, subscribe, retry payment,
+# resubscribe after cancellation) - kept as one constant so every
+# template points at the same place and it's a one-line change if the
+# portal ever moves.
+PORTAL_URL = "https://payment-subscription.everyticket.in/"
+_PORTAL_LINK_HTML = f'<a href="{PORTAL_URL}" style="color:#d50355;font-weight:600;">your account portal</a>'
+
 
 def _get_or_create_template(db: Session, *, template_code: str, subject: str, body_html: str, body_text: str) -> None:
     """Dev-seeded default templates (spec sections 49-50). Wrapped in a
@@ -245,26 +253,26 @@ def seed(db: Session) -> AdminUser:
     _get_or_create_template(
         db, template_code="payment_failed",
         subject="Payment unsuccessful for your {{ plan_name }} subscription",
-        body_html="<p>Hi,</p><p>Your payment of {{ currency }} {{ amount }} for the <strong>{{ plan_name }}</strong> plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed - you can try again any time.</p>",
-        body_text="Your payment of {{ currency }} {{ amount }} for the {{ plan_name }} plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed.",
+        body_html="<p>Hi,</p><p>Your payment of {{ currency }} {{ amount }} for the <strong>{{ plan_name }}</strong> plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed - you can try again any time from " + _PORTAL_LINK_HTML + ".</p>",
+        body_text="Your payment of {{ currency }} {{ amount }} for the {{ plan_name }} plan was not successful{% if failure_reason %} ({{ failure_reason }}){% endif %}. Your subscription has not changed. You can try again any time from your account portal (" + PORTAL_URL + ").",
     )
     _get_or_create_template(
         db, template_code="subscription_cancelled",
         subject="Your {{ plan_name }} subscription has been cancelled",
-        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription has been cancelled, effective immediately. No further charges will be made.</p>",
-        body_text="Your {{ plan_name }} subscription has been cancelled, effective immediately. No further charges will be made.",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription has been cancelled, effective immediately. No further charges will be made. You're welcome to subscribe again any time from " + _PORTAL_LINK_HTML + ".</p>",
+        body_text="Your {{ plan_name }} subscription has been cancelled, effective immediately. No further charges will be made. You're welcome to subscribe again any time from your account portal (" + PORTAL_URL + ").",
     )
     _get_or_create_template(
         db, template_code="renewal_reminder",
         subject="Your {{ plan_name }} subscription expires soon",
-        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.</p>",
-        body_text="Your {{ plan_name }} subscription expires on {{ expires_at }}. Renew any time from your account portal to keep it active.",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> subscription expires on {{ expires_at }}. Renew any time from " + _PORTAL_LINK_HTML + " to keep it active.</p>",
+        body_text="Your {{ plan_name }} subscription expires on {{ expires_at }}. Renew any time from your account portal (" + PORTAL_URL + ") to keep it active.",
     )
     _get_or_create_template(
         db, template_code="trial_ending",
         subject="Your free trial ends soon",
-        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> free trial ends on {{ expires_at }}. Subscribe to a paid plan from your account portal before then to keep access without interruption.</p>",
-        body_text="Your {{ plan_name }} free trial ends on {{ expires_at }}. Subscribe to a paid plan from your account portal before then to keep access without interruption.",
+        body_html="<p>Hi,</p><p>Your <strong>{{ plan_name }}</strong> free trial ends on {{ expires_at }}. Subscribe to a paid plan from " + _PORTAL_LINK_HTML + " before then to keep access without interruption.</p>",
+        body_text="Your {{ plan_name }} free trial ends on {{ expires_at }}. Subscribe to a paid plan from your account portal (" + PORTAL_URL + ") before then to keep access without interruption.",
     )
     _get_or_create_template(
         db, template_code="invoice_generated",

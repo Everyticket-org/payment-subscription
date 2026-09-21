@@ -27,11 +27,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import {
   adminGetWebhookSamples,
+  adminListPlans,
   cleanupTestData,
   generateTestData,
   getTestModeStatus,
   setOtpMfaBypass,
   testEmail,
+  testRenewalReminder,
   testWebhookFailureSimulate,
   testWebhookSend,
 } from "../../api/endpoints";
@@ -40,10 +42,12 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import type {
   EveryticketWebhookSampleOut,
+  PlanAdminOut,
   TestDataCleanupOut,
   TestDataGeneratedOut,
   TestEmailResult,
   TestModeStatusOut,
+  TestRenewalReminderResult,
   TestWebhookSendResult,
   WebhookDeliveryOut,
 } from "../../api/types";
@@ -84,6 +88,14 @@ export function AdminTestingPage() {
   const [emailTo, setEmailTo] = useState("");
   const [emailResult, setEmailResult] = useState<TestEmailResult | null>(null);
 
+  // TEST RENEWAL REMINDER (plan-wise, with BCC)
+  const [plans, setPlans] = useState<PlanAdminOut[]>([]);
+  const [reminderPlanCode, setReminderPlanCode] = useState("");
+  const [reminderTo, setReminderTo] = useState("");
+  const [reminderBcc, setReminderBcc] = useState("");
+  const [reminderDaysUntilExpiry, setReminderDaysUntilExpiry] = useState("");
+  const [reminderResult, setReminderResult] = useState<TestRenewalReminderResult | null>(null);
+
   // TEST DATA GENERATOR
   const [generated, setGenerated] = useState<TestDataGeneratedOut | null>(null);
   const [cleanup, setCleanup] = useState<TestDataCleanupOut | null>(null);
@@ -92,6 +104,12 @@ export function AdminTestingPage() {
     if (!adminToken) return;
     getTestModeStatus(adminToken).then(setStatus).catch(setError);
     adminGetWebhookSamples(adminToken).then(setWebhookSamples).catch(setError);
+    adminListPlans(adminToken)
+      .then((p) => {
+        setPlans(p);
+        if (p.length > 0) setReminderPlanCode(p[0].plan_code);
+      })
+      .catch(setError);
   }, [adminToken]);
 
   async function run<T>(fn: () => Promise<T>, onResult: (r: T) => void, successMessage?: string) {
@@ -287,6 +305,89 @@ export function AdminTestingPage() {
           <p className="hint">
             {emailResult.sent ? "Sent" : "Not sent"} - status: <strong>{emailResult.status ?? "unknown"}</strong>
             {emailResult.provider_response ? ` (${emailResult.provider_response})` : ""}.
+          </p>
+        )}
+      </Section>
+
+      <Section title="Test renewal reminder (plan-wise, with BCC)">
+        <p className="hint">
+          Sends the same template the real renewal-reminder sweep would use for the selected plan -{" "}
+          <code>trial_ending</code> for a trial plan, <code>renewal_reminder</code> otherwise - to a test address,
+          blind-copying any extra addresses below (e.g. a plan's internal renewal distribution list).
+        </p>
+        <div className="inline-form">
+          <label>
+            Plan
+            <select value={reminderPlanCode} onChange={(e) => setReminderPlanCode(e.target.value)}>
+              {plans.length === 0 && <option value="">No plans found</option>}
+              {plans.map((p) => (
+                <option key={p.plan_code} value={p.plan_code}>
+                  {p.name} ({p.plan_code}){p.is_trial ? " - trial" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Send to
+            <input type="email" value={reminderTo} onChange={(e) => setReminderTo(e.target.value)} placeholder="you@example.com" />
+          </label>
+          <label style={{ width: "100%" }}>
+            BCC (comma-separated)
+            <input
+              type="text"
+              value={reminderBcc}
+              onChange={(e) => setReminderBcc(e.target.value)}
+              placeholder="ops@example.com, accounts@example.com"
+            />
+          </label>
+          <label>
+            Days until expiry (common, testing only)
+            <input
+              type="number"
+              min="0"
+              max="3650"
+              value={reminderDaysUntilExpiry}
+              onChange={(e) => setReminderDaysUntilExpiry(e.target.value)}
+              placeholder="auto"
+            />
+            <span className="hint">
+              Overrides the plan/default-derived expiry date for this test send only - never affects the real
+              renewal-reminder schedule. Leave blank to use the plan's trial length or the configured default.
+            </span>
+          </label>
+          <button
+            className="button button-primary"
+            disabled={busy || !reminderPlanCode || !reminderTo}
+            onClick={() =>
+              run(
+                () =>
+                  testRenewalReminder(
+                    {
+                      plan_code: reminderPlanCode,
+                      to: reminderTo,
+                      bcc: reminderBcc
+                        .split(",")
+                        .map((addr) => addr.trim())
+                        .filter(Boolean),
+                      days_until_expiry: reminderDaysUntilExpiry ? Number(reminderDaysUntilExpiry) : null,
+                    },
+                    adminToken!,
+                  ),
+                setReminderResult,
+                "Renewal reminder sent",
+              )
+            }
+          >
+            Send renewal reminder
+          </button>
+        </div>
+        {reminderResult && (
+          <p className="hint">
+            {reminderResult.sent ? "Sent" : "Not sent"} using template <strong>{reminderResult.template_code}</strong>{" "}
+            (expires_at: <strong>{reminderResult.expires_at}</strong>) - status:{" "}
+            <strong>{reminderResult.status ?? "unknown"}</strong>
+            {reminderResult.bcc.length > 0 ? `, bcc: ${reminderResult.bcc.join(", ")}` : ""}
+            {reminderResult.provider_response ? ` (${reminderResult.provider_response})` : ""}.
           </p>
         )}
       </Section>

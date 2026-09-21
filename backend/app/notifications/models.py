@@ -1,5 +1,7 @@
 """Email templates + send log (spec sections 49-50)."""
-from sqlalchemy import Boolean, Integer, String, Text
+from datetime import datetime
+
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base, TimestampMixin
@@ -34,3 +36,19 @@ class NotificationLog(Base, TimestampMixin):
     provider_response: Mapped[str | None] = mapped_column(String(2000), nullable=True)
     related_entity_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     related_entity_id: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+
+    # --- Retry bookkeeping (mirrors WebhookDelivery's attempt_count/
+    # next_retry_at) - only ever populated for a plain (no-attachment)
+    # templated send; see app.notifications.email.service.
+    # send_templated_email()/retry_pending_emails(). application_id/
+    # context/bcc are what a later retry needs to reconstruct and resend
+    # the exact same email without the original caller's context still
+    # being in scope. ---
+    application_id: Mapped[int | None] = mapped_column(ForeignKey("applications.id"), nullable=True, index=True)
+    context: Mapped[dict | None] = mapped_column(JSON, nullable=True)  # Jinja2 render context used for this send
+    bcc: Mapped[list | None] = mapped_column(JSON, nullable=True)  # per-send bcc list (global bcc is re-merged fresh on retry)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    # None = no retry scheduled (SENT, SKIPPED, a non-transient FAILED, or
+    # EXHAUSTED) - only set on a transient SMTP failure for a retryable
+    # send. Indexed: this is the column retry_pending_emails() sweeps on.
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)

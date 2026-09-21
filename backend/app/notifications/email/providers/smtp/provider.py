@@ -59,10 +59,19 @@ def send(
     html_body: str,
     text_body: str | None = None,
     attachments: list[tuple[str, bytes, str]] | None = None,
+    bcc: list[str] | None = None,
 ) -> None:
     """`attachments` is a list of (filename, content_bytes, mime_subtype)
     tuples, e.g. ("invoice.pdf", pdf_bytes, "pdf") - used for the invoice
-    PDF email (spec section 45). Optional; most templates send none."""
+    PDF email (spec section 45). Optional; most templates send none.
+
+    `bcc`, if given, is a list of extra addresses (e.g. a plan's renewal
+    reminder distribution list) that receive the message alongside `to`.
+    These are added only to the SMTP envelope recipient list passed to
+    sendmail() - deliberately NOT as a `Bcc:` MIME header, which would
+    defeat the point of a blind copy by revealing every bcc address to
+    the primary recipient (and to each other, since every mail client
+    renders message headers verbatim)."""
     message = MIMEMultipart("mixed" if attachments else "alternative")
     message["Subject"] = subject
     message["From"] = f"{settings.EMAIL_SENDER_NAME} <{settings.EMAIL_SENDER_ADDRESS}>"
@@ -87,18 +96,36 @@ def send(
             message.attach(MIMEText(text_body, "plain"))
         message.attach(MIMEText(html_body, "html"))
 
+    envelope_recipients = [to, *bcc] if bcc else [to]
+
     try:
         if settings.SMTP_PORT == SMTP_SSL_PORT:
             with smtplib.SMTP_SSL(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
                 if settings.SMTP_USER:
                     smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, [to], message.as_string())
+                refused = smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, envelope_recipients, message.as_string())
         else:
             with smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT, timeout=10) as smtp:
                 if settings.SMTP_USE_TLS:
                     smtp.starttls()
                 if settings.SMTP_USER:
                     smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
-                smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, [to], message.as_string())
+                refused = smtp.sendmail(settings.EMAIL_SENDER_ADDRESS, envelope_recipients, message.as_string())
     except (smtplib.SMTPException, OSError, TimeoutError) as exc:
         raise SMTPSendError(str(exc)) from exc
+
+    # smtplib.sendmail() only RAISES SMTPRecipientsRefused when EVERY
+    # recipient was refused (already handled above via SMTPException) -
+    # when just SOME were refused, it returns normally with a
+    # {refused_recipient: (code, message)} dict instead, which was
+    # previously discarded here entirely. That silently dropped BCC
+    # copies (or, worse, could silently drop the actual intended
+    # recipient while only a BCC address went through) without ever
+    # showing up as a failure anywhere. Now: the primary `to` being
+    # refused is treated as a real failure (retried like any other
+    # SMTPSendError); a BCC-only refusal is logged but doesn't fail the
+    # send, since the intended recipient still got it.
+    if refused:
+        if to in refused:
+            raise SMTPSendError(f"Recipient refused: {refused}")
+        logger.warning("send(): bcc recipient(s) refused, primary recipient %s still delivered: %s", to, refused)
