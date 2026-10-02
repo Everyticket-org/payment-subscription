@@ -1,5 +1,3 @@
-version: "3.9"
-
 # API-only stack: backend, plus Redis and the Celery worker/beat
 # containers backend needs to actually function (see the note on those
 # below). The frontend is NOT built or served by Docker/Compose at all -
