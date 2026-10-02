@@ -10,6 +10,12 @@
  * "simulate a callback" step PortalPage's inline form used - only the
  * layout changes, not the underlying mechanics.
  *
+ * A target plan with its own plan-specific questions (e.g. the Custom
+ * plan's expected tickets / average ticket price - see
+ * RegistrationFormFieldOut.plan_codes) adds a "details" step between pick
+ * and pay; the answers are sent with the upgrade/downgrade call, where the
+ * backend enforces the required ones.
+ *
  * Visual redesign (2026-09-15 follow-up, same pass as PortalPage - see
  * that file's header comment for the full request). Every handler,
  * state variable and conditional branch is unchanged; only the markup
@@ -22,19 +28,29 @@ import { Link, useNavigate } from "react-router-dom";
 import {
   downgradeSubscription,
   getCustomerPortal,
+  getRegistrationForm,
   listPlans,
   simulateMockCallback,
   upgradeSubscription,
 } from "../../api/endpoints";
+import { DynamicRegistrationForm } from "../../components/DynamicRegistrationForm";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { isSessionExpired } from "../../utils/authError";
 import { sanitizeHtml } from "../../utils/sanitizeHtml";
-import type { CustomerPortalOut, MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
+import { formatBillingInterval, formatPlanPrice, isSelfServePlan } from "../../utils/planDisplay";
+import { isPlanSpecificField } from "../../utils/registrationFields";
+import type {
+  CustomerPortalOut,
+  MockCallbackResult,
+  Plan,
+  RegistrationFormFieldOut,
+  SubscribeResponse,
+} from "../../api/types";
 
-type Step = "select" | "payment" | "done";
+type Step = "select" | "details" | "payment" | "done";
 
 export function ChangePlanPage() {
   const { customerToken, setCustomerToken } = useAuth();
@@ -48,6 +64,10 @@ export function ChangePlanPage() {
   const [callbackResult, setCallbackResult] = useState<MockCallbackResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
+  // "details" step: the picked plan and its plan-specific questions/answers.
+  const [detailsPlan, setDetailsPlan] = useState<Plan | null>(null);
+  const [detailsFields, setDetailsFields] = useState<RegistrationFormFieldOut[]>([]);
+  const [detailsValues, setDetailsValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!customerToken) return;
@@ -83,14 +103,44 @@ export function ChangePlanPage() {
 
   async function handlePick(target: Plan) {
     if (!customerToken || !portal?.active_subscription) return;
-    const current = plans.find((p) => p.plan_code === portal.active_subscription!.plan_code);
-    if (!current) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const planFields = (await getRegistrationForm(target.plan_code)).filter(isPlanSpecificField);
+      if (planFields.length > 0) {
+        setDetailsPlan(target);
+        setDetailsFields(planFields);
+        setDetailsValues({});
+        setStep("details");
+        return;
+      }
+    } catch (err) {
+      reportError(err);
+      return;
+    } finally {
+      setBusy(false);
+    }
+    await changePlan(target, {});
+  }
+
+  async function changePlan(target: Plan, registrationData: Record<string, string>) {
+    if (!customerToken || !portal?.active_subscription) return;
+    // The subscription's own plan price, not a lookup in `plans`: a customer
+    // on a retired plan (Basic/Professional/Enterprise after the 2026-09
+    // pricing refresh) isn't in the public, active-only catalog at all.
+    // Same comparison the backend makes in assert_transition_allowed().
+    const currentPrice = portal.active_subscription.price;
 
     setBusy(true);
     setError(null);
     try {
-      const mutate = target.price > current.price ? upgradeSubscription : downgradeSubscription;
-      const result = await mutate(portal.active_subscription.subscription_id, target.plan_code, customerToken);
+      const mutate = target.price > currentPrice ? upgradeSubscription : downgradeSubscription;
+      const result = await mutate(
+        portal.active_subscription.subscription_id,
+        target.plan_code,
+        customerToken,
+        registrationData,
+      );
       setPendingPayment(result);
       setStep("payment");
       toast.info("Complete payment to apply the plan change");
@@ -147,8 +197,12 @@ export function ChangePlanPage() {
 
   // Free trial plans are never a valid upgrade/downgrade target (a trial
   // can only ever be a brand-new subscription, checked server-side too).
-  const otherPlans = plans.filter((p) => p.plan_code !== portal.active_subscription!.plan_code && !p.is_trial);
-  const currentPrice = plans.find((c) => c.plan_code === portal.active_subscription!.plan_code)?.price ?? 0;
+  // "Talk to us" plans can't be switched to online either (refused
+  // server-side with PLAN_REQUIRES_SALES_CONTACT).
+  const otherPlans = plans.filter(
+    (p) => p.plan_code !== portal.active_subscription!.plan_code && !p.is_trial && isSelfServePlan(p),
+  );
+  const currentPrice = portal.active_subscription.price;
 
   return (
     <section className="change-plan-page">
@@ -179,7 +233,8 @@ export function ChangePlanPage() {
               <div className="card plan-card" key={p.plan_code}>
                 <h2>{p.name}</h2>
                 <p className="plan-price">
-                  {p.currency} {p.price.toFixed(2)}
+                  {formatPlanPrice(p.price, p.currency)}
+                  <span className="plan-interval"> / {formatBillingInterval(p)}</span>
                 </p>
                 {p.description && (
                   <div
@@ -198,6 +253,32 @@ export function ChangePlanPage() {
             No proration &middot; no refund &middot; the change applies immediately at the target plan's full price.
           </p>
         </>
+      )}
+
+      {step === "details" && detailsPlan && (
+        <form
+          className="portal-card"
+          style={{ maxWidth: 480 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            changePlan(detailsPlan, detailsValues);
+          }}
+        >
+          <h2>A few details for the {detailsPlan.name} plan</h2>
+          <DynamicRegistrationForm
+            fields={detailsFields}
+            values={detailsValues}
+            onChange={(key, value) => setDetailsValues((prev) => ({ ...prev, [key]: value }))}
+          />
+          <div className="button-row">
+            <button className="button button-primary" type="submit" disabled={busy}>
+              {busy ? "Please wait..." : "Continue to payment"}
+            </button>
+            <button className="button button-secondary" type="button" disabled={busy} onClick={() => setStep("select")}>
+              Back
+            </button>
+          </div>
+        </form>
       )}
 
       {step === "payment" && pendingPayment && (

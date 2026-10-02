@@ -70,3 +70,43 @@ class PaymentAdminOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     raw_gateway_response: dict | None = None
+
+
+class PaymentStatusOut(BaseModel):
+    """GET /payment/{transaction_id}/status - what the customer's
+    /payment/return page shows, read from our database."""
+    transaction_id: str
+    status: str  # PaymentStatus value
+    payment_type: str
+    amount: float
+    currency: str
+    plan_code: str
+    plan_name: str
+    subscription_id: str
+    subscription_status: str
+    invoice_id: str | None = None
+    failure_reason: str | None = None
+    updated_at: datetime
+
+
+class PaymentEventOut(BaseModel):
+    """One row of a payment's history on the admin payment detail page
+    (app.payments.models.PaymentEvent)."""
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    transaction_id: str | None = None
+    event_type: str
+    result: str
+    channel: str | None = None
+    endpoint: str | None = None
+    initiated_from: str | None = None
+    surl_sent: str | None = None
+    furl_sent: str | None = None
+    return_url: str | None = None
+    source_ip: str | None = None
+    user_agent: str | None = None
+    gateway_status: str | None = None
+    gateway_transaction_id: str | None = None
+    hash_verified: bool | None = None
+    payload: dict | None = None
+    created_at: datetime

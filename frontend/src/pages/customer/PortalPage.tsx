@@ -141,10 +141,10 @@ export function PortalPage() {
   const refresh = useCallback(async () => {
     if (!customerToken) return;
     try {
-      const [portalData, fields] = await Promise.all([
-        getCustomerPortal(customerToken),
-        getRegistrationForm().catch(() => []),
-      ]);
+      const portalData = await getCustomerPortal(customerToken);
+      // With the current plan's code, so labels for its plan-specific
+      // answers (e.g. the Custom plan's expected tickets) are known too.
+      const fields = await getRegistrationForm(portalData.active_subscription?.plan_code).catch(() => []);
       setPortal(portalData);
       setFormFields(fields);
     } catch (err) {

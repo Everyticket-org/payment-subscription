@@ -64,6 +64,7 @@ export function GeneralSection({ initial, token }: { initial: ApplicationGeneral
   const [currency, setCurrency] = useState(initial.currency);
   const [gatewayMode, setGatewayMode] = useState(initial.gateway_mode);
   const [postSubscriptionMessage, setPostSubscriptionMessage] = useState(initial.post_subscription_message ?? "");
+  const [supportEmail, setSupportEmail] = useState(initial.support_email ?? "");
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -73,7 +74,13 @@ export function GeneralSection({ initial, token }: { initial: ApplicationGeneral
     setError(null);
     try {
       await adminUpdateGeneralConfig(
-        { name, currency, gateway_mode: gatewayMode, post_subscription_message: postSubscriptionMessage || null },
+        {
+          name,
+          currency,
+          gateway_mode: gatewayMode,
+          post_subscription_message: postSubscriptionMessage || null,
+          support_email: supportEmail.trim() || null,
+        },
         token,
       );
       setSavedAt(Date.now());
@@ -138,6 +145,23 @@ export function GeneralSection({ initial, token }: { initial: ApplicationGeneral
               </select>
             </label>
           </div>
+        </fieldset>
+
+        <fieldset style={{ marginTop: 16 }}>
+          <legend>Sales contact</legend>
+          <label style={{ display: "block" }}>
+            Support / sales email
+            <input
+              type="email"
+              value={supportEmail}
+              onChange={(e) => setSupportEmail(e.target.value)}
+              placeholder="sales@yourdomain.com"
+            />
+          </label>
+          <p className="hint" style={{ margin: "6px 0 0" }}>
+            Public. The "Talk to us" button on contact-sales plans (e.g. Custom) opens an email to this address. Leave
+            blank to show a plain "contact our sales team" note instead.
+          </p>
         </fieldset>
 
         <fieldset style={{ marginTop: 16 }}>

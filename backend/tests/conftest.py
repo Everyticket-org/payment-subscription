@@ -96,7 +96,9 @@ def _reset_data():
 
 @pytest.fixture()
 def seeded_db(db_session):
-    seed(db_session)
+    # Legacy plans kept active: the lifecycle tests subscribe to
+    # BASIC/PROFESSIONAL/ENTERPRISE (see app.core.seed.seed).
+    seed(db_session, legacy_plans_active=True)
     return db_session
 
 

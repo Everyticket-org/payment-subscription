@@ -20,7 +20,10 @@ not guessed - see docs/implementation-status.md for the increment note
 this landed in.
 """
 import hashlib
+import hmac
 from typing import Any
+
+import httpx
 
 from app.core.config import get_settings
 from app.payments.interfaces.gateway import GatewayPaymentResult, PaymentGateway
@@ -55,10 +58,15 @@ class PayUGateway(PaymentGateway):
         base_url: str | None = None,
         success_url: str | None = None,
         failure_url: str | None = None,
+        verify_url: str | None = None,
     ) -> None:
         self._merchant_key = merchant_key
         self._merchant_salt = merchant_salt
         self._base_url = base_url
+        # PayU Verify Payment API endpoint (get_payment_status) - test or
+        # production host per mode, resolved by the registry; falls back to
+        # settings.PAYU_VERIFY_URL (test).
+        self._verify_url = verify_url
         # success_url/failure_url override settings.PAYU_SUCCESS_URL/
         # PAYU_FAILURE_URL for this instance only - same override/fallback
         # pattern as merchant_key/salt/base_url above. Set by the registry
@@ -134,13 +142,67 @@ class PayUGateway(PaymentGateway):
         )
 
     def get_payment_status(self, *, gateway_transaction_id: str) -> GatewayPaymentResult:
-        # V1 relies solely on the surl/furl redirect callback as the
-        # authoritative outcome (spec section 25) - no server-to-server
-        # status-check API call is implemented in this pass; see
-        # docs/implementation-status.md.
-        raise NotImplementedError(
-            "PayU status polling is not implemented in this pass - the surl/furl "
-            "callback (process_webhook) is the authoritative outcome for V1."
+        """Asks PayU's Verify Payment API what happened to one payment
+        (docs.payu.in/reference/verify_payment_api). Used only by the
+        reconciliation sweep (app.payments.reconcile) as a backstop - the
+        surl/furl return and the webhook stay the primary paths.
+
+        PayU looks payments up by OUR txnid (TXN-...), so that is what
+        `gateway_transaction_id` must be here, not PayU's mihpayid.
+
+        The request is authenticated with sha512(key|command|var1|salt)
+        and sent server-to-server over HTTPS; PayU's JSON reply is not
+        separately signed. Returns status UNKNOWN when PayU has no record
+        of the txnid ("Not Found"). Raises httpx.HTTPError on network or
+        HTTP errors so the caller can retry on the next sweep."""
+        key, salt, _base_url, _success_url, _failure_url = self._resolve()
+        if not key or not salt:
+            raise PayUConfigurationError("PayU merchant key/salt are not configured - cannot verify payments")
+        settings = get_settings()
+        verify_url = self._verify_url or settings.PAYU_VERIFY_URL
+        txnid = gateway_transaction_id
+        command = "verify_payment"
+        request_hash = _sha512_hex(f"{key}|{command}|{txnid}|{salt}")
+
+        response = httpx.post(
+            verify_url,
+            data={"key": key, "command": command, "var1": txnid, "hash": request_hash},
+            timeout=settings.PAYU_VERIFY_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        body = response.json()
+
+        details = (body.get("transaction_details") or {}).get(txnid) if isinstance(body, dict) else None
+        if not isinstance(details, dict):
+            details = {}
+        payu_status = str(details.get("status") or "").strip().lower()
+        status_map = {
+            "success": "SUCCESS",
+            "failure": "FAILED",
+            "failed": "FAILED",
+            "pending": "PENDING",
+        }
+        mapped_status = status_map.get(payu_status, "UNKNOWN")  # incl. "not found"
+        try:
+            amount = float(details.get("amt") or details.get("amount") or 0)
+        except (TypeError, ValueError):
+            amount = 0.0
+        mihpayid = details.get("mihpayid")
+        if not mihpayid or str(mihpayid).lower() == "not found":
+            mihpayid = None
+        failure_reason = None
+        if mapped_status == "FAILED":
+            message = details.get("error_Message") or details.get("field9")
+            failure_reason = message if message and message != "NO ERROR" else "Payment failed at PayU"
+
+        return GatewayPaymentResult(
+            gateway=self.code,
+            gateway_transaction_id=mihpayid,
+            status=mapped_status,
+            amount=amount,
+            currency="INR",
+            raw_response={"verify_payment": details, "msg": body.get("msg") if isinstance(body, dict) else None},
+            failure_reason=failure_reason,
         )
 
     def verify_payment(self, *, gateway_transaction_id: str, raw_response: dict[str, Any]) -> GatewayPaymentResult:
@@ -174,13 +236,18 @@ class PayUGateway(PaymentGateway):
             f"{email}|{firstname}|{productinfo}|{amount}|{txnid}|{key}"
         )
         expected_hash = _sha512_hex(reverse_string)
+        # Constant-time comparison (avoids leaking hash prefixes via timing),
+        # and the response must be for OUR merchant key.
+        hash_ok = bool(salt and received_hash) and key == _key and hmac.compare_digest(
+            expected_hash, received_hash
+        )
 
         try:
             amount_float = float(amount)
         except (TypeError, ValueError):
             amount_float = 0.0
 
-        if expected_hash != received_hash:
+        if not hash_ok:
             return GatewayPaymentResult(
                 gateway=self.code,
                 gateway_transaction_id=payload.get("mihpayid"),
@@ -189,6 +256,7 @@ class PayUGateway(PaymentGateway):
                 currency="INR",
                 raw_response=payload,
                 failure_reason="Hash verification failed - response may have been tampered with",
+                hash_verified=False,
             )
 
         status_map = {

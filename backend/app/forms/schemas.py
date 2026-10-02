@@ -28,6 +28,21 @@ def _check_regex(pattern: str | None) -> str | None:
     return pattern
 
 
+def _normalize_plan_codes(plan_codes: list[str] | None) -> list[str] | None:
+    """"Show only for plans" - upper-cased, trimmed, de-duplicated (order
+    kept). An empty list means "every plan" and is stored as None, the same
+    as never setting it. Whether each code is a real plan of this
+    application is checked in app.api.v1.admin_forms (needs the DB)."""
+    if plan_codes is None:
+        return None
+    normalized: list[str] = []
+    for code in plan_codes:
+        code = str(code).strip().upper()
+        if code and code not in normalized:
+            normalized.append(code)
+    return normalized or None
+
+
 class RegistrationFormFieldOut(BaseModel):
     """Public shape (spec section 8's dynamic form renderer) - active
     fields only, no internal id. validation_pattern/validation_message
@@ -51,6 +66,10 @@ class RegistrationFormFieldOut(BaseModel):
     placeholder: str | None = None
     help_text: str | None = None
     options: list | None = None
+    # None = general field (every plan, asked once at first signup); a list
+    # of plan_codes = asked only for those plans - see
+    # app.forms.models.RegistrationFormField.plan_codes.
+    plan_codes: list[str] | None = None
     display_order: int
 
 
@@ -74,9 +93,11 @@ class RegistrationFormFieldCreate(BaseModel):
     placeholder: str | None = Field(default=None, max_length=255)
     help_text: str | None = Field(default=None, max_length=500)
     options: list | None = None
+    plan_codes: list[str] | None = None
     display_order: int = 0
 
     _check_validation_pattern = field_validator("validation_pattern")(_check_regex)
+    _normalize_plan_codes = field_validator("plan_codes")(_normalize_plan_codes)
 
 
 class RegistrationFormFieldUpdate(BaseModel):
@@ -90,7 +111,10 @@ class RegistrationFormFieldUpdate(BaseModel):
     placeholder: str | None = Field(default=None, max_length=255)
     help_text: str | None = Field(default=None, max_length=500)
     options: list | None = None
+    # Send [] to turn a plan-specific question back into a general one.
+    plan_codes: list[str] | None = None
     display_order: int | None = None
     active: bool | None = None
 
     _check_validation_pattern = field_validator("validation_pattern")(_check_regex)
+    _normalize_plan_codes = field_validator("plan_codes")(_normalize_plan_codes)

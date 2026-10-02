@@ -41,11 +41,19 @@ import {
 import { ApiError } from "../../api/client";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { DynamicRegistrationForm, useRegistrationFormFields } from "../../components/DynamicRegistrationForm";
+import { isPlanSpecificField } from "../../utils/registrationFields";
 import { PaymentCheckout } from "../../components/PaymentCheckout";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { isSessionExpired } from "../../utils/authError";
 import { sanitizeHtml } from "../../utils/sanitizeHtml";
+import {
+  contactSalesHref,
+  formatBillingInterval,
+  formatPlanPrice,
+  isSelfServePlan,
+  planPriceSummary,
+} from "../../utils/planDisplay";
 import type { MockCallbackResult, Plan, SubscribeResponse } from "../../api/types";
 
 type Step = "form" | "otp" | "payment" | "done";
@@ -104,6 +112,8 @@ export function SubscribePage() {
   // routed to an upgrade/downgrade against their existing subscription
   // (spec section 9/22's auto-routing - they already have credentials).
   const [postSubscriptionMessage, setPostSubscriptionMessage] = useState<string | null>(null);
+  // Target of the "Talk to us" CTA when planCode is a contact-sales plan.
+  const [supportEmail, setSupportEmail] = useState<string | null>(null);
   // Vishal: "One customer can fill registration data once only at first
   // time customer creation. for second time, it will redirect to my
   // subscription page only." A signed-in customer landing here (as
@@ -128,7 +138,14 @@ export function SubscribePage() {
   // manual Subscribe-with-my-account option".
   const otpFlowActiveRef = useRef(false);
 
-  const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields();
+  // planCode: also loads this plan's plan-specific questions (e.g. the
+  // Custom plan's expected tickets / average ticket price).
+  const { fields: registrationFields, error: registrationFieldsError } = useRegistrationFormFields(planCode);
+  const generalFields = registrationFields?.filter((f) => !isPlanSpecificField(f)) ?? [];
+  // Unlike general registration data (asked once, at first signup), these
+  // are asked EVERY time someone subscribes to this plan - signed-in and
+  // returning customers included - and the backend enforces `required`.
+  const planFields = registrationFields?.filter(isPlanSpecificField) ?? [];
 
   useEffect(() => {
     if (otpFlowActiveRef.current) return;
@@ -171,7 +188,10 @@ export function SubscribePage() {
     // instant the mock callback resolves rather than adding a visible
     // delay to the "done" step's first render.
     getPublicMessages()
-      .then((msgs) => setPostSubscriptionMessage(msgs.post_subscription_message))
+      .then((msgs) => {
+        setPostSubscriptionMessage(msgs.post_subscription_message);
+        setSupportEmail(msgs.support_email ?? null);
+      })
       .catch(() => {});
   }, []);
 
@@ -187,6 +207,9 @@ export function SubscribePage() {
         setOtherPlans(
           all.filter((p) => {
             if (p.plan_code === planCode) return false;
+            // "Talk to us" plans can't be subscribed to online (the
+            // backend refuses them) - not a valid switch target here.
+            if (!isSelfServePlan(p)) return false;
             // A signed-in customer switching plans here goes through the
             // upgrade/downgrade path (spec follow-up), which never accepts
             // a free trial plan as a target - so don't offer one. A
@@ -209,18 +232,24 @@ export function SubscribePage() {
     setBusy(true);
     setError(null);
     try {
-      // registration_data is only ever sent for a genuinely anonymous
-      // (no token) attempt - a brand-new customer, or one who turns out
-      // to be existing and gets diverted through the OTP step below. Any
-      // token-bearing call, by construction, means an already-identified
-      // existing customer (either already signed in, or just OTP-
-      // verified) - Vishal: "One customer can fill registration data once
-      // only at first time customer creation" - so it's never sent
-      // again, even if some was typed into the anonymous form's fields
-      // before the OTP detour.
+      // General registration data is only ever sent for a genuinely
+      // anonymous (no token) attempt - a brand-new customer, or one who
+      // turns out to be existing and gets diverted through the OTP step
+      // below. Any token-bearing call, by construction, means an already-
+      // identified existing customer (either already signed in, or just
+      // OTP-verified) - Vishal: "One customer can fill registration data
+      // once only at first time customer creation" - so general fields are
+      // never sent again, even if some were typed into the anonymous
+      // form's fields before the OTP detour. This plan's plan-specific
+      // answers (planFields) are the exception: they're always sent.
+      const planValues = Object.fromEntries(
+        planFields
+          .filter((f) => registrationValues[f.field_key] !== undefined)
+          .map((f) => [f.field_key, registrationValues[f.field_key]]),
+      );
       const result = await subscribe(
         planCode!,
-        token ? {} : { email, mobile, registration_data: registrationValues },
+        token ? { registration_data: planValues } : { email, mobile, registration_data: registrationValues },
         token,
       );
       setSubscribeResult(result);
@@ -336,6 +365,38 @@ export function SubscribePage() {
   // below.
   const currentStepIndex = step === "form" || step === "otp" ? 0 : step === "payment" ? 1 : 2;
 
+  if (selectedPlan?.is_contact_sales) {
+    // Deep link to a contact-sales plan (e.g. /subscribe/custom): there is
+    // nothing to fill in or pay - the backend would refuse the subscribe
+    // with PLAN_REQUIRES_SALES_CONTACT - so point to sales instead.
+    const href = contactSalesHref(supportEmail, selectedPlan.name);
+    return (
+      <section className="subscribe-page">
+        <div className="portal-page-head">
+          <div>
+            <div className="portal-eyebrow">
+              Everyticket <span className="sep">/</span> {selectedPlan.name}
+            </div>
+            <h1>Let's talk about {selectedPlan.name}</h1>
+            <p>This plan is tailored to your organisation, so it's set up with our sales team rather than online.</p>
+          </div>
+        </div>
+        <div className="card portal-card" style={{ maxWidth: 560 }}>
+          {href ? (
+            <a className="button button-primary" href={href} style={{ width: "fit-content" }}>
+              Talk to us
+            </a>
+          ) : (
+            <p>Please contact our sales team to get started with the {selectedPlan.name} plan.</p>
+          )}
+          <p className="hint">
+            Prefer to start right away? <Link to="/">Browse the other plans</Link>.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="subscribe-page">
       <div className="portal-page-head">
@@ -377,20 +438,39 @@ export function SubscribePage() {
                     <p>Checking your account...</p>
                   </div>
                 ) : (
-                  <div className="card portal-card">
+                  <form
+                    className="card portal-card"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      doSubscribe(customerToken);
+                    }}
+                  >
                     <p>You're signed in - subscribe using your existing account.</p>
-                    {/* No registration form here, ever - Vishal: "One customer
-                        can fill registration data once only at first time
-                        customer creation." A signed-in customer already gave
-                        that data when their account was first created; this
-                        branch only renders at all for one that currently has
-                        no active subscription (a lapsed/cancelled repurchase),
-                        since an active subscriber was already redirected to
-                        My Subscription above. */}
-                    <button className="button button-primary" disabled={busy} onClick={() => doSubscribe(customerToken)}>
+                    {/* No GENERAL registration form here, ever - Vishal: "One
+                        customer can fill registration data once only at first
+                        time customer creation." A signed-in customer already
+                        gave that data when their account was first created;
+                        this branch only renders at all for one that currently
+                        has no active subscription (a lapsed/cancelled
+                        repurchase), since an active subscriber was already
+                        redirected to My Subscription above. Only this plan's
+                        own questions (if it has any) are asked. */}
+                    {planFields.length > 0 && (
+                      <>
+                        <h3 className="subscribe-plan-questions-title">
+                          A few details for the {selectedPlan?.name ?? planCode} plan
+                        </h3>
+                        <DynamicRegistrationForm
+                          fields={planFields}
+                          values={registrationValues}
+                          onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                        />
+                      </>
+                    )}
+                    <button className="button button-primary" type="submit" disabled={busy}>
                       {busy ? "Subscribing..." : "Subscribe with my account"}
                     </button>
-                  </div>
+                  </form>
                 )
               ) : (
                 <form className="card portal-card" onSubmit={handleFormSubmit}>
@@ -414,12 +494,22 @@ export function SubscribePage() {
                       placeholder="9XXXXXXXXX"
                     />
                   </label>
-                  {registrationFields && (
-                    <DynamicRegistrationForm
-                      fields={registrationFields}
-                      values={registrationValues}
-                      onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
-                    />
+                  <DynamicRegistrationForm
+                    fields={generalFields}
+                    values={registrationValues}
+                    onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                  />
+                  {planFields.length > 0 && (
+                    <>
+                      <h3 className="subscribe-plan-questions-title">
+                        A few details for the {selectedPlan?.name ?? planCode} plan
+                      </h3>
+                      <DynamicRegistrationForm
+                        fields={planFields}
+                        values={registrationValues}
+                        onChange={(key, value) => setRegistrationValues((prev) => ({ ...prev, [key]: value }))}
+                      />
+                    </>
                   )}
                   <button className="button button-primary" type="submit" disabled={busy}>
                     {busy ? "Please wait..." : "Continue"}
@@ -535,13 +625,8 @@ export function SubscribePage() {
                     `Free for ${selectedPlan.trial_period_days ?? "?"} days`
                   ) : (
                     <>
-                      {selectedPlan.currency} {selectedPlan.price.toFixed(2)}
-                      <span className="plan-interval">
-                        {" "}
-                        / {selectedPlan.billing_frequency > 1 ? `${selectedPlan.billing_frequency} ` : ""}
-                        {selectedPlan.billing_interval}
-                        {selectedPlan.billing_frequency > 1 ? "s" : ""}
-                      </span>
+                      {formatPlanPrice(selectedPlan.price, selectedPlan.currency)}
+                      <span className="plan-interval"> / {formatBillingInterval(selectedPlan)}</span>
                     </>
                   )}
                 </p>
@@ -566,9 +651,7 @@ export function SubscribePage() {
                   {otherPlans.map((p) => (
                     <Link key={p.plan_code} to={`/subscribe/${p.plan_code}`} className="plan-mini-card">
                       <span className="plan-mini-name">{p.name}</span>
-                      <span className="plan-mini-price">
-                        {p.is_trial ? `Free for ${p.trial_period_days ?? "?"} days` : `${p.currency} ${p.price.toFixed(2)}`}
-                      </span>
+                      <span className="plan-mini-price">{planPriceSummary(p)}</span>
                     </Link>
                   ))}
                 </div>

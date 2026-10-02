@@ -68,19 +68,30 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
-def _validate_trial_configuration(*, is_trial: bool, price: float, trial_period_days: int | None) -> None:
-    """Cross-field validation for a plan's trial configuration (free trial
-    is its own distinct, configurable-duration plan - spec follow-up).
-    Called with the FULL body on create, and with the MERGED effective
-    state (existing plan values overridden by whatever fields a partial
-    PUT actually supplied) on update, so a PUT that only touches one of
-    these three fields can never leave the plan in an inconsistent state
-    (e.g. is_trial=True with price left at some old non-zero value)."""
+def _validate_plan_configuration(
+    *, is_trial: bool, is_contact_sales: bool, price: float, trial_period_days: int | None
+) -> None:
+    """Cross-field validation for a plan's pricing mode: trial (free trial
+    is its own distinct, configurable-duration plan - spec follow-up),
+    contact-sales ("Talk to us", no list price - 2026-09 pricing refresh),
+    or an ordinary paid plan. Called with the FULL body on create, and with
+    the MERGED effective state (existing plan values overridden by whatever
+    fields a partial PUT actually supplied) on update, so a PUT that only
+    touches one of these fields can never leave the plan in an inconsistent
+    state (e.g. is_trial=True with price left at some old non-zero value)."""
+    if is_trial and is_contact_sales:
+        raise InvalidPlanConfiguration("A plan cannot be both a free trial and a contact-sales plan")
     if is_trial:
         if not trial_period_days or trial_period_days <= 0:
             raise InvalidPlanConfiguration("A trial plan requires trial_period_days > 0")
         if price != 0:
             raise InvalidPlanConfiguration("A trial plan must be priced at 0")
+    elif is_contact_sales:
+        # Priced at exactly 0 so the catalog never shows a misleading
+        # number; the self-serve guards (assert_plan_self_serve) are what
+        # stop that 0 from ever reaching the free-activation path.
+        if price != 0:
+            raise InvalidPlanConfiguration("A contact-sales plan must be priced at 0")
     else:
         if price <= 0:
             raise InvalidPlanConfiguration("A non-trial plan requires price > 0")
@@ -117,7 +128,12 @@ def create_plan(
     if existing is not None:
         raise PlanCodeInUse(f"Plan code '{body.plan_code}' already exists")
 
-    _validate_trial_configuration(is_trial=body.is_trial, price=body.price, trial_period_days=body.trial_period_days)
+    _validate_plan_configuration(
+        is_trial=body.is_trial,
+        is_contact_sales=body.is_contact_sales,
+        price=body.price,
+        trial_period_days=body.trial_period_days,
+    )
 
     plan = Plan(
         application_id=application.id,
@@ -132,6 +148,7 @@ def create_plan(
         active=True,
         is_trial=body.is_trial,
         trial_period_days=body.trial_period_days,
+        is_contact_sales=body.is_contact_sales,
     )
     db.add(plan)
     db.flush()
@@ -330,8 +347,12 @@ def update_plan(
     effective_is_trial = updates.get("is_trial", plan.is_trial)
     effective_price = updates.get("price", float(plan.price))
     effective_trial_period_days = updates.get("trial_period_days", plan.trial_period_days)
-    _validate_trial_configuration(
-        is_trial=effective_is_trial, price=float(effective_price), trial_period_days=effective_trial_period_days
+    effective_is_contact_sales = updates.get("is_contact_sales", plan.is_contact_sales)
+    _validate_plan_configuration(
+        is_trial=effective_is_trial,
+        is_contact_sales=effective_is_contact_sales,
+        price=float(effective_price),
+        trial_period_days=effective_trial_period_days,
     )
 
     for field, value in updates.items():

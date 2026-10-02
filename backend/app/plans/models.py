@@ -40,6 +40,18 @@ class Plan(Base, TimestampMixin):
     is_trial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     trial_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # "Talk to us" plan (2026-09 pricing refresh - the Custom tier): listed
+    # on the public catalog like any other plan, but it can never be
+    # self-served - no subscribe, no upgrade/downgrade target, no payment.
+    # Its CTA is a mailto to the application's support_email instead.
+    # Stored at price=0 (it has no list price), which is exactly why the
+    # self-serve guards matter: create_payment_transaction() auto-activates
+    # any price==0 plan without touching a gateway. Enforced in
+    # app.subscriptions.service.assert_plan_self_serve(); cross-validated
+    # in app.api.v1.admin_plans (contact-sales requires price == 0 and
+    # is_trial False).
+    is_contact_sales: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0", nullable=False)
+
     application: Mapped["Application"] = relationship(back_populates="plans")
     features: Mapped[list["PlanFeature"]] = relationship(
         back_populates="plan", cascade="all, delete-orphan", order_by="PlanFeature.display_order"

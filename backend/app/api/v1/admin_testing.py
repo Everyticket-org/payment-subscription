@@ -66,6 +66,7 @@ from app.core.exceptions import CustomerNotFound, PlanNotFound, SubscriptionNotF
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
 from app.forms.models import RegistrationFormField
+from app.forms.validation import fields_for_plan
 from app.invoices.models import Invoice, InvoiceItem
 from app.notifications.email import service as email_service
 from app.notifications.models import NotificationLog
@@ -811,11 +812,8 @@ def generate_test_data(
 
     subscription = subscription_service.create_pending_subscription(db, customer=customer, application=application, plan=plan)
 
-    active_fields = (
-        db.query(RegistrationFormField)
-        .filter(RegistrationFormField.application_id == application.id, RegistrationFormField.active.is_(True))
-        .all()
-    )
+    # Plan-aware: never attaches another plan's plan-specific answers.
+    active_fields = fields_for_plan(db, application_id=application.id, plan_code=plan.plan_code)
     sample_data = {
         f.field_key: value
         for f in active_fields

@@ -72,11 +72,22 @@ def resolve_payu_credentials(db: Session, *, mode: str) -> dict:
         merchant_key = mode_cfg.get("merchant_key") or settings.PAYU_MERCHANT_KEY
         merchant_salt = mode_cfg.get("merchant_salt") or settings.PAYU_MERCHANT_SALT
         base_url = settings.PAYU_BASE_URL or "https://test.payu.in"
+        verify_url = settings.PAYU_VERIFY_URL or "https://test.payu.in/merchant/postservice.php?form=2"
     else:
         merchant_key = mode_cfg.get("merchant_key") or ""
         merchant_salt = mode_cfg.get("merchant_salt") or ""
         base_url = "https://secure.payu.in"
-    return {"merchant_key": merchant_key, "merchant_salt": merchant_salt, "base_url": base_url}
+        # docs.payu.in/reference/verify_payment_api - production host.
+        verify_url = "https://info.payu.in/merchant/postservice.php?form=2"
+    return {"merchant_key": merchant_key, "merchant_salt": merchant_salt, "base_url": base_url, "verify_url": verify_url}
+
+
+def resolve_return_base_url(application) -> str:
+    """Frontend base URL the customer lands on after a PayU payment
+    (Application.return_url, else settings.FRONTEND_URL), without a
+    trailing slash."""
+    configured = application.return_url if application is not None and application.return_url else None
+    return (configured or get_settings().FRONTEND_URL).rstrip("/")
 
 
 def resolve_payu_webhook_urls(application) -> dict:

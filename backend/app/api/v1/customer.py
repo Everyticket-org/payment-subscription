@@ -7,7 +7,7 @@ Direct OTP-based access (spec section 48) is that same token; SSO-based
 access (spec section 47) is not implemented yet - see
 docs/implementation-status.md.
 """
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_application, get_db
@@ -25,11 +25,14 @@ from app.core.exceptions import (
 from app.customers.models import Customer, CustomerRegistrationData
 from app.customers.portal_schemas import CustomerPortalOut
 from app.customers.schemas import CustomerOut, RegistrationDataOut
+from app.forms.validation import plan_specific_answers, validate_registration_data
 from app.invoices.models import Invoice
 from app.invoices.schemas import InvoiceOut
 from app.invoices.service import get_or_render_pdf
 from app.notifications.email import service as email_service
+from app.payments import events as payment_events
 from app.payments import service as payment_service
+from app.payments.gateway_config import resolve_return_base_url
 from app.payments.models import PaymentTransaction
 from app.payments.schemas import PaymentTransactionOut
 from app.plans.models import Plan
@@ -171,6 +174,7 @@ def download_invoice_pdf(
 def upgrade(
     subscription_id: str,
     body: UpgradeDowngradeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     customer_id: str = Depends(get_current_customer_id),
     application: Application = Depends(get_application),
@@ -179,21 +183,31 @@ def upgrade(
     refund. If the payment fails, the current plan remains active
     (enforced in PaymentService.process_gateway_result -> mark_payment_failed
     only touches PENDING_PAYMENT subscriptions, never an already-ACTIVE one)."""
-    return _change_plan(db, subscription_id, body.target_plan_code, customer_id, application, expect_type="UPGRADE")
+    return _change_plan(
+        db, subscription_id, body.target_plan_code, customer_id, application,
+        expect_type="UPGRADE", registration_data=body.registration_data, request=request,
+    )
 
 
 @router.post("/subscriptions/{subscription_id}/downgrade", response_model=SubscribeResponse)
 def downgrade(
     subscription_id: str,
     body: UpgradeDowngradeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     customer_id: str = Depends(get_current_customer_id),
     application: Application = Depends(get_application),
 ):
-    return _change_plan(db, subscription_id, body.target_plan_code, customer_id, application, expect_type="DOWNGRADE")
+    return _change_plan(
+        db, subscription_id, body.target_plan_code, customer_id, application,
+        expect_type="DOWNGRADE", registration_data=body.registration_data, request=request,
+    )
 
 
-def _change_plan(db, subscription_id, target_plan_code, customer_id, application, expect_type):
+def _change_plan(
+    db, subscription_id, target_plan_code, customer_id, application, expect_type,
+    registration_data=None, request: Request | None = None,
+):
     if expect_type == "UPGRADE" and not application.allow_upgrade:
         raise ActionNotAllowed("Upgrades are currently disabled for this application")
     if expect_type == "DOWNGRADE" and not application.allow_downgrade:
@@ -225,6 +239,26 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
     # gate above.
     payment_type = PaymentType.UPGRADE.value if transition_type == "UPGRADE" else PaymentType.DOWNGRADE.value
 
+    # The target plan's plan-specific questions (e.g. the Custom plan's
+    # expected monthly tickets / average ticket price) - required ones are
+    # enforced, and only those answers are stored: general registration
+    # data was already collected at first signup.
+    plan_answers = plan_specific_answers(
+        db, application_id=application.id, plan_code=target_plan.plan_code, registration_data=registration_data or {}
+    )
+    validate_registration_data(
+        db, application_id=application.id, registration_data=plan_answers, plan_code=target_plan.plan_code
+    )
+    if plan_answers:
+        db.add(
+            CustomerRegistrationData(
+                customer_id=customer.id,
+                application_id=application.id,
+                subscription_id=subscription.id,
+                data=plan_answers,
+            )
+        )
+
     payment = payment_service.create_payment_transaction(
         db,
         customer=customer,
@@ -236,6 +270,10 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
         application=application,
     )
     db.commit()
+    payment_events.record_initiated(
+        db, transaction=payment, channel=f"portal_{expect_type.lower()}", request=request,
+        return_url=f"{resolve_return_base_url(application)}/payment/return",
+    )
     db.refresh(customer)
     db.refresh(subscription)
     db.refresh(payment)
@@ -247,6 +285,7 @@ def _change_plan(db, subscription_id, target_plan_code, customer_id, application
 @router.post("/subscriptions/{subscription_id}/renew", response_model=SubscribeResponse)
 def renew(
     subscription_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     customer_id: str = Depends(get_current_customer_id),
     application: Application = Depends(get_application),
@@ -279,6 +318,10 @@ def renew(
         application=application,
     )
     db.commit()
+    payment_events.record_initiated(
+        db, transaction=payment, channel="portal_renew", request=request,
+        return_url=f"{resolve_return_base_url(application)}/payment/return",
+    )
     db.refresh(customer)
     db.refresh(subscription)
     db.refresh(payment)

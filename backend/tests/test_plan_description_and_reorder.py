@@ -65,21 +65,17 @@ def test_create_and_update_plan_sanitize_description(client, seeded_db):
 def test_reorder_plans_changes_display_order_and_public_listing_order(client, seeded_db):
     headers = _admin_headers(client)
 
-    # New order: ENTERPRISE, BASIC, PROFESSIONAL, FREE_TRIAL. Reorder must
-    # name every one of this application's plans (see the endpoint's own
-    # docstring) - the seed now includes a FREE_TRIAL plan (free trial
-    # feature, 2026-09) alongside the three paid ones.
-    reorder = client.put(
-        "/api/v1/admin/plans/reorder",
-        json={"plan_codes": ["ENTERPRISE", "BASIC", "PROFESSIONAL", "FREE_TRIAL"]},
-        headers=headers,
-    )
+    # Reorder must name every one of this application's plans (see the
+    # endpoint's own docstring) - the seed has the three legacy paid plans,
+    # FREE_TRIAL, and the 2026-09 pricing-refresh catalog.
+    new_order = ["ENTERPRISE", "BASIC", "CUSTOM", "STARTER", "INSTITUTIONAL", "PROFESSIONAL", "FREE_TRIAL"]
+    reorder = client.put("/api/v1/admin/plans/reorder", json={"plan_codes": new_order}, headers=headers)
     assert reorder.status_code == 200, reorder.text
     codes_in_order = [p["plan_code"] for p in reorder.json()]
-    assert codes_in_order == ["ENTERPRISE", "BASIC", "PROFESSIONAL", "FREE_TRIAL"]
+    assert codes_in_order == new_order
 
     public = client.get("/api/v1/public/plans")
-    assert [p["plan_code"] for p in public.json()] == ["ENTERPRISE", "BASIC", "PROFESSIONAL", "FREE_TRIAL"]
+    assert [p["plan_code"] for p in public.json()] == new_order
 
 
 def test_reorder_plans_rejects_incomplete_list(client, seeded_db):

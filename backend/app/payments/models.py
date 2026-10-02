@@ -9,7 +9,7 @@ Both are enforced at the DB level, not just in application code.
 """
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, Numeric, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, JSON, Numeric, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, TimestampMixin
@@ -59,6 +59,44 @@ class PaymentTransaction(Base, TimestampMixin):
     # the customer_id/plan_code without an extra query per row.
     customer: Mapped["Customer"] = relationship()
     target_plan: Mapped["Plan"] = relationship()
+
+
+class PaymentEvent(Base, TimestampMixin):
+    """Append-only history of everything that happened to one payment:
+    where it was started, the surl/furl PayU was told to use, every
+    browser return / server webhook / reconciliation check that arrived,
+    and what we did with each (app.payments.events). Never updated or
+    deleted except by the retention purge
+    (settings.PAYMENT_EVENT_RETENTION_DAYS).
+
+    transaction_id is a plain string, not a foreign key, so callbacks for
+    an unknown or missing txnid can be recorded too."""
+    __tablename__ = "payment_events"
+    # created_at: the retention purge and the reconciliation backoff both
+    # filter on it.
+    __table_args__ = (Index("ix_payment_events_created_at", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    transaction_id: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+    # PaymentEventType value: INITIATED | BROWSER_RETURN | WEBHOOK | STATUS_CHECK | RECONCILE
+    event_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    # Where the payment was started: subscribe | portal_upgrade | portal_downgrade | portal_renew
+    channel: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    endpoint: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Origin (or Referer) header of the request that started the payment.
+    initiated_from: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    surl_sent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    furl_sent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    return_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    source_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    gateway_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    gateway_transaction_id: Mapped[str | None] = mapped_column(String(150), nullable=True)
+    hash_verified: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    # PaymentEventResult value - what we did with this event.
+    result: Mapped[str] = mapped_column(String(40), nullable=False)
+    # Sanitised gateway payload (allow-listed keys only, never the hash).
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class PaymentGatewayConfig(Base, TimestampMixin):

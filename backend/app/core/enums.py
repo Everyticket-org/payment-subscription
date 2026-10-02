@@ -32,6 +32,33 @@ class PaymentStatus(str, enum.Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class PaymentEventType(str, enum.Enum):
+    """app.payments.models.PaymentEvent.event_type - how the event reached us."""
+    INITIATED = "INITIATED"  # we built the PayU form (surl/furl recorded)
+    BROWSER_RETURN = "BROWSER_RETURN"  # PayU redirected the customer's browser to surl/furl
+    WEBHOOK = "WEBHOOK"  # PayU's server-to-server webhook
+    STATUS_CHECK = "STATUS_CHECK"  # result page asked for status (only rejected tokens are logged)
+    RECONCILE = "RECONCILE"  # our sweep asked PayU's Verify Payment API
+
+
+class PaymentEventResult(str, enum.Enum):
+    """app.payments.models.PaymentEvent.result - what we did with the event."""
+    CREATED = "CREATED"
+    PROCESSED = "PROCESSED"
+    DUPLICATE_IGNORED = "DUPLICATE_IGNORED"
+    # A verified SUCCESS for a transaction already FAILED/CANCELLED - money
+    # may have been taken with no activation; needs a person to look at it.
+    LATE_SUCCESS_IGNORED = "LATE_SUCCESS_IGNORED"
+    HASH_FAILED = "HASH_FAILED"
+    UNKNOWN_TXN = "UNKNOWN_TXN"
+    MISSING_TXNID = "MISSING_TXNID"
+    AMOUNT_MISMATCH = "AMOUNT_MISMATCH"
+    STILL_PENDING = "STILL_PENDING"
+    EXPIRED = "EXPIRED"
+    TOKEN_REJECTED = "TOKEN_REJECTED"
+    ERROR = "ERROR"
+
+
 class PaymentType(str, enum.Enum):
     NEW = "NEW"
     RENEWAL = "RENEWAL"

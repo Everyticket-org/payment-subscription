@@ -19,6 +19,7 @@ celery_app = Celery(
         "app.webhooks.tasks",
         "app.subscriptions.tasks",
         "app.notifications.email.tasks",
+        "app.payments.tasks",
     ],
 )
 
@@ -53,6 +54,14 @@ celery_app.conf.update(
         "archive-stale-subscriptions": {
             "task": "subscriptions.archive_stale",
             "schedule": 3600.0,  # seconds - archive_after_days is measured in whole days, hourly is plenty
+        },
+        "reconcile-pending-payments": {
+            "task": "payments.reconcile_pending",
+            "schedule": 300.0,  # seconds - per-payment backoff lives in app.payments.reconcile
+        },
+        "purge-old-payment-events": {
+            "task": "payments.purge_old_events",
+            "schedule": 86400.0,  # seconds - retention is measured in days
         },
     },
 )

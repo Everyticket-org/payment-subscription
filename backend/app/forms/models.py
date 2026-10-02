@@ -36,6 +36,14 @@ class RegistrationFormField(Base, TimestampMixin):
     placeholder: Mapped[str | None] = mapped_column(String(255), nullable=True)
     help_text: Mapped[str | None] = mapped_column(String(500), nullable=True)
     options: Mapped[list | None] = mapped_column(JSON, nullable=True)  # for dropdown/radio/checkbox
+    # Plan-specific question ("Show only for plans", 2026-10 Custom plan
+    # follow-up): None/empty = a general registration field, asked once at
+    # first signup for every plan (the original behaviour). A list of
+    # plan_codes (e.g. ["CUSTOM"]) = asked ONLY when subscribing/switching
+    # to one of those plans, every time - including for returning
+    # customers - and its `required` flag IS enforced server-side. See
+    # app.forms.validation.fields_for_plan().
+    plan_codes: Mapped[list | None] = mapped_column(JSON, nullable=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 

@@ -23,6 +23,7 @@ from app.core.enums import PaymentStatus, PaymentType, SubscriptionEventType
 from app.core.exceptions import PaymentTransactionNotFound
 from app.core.ids import new_transaction_id
 from app.customers.models import Customer, CustomerRegistrationData
+from app.forms.validation import plan_specific_answers
 from app.invoices.models import Invoice
 from app.invoices.service import generate_invoice, get_or_render_pdf
 from app.notifications.email import service as email_service
@@ -53,6 +54,11 @@ def create_payment_transaction(
     gateway_mode: str = "test",
     application: Application | None = None,
 ) -> PaymentTransaction:
+    # Last line of defence for "Talk to us" plans: they are stored at
+    # price 0, and the price == 0 branch below activates a subscription
+    # without any gateway - so this must run before anything is created.
+    subscription_service.assert_plan_self_serve(plan)
+
     # `db`+`gateway_mode` resolve the admin-configured, per-mode PayU
     # credentials (app.payments.gateway_config) when this application has
     # any configured, falling back to env vars otherwise - see
@@ -127,6 +133,11 @@ def create_payment_transaction(
         },
     )
     transaction.gateway_transaction_id = result.gateway_transaction_id
+    if isinstance(result.raw_response, dict) and "fields" in result.raw_response:
+        # Which credential set signed this form - lets the payment step
+        # word its button for live vs test, and lets reconciliation verify
+        # against the same mode even if the admin switches modes later.
+        result.raw_response["mode"] = gateway_mode
     transaction.raw_gateway_response = result.raw_response
     # Real bug fixed here: this was never set before, so a PayU payment's
     # status stayed INITIATED forever (instead of PENDING, what PayU's
@@ -161,6 +172,41 @@ def build_payment_out(transaction: PaymentTransaction) -> PaymentTransactionOut:
     return payment_out
 
 
+def _plan_details_for(db: Session, *, subscription: Subscription, application: Application) -> dict:
+    """Answers to the subscription's CURRENT plan's plan-specific questions
+    (e.g. the Custom plan's expected_monthly_tickets / average_ticket_price
+    - app.forms.models.RegistrationFormField.plan_codes), for the webhook's
+    plan_details key. Read from the newest registration row on this
+    subscription: a new subscription's signup row, or the row a plan change
+    stored for its target plan (app.api.v1.customer._change_plan /
+    app.api.v1.public.subscribe). {} for a plan without such questions."""
+    entry = (
+        db.query(CustomerRegistrationData)
+        .filter(CustomerRegistrationData.subscription_id == subscription.id)
+        .order_by(CustomerRegistrationData.created_at.desc(), CustomerRegistrationData.id.desc())
+        .first()
+    )
+    if entry is None or not isinstance(entry.data, dict):
+        return {}
+    return plan_specific_answers(
+        db, application_id=application.id, plan_code=subscription.plan.plan_code, registration_data=entry.data
+    )
+
+
+def merge_gateway_response(previous: dict | None, response: dict | None) -> dict | None:
+    """Keeps the PayU checkout form (the surl/furl/amount we sent) when a
+    gateway response arrives, instead of overwriting it: the stored shape
+    becomes {"checkout": <form>, "gateway_response": <latest response>}.
+    Anything without a saved checkout form (mock gateway) is replaced as
+    before."""
+    if isinstance(previous, dict):
+        if isinstance(previous.get("checkout"), dict):
+            return {"checkout": previous["checkout"], "gateway_response": response}
+        if "fields" in previous:
+            return {"checkout": previous, "gateway_response": response}
+    return response
+
+
 def process_gateway_result(
     db: Session, *, transaction: PaymentTransaction, result: GatewayPaymentResult
 ) -> tuple[PaymentTransaction, Invoice | None]:
@@ -178,7 +224,7 @@ def process_gateway_result(
 
     transaction.status = result.status
     transaction.response_timestamp = datetime.now(timezone.utc)
-    transaction.raw_gateway_response = result.raw_response
+    transaction.raw_gateway_response = merge_gateway_response(transaction.raw_gateway_response, result.raw_response)
     transaction.failure_reason = result.failure_reason
     if result.gateway_transaction_id:
         transaction.gateway_transaction_id = result.gateway_transaction_id
@@ -274,6 +320,7 @@ def process_gateway_result(
                         is_trial=subscription.is_trial,
                         expires_at=subscription.expires_at.isoformat() if subscription.expires_at else None,
                         registration_data=(registration_entry.data if registration_entry else {}),
+                        plan_details=_plan_details_for(db, subscription=subscription, application=application),
                         currency=subscription.plan.currency,
                         billing_interval=subscription.plan.billing_interval,
                         billing_frequency=subscription.plan.billing_frequency,
@@ -375,6 +422,7 @@ def process_gateway_result(
                         total_amount=float(invoice.total_amount) if invoice else None,
                         tax_amount=float(invoice.tax_amount) if invoice else None,
                         selected_fields=field_selection.get(webhook_event_type),
+                        plan_details=_plan_details_for(db, subscription=subscription, application=application),
                     ),
                 )
                 if _queued_event is not None:

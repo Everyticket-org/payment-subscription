@@ -13,6 +13,7 @@
  *     "simulate a callback" buttons, unchanged from before PayU existed.
  */
 import type { PaymentTransactionOut } from "../api/types";
+import { formatAmount } from "../utils/planDisplay";
 
 interface PaymentCheckoutProps {
   payment: PaymentTransactionOut;
@@ -38,22 +39,43 @@ function submitPayuForm(actionUrl: string, fields: Record<string, string>) {
 
 export function PaymentCheckout({ payment, busy, onSimulate }: PaymentCheckoutProps) {
   if (payment.checkout) {
-    const { action_url, fields } = payment.checkout;
+    const { action_url, fields, mode } = payment.checkout;
+    // Payments created before the backend recorded `mode` fall back to
+    // which PayU host the form posts to.
+    const isLive = mode ? mode === "live" : !action_url.includes("test.payu.in");
+    const amount = formatAmount(payment.amount, payment.currency);
     return (
-      <div>
-        <p className="hint">
-          You'll be taken to PayU's secure test payment page. Use one of{" "}
-          <a href="https://docs.payu.in/docs/test-cards-upi-id-and-wallets" target="_blank" rel="noreferrer">
-            PayU's published test cards
-          </a>{" "}
-          to complete or decline the payment there - nothing here simulates the outcome.
+      <div className="payment-checkout">
+        <dl className="payment-summary">
+          <div className="payment-summary-row">
+            <dt>{fields.productinfo}</dt>
+            <dd className="payment-summary-amount">{amount}</dd>
+          </div>
+          <div className="payment-summary-row payment-summary-meta">
+            <dt>Billed to</dt>
+            <dd>{fields.email}</dd>
+          </div>
+        </dl>
+        <p className="payment-notice">
+          Keep this tab open. Don't refresh or press Back while you pay - you'll come back here automatically.
         </p>
+        {isLive ? (
+          <p className="hint">You'll pay on PayU's secure payment page.</p>
+        ) : (
+          <p className="hint">
+            Test mode: you'll be taken to PayU's test payment page. Use one of{" "}
+            <a href="https://docs.payu.in/docs/test-cards-upi-id-and-wallets" target="_blank" rel="noreferrer">
+              PayU's published test cards
+            </a>{" "}
+            to complete or decline the payment there - nothing here simulates the outcome.
+          </p>
+        )}
         <button
           className="button button-primary"
           disabled={busy}
           onClick={() => submitPayuForm(action_url, fields as unknown as Record<string, string>)}
         >
-          Continue to PayU test payment
+          {isLive ? `Pay ${amount} securely` : "Continue to PayU test payment"}
         </button>
       </div>
     );

@@ -57,6 +57,7 @@ def get_gateway(
             base_url=creds["base_url"],
             success_url=urls["success_url"],
             failure_url=urls["failure_url"],
+            verify_url=creds.get("verify_url"),
         )
     try:
         return _REGISTRY[code]

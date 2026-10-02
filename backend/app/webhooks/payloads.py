@@ -128,6 +128,7 @@ def onboarding_payload(
     total_amount: float | None = None,
     tax_amount: float | None = None,
     selected_fields: list[str] | None = None,
+    plan_details: dict | None = None,
 ) -> dict:
     """subscription.activated - fires exactly once, the moment a NEW
     subscription's payment succeeds (never on renew/upgrade/downgrade -
@@ -171,7 +172,15 @@ def onboarding_payload(
     says). customer_id (and the plan/payment/invoice detail params above)
     are available as OPT-IN extras an admin can select via Configuration
     > Everyticket integration - see app.webhooks.field_catalog.
-    AVAILABLE_FIELDS["subscription.activated"]."""
+    AVAILABLE_FIELDS["subscription.activated"].
+
+    plan_details (2026-10 Custom plan follow-up): the answers to the
+    plan's own "Show only for plans" questions (e.g. CUSTOM's
+    expected_monthly_tickets / average_ticket_price), nested under one key
+    so the receiver can tell them apart from general registration data.
+    Only present when non-empty - plans without such questions keep the
+    exact payload shape they had before. (The same answers also still
+    appear flat via registration_data, as they always would have.)"""
     fixed = {
         "subscription_id": subscription_id,
         "email": email,
@@ -182,6 +191,8 @@ def onboarding_payload(
         "is_trial": is_trial,
         "expires_at": expires_at,
     }
+    if plan_details:
+        fixed["plan_details"] = plan_details
     optional_values = {
         "currency": currency,
         "billing_interval": billing_interval,
@@ -473,13 +484,16 @@ def _plan_change_payload(
     total_amount: float | None,
     tax_amount: float | None,
     selected_fields: list[str] | None,
+    plan_details: dict | None = None,
 ) -> dict:
     """Shared shape for subscription.upgraded/downgraded (identical
     fixed AND optional field lists - see field_catalog.AVAILABLE_FIELDS -
     the two only ever differ in event_type and which direction the plan
     change went). Fixed payload (unchanged from before this event type
     was brought into the configurable-fields system): subscription_id,
-    customer_id, plan_code, status, expires_at, transaction_id."""
+    customer_id, plan_code, status, expires_at, transaction_id - plus,
+    when the new plan has its own questions (e.g. CUSTOM), plan_details
+    (2026-10) - see onboarding_payload."""
     fixed = {
         "subscription_id": subscription_id,
         "customer_id": customer_id,
@@ -488,6 +502,8 @@ def _plan_change_payload(
         "expires_at": expires_at,
         "transaction_id": transaction_id,
     }
+    if plan_details:
+        fixed["plan_details"] = plan_details
     optional_values = {
         "plan_name": plan_name,
         "price": price,
@@ -535,6 +551,7 @@ def upgraded_payload(
     total_amount: float | None = None,
     tax_amount: float | None = None,
     selected_fields: list[str] | None = None,
+    plan_details: dict | None = None,
 ) -> dict:
     """subscription.upgraded - fires once a paid plan-change payment
     succeeds and the new plan costs MORE than the old one (
@@ -568,6 +585,7 @@ def upgraded_payload(
         total_amount=total_amount,
         tax_amount=tax_amount,
         selected_fields=selected_fields,
+        plan_details=plan_details,
     )
 
 
@@ -596,6 +614,7 @@ def downgraded_payload(
     total_amount: float | None = None,
     tax_amount: float | None = None,
     selected_fields: list[str] | None = None,
+    plan_details: dict | None = None,
 ) -> dict:
     """subscription.downgraded - fires once a paid plan-change payment
     succeeds and the new plan costs LESS than the old one (
@@ -629,6 +648,7 @@ def downgraded_payload(
         total_amount=total_amount,
         tax_amount=tax_amount,
         selected_fields=selected_fields,
+        plan_details=plan_details,
     )
 
 

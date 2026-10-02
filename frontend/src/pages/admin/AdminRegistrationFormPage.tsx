@@ -31,10 +31,18 @@
  * checked. There's no client-side preview for this one (unlike the regex
  * "Test pattern" helper) since checking for a duplicate means looking at
  * every other customer's submitted data, which only the backend can do.
+ *
+ * "Show only for plans" (plan_codes, 2026-10 Custom plan follow-up) turns a
+ * field into a plan-specific question - e.g. the Custom plan's expected
+ * tickets / average ticket price. Leave every plan unticked for a general
+ * field (asked once, at first signup, for every plan); tick one or more
+ * plans to ask it only - and every time - when a customer subscribes or
+ * switches to one of them. Required is enforced server-side for these.
  */
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
   adminCreateRegistrationFormField,
+  adminListPlans,
   adminListRegistrationFormFields,
   adminUpdateRegistrationFormField,
 } from "../../api/endpoints";
@@ -43,7 +51,7 @@ import { Modal } from "../../components/Modal";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import type { RegistrationFormFieldAdminOut } from "../../api/types";
+import type { PlanAdminOut, RegistrationFormFieldAdminOut } from "../../api/types";
 
 const FIELD_TYPES = ["text", "email", "phone", "number", "dropdown", "radio", "checkbox", "textarea", "date", "url", "file"];
 
@@ -54,10 +62,14 @@ export function AdminRegistrationFormPage() {
   const [error, setError] = useState<unknown>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [editingField, setEditingField] = useState<RegistrationFormFieldAdminOut | null>(null);
+  // For the "Show only for plans" picker - every plan, active or not, so a
+  // plan's questions can be set up before the plan goes live.
+  const [plans, setPlans] = useState<PlanAdminOut[]>([]);
 
   const reload = useCallback(() => {
     if (!adminToken) return;
     adminListRegistrationFormFields(adminToken).then(setFields).catch(setError);
+    adminListPlans(adminToken).then(setPlans).catch(setError);
   }, [adminToken]);
 
   useEffect(reload, [reload]);
@@ -85,6 +97,7 @@ export function AdminRegistrationFormPage() {
             (fieldType === "dropdown" || fieldType === "radio") && optionsRaw
               ? optionsRaw.split(",").map((o) => o.trim()).filter(Boolean)
               : undefined,
+          plan_codes: form.getAll("plan_codes").map(String),
         },
         adminToken,
       );
@@ -213,6 +226,8 @@ export function AdminRegistrationFormPage() {
             </div>
           </fieldset>
 
+          <PlanScopeFields plans={plans} />
+
           <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
             Add field
           </button>
@@ -231,6 +246,7 @@ export function AdminRegistrationFormPage() {
                 <th>Required</th>
                 <th>Validation</th>
                 <th>Duplicate check</th>
+                <th>Shown for</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -249,6 +265,7 @@ export function AdminRegistrationFormPage() {
                   </td>
                   <td>{f.validation_pattern ? <StatusBadge value="REGEX SET" /> : <span className="muted">None</span>}</td>
                   <td>{f.check_duplicate ? <StatusBadge value="ON" /> : <span className="muted">Off</span>}</td>
+                  <td>{f.plan_codes?.length ? f.plan_codes.join(", ") : <span className="muted">All plans</span>}</td>
                   <td>
                     <StatusBadge value={f.active ? "ACTIVE" : "INACTIVE"} />
                   </td>
@@ -270,6 +287,7 @@ export function AdminRegistrationFormPage() {
 
       <EditFieldModal
         field={editingField}
+        plans={plans}
         onClose={() => setEditingField(null)}
         onSaved={() => {
           setEditingField(null);
@@ -277,6 +295,36 @@ export function AdminRegistrationFormPage() {
         }}
       />
     </section>
+  );
+}
+
+/** "Show only for plans" picker - one checkbox per plan, submitted as
+ * repeated `plan_codes` FormData entries. None ticked = general field. */
+function PlanScopeFields({ plans, defaultPlanCodes }: { plans: PlanAdminOut[]; defaultPlanCodes?: string[] | null }) {
+  const selected = new Set(defaultPlanCodes ?? []);
+  return (
+    <fieldset>
+      <legend>Show only for plans</legend>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Leave all unticked to ask this once, at first signup, for every plan. Tick plans (e.g. Custom) to ask it only
+        when a customer subscribes or switches to one of them - every time, including returning customers.
+      </p>
+      <div className="button-row" style={{ flexWrap: "wrap" }}>
+        {plans.map((plan) => (
+          <label key={plan.plan_code} style={{ flexDirection: "row", alignItems: "center", gap: 6, fontWeight: 400 }}>
+            <input
+              type="checkbox"
+              name="plan_codes"
+              value={plan.plan_code}
+              defaultChecked={selected.has(plan.plan_code)}
+              style={{ width: 18, height: 18 }}
+            />
+            {plan.name}
+            {!plan.active && <span className="muted"> (inactive)</span>}
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
 
@@ -394,10 +442,12 @@ function ValidationFields({
 
 function EditFieldModal({
   field,
+  plans,
   onClose,
   onSaved,
 }: {
   field: RegistrationFormFieldAdminOut | null;
+  plans: PlanAdminOut[];
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -433,6 +483,8 @@ function EditFieldModal({
               ? optionsRaw.split(",").map((o) => o.trim()).filter(Boolean)
               : undefined,
           display_order: Number(form.get("display_order") || field.display_order),
+          // Always sent: [] turns a plan-specific question back into a general one.
+          plan_codes: form.getAll("plan_codes").map(String),
         },
         adminToken,
       );
@@ -520,6 +572,8 @@ function EditFieldModal({
             />
           </div>
         </fieldset>
+
+        <PlanScopeFields plans={plans} defaultPlanCodes={field.plan_codes} />
 
         <button className="button button-primary" type="submit" style={{ width: "fit-content" }}>
           Save changes

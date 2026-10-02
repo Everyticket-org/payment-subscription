@@ -14,8 +14,8 @@ from app.auth.deps import require_permission
 from app.auth.models import AdminUser
 from app.core.exceptions import PaymentTransactionNotFound
 from app.customers.models import Customer
-from app.payments.models import PaymentTransaction
-from app.payments.schemas import PaymentAdminOut
+from app.payments.models import PaymentEvent, PaymentTransaction
+from app.payments.schemas import PaymentAdminOut, PaymentEventOut
 
 router = APIRouter(prefix="/payments", tags=["admin-payments"])
 
@@ -57,3 +57,24 @@ def get_payment(
     if payment is None:
         raise PaymentTransactionNotFound(f"Unknown payment transaction {transaction_id}")
     return to_payment_admin_out(payment)
+
+
+@router.get("/{transaction_id}/events", response_model=list[PaymentEventOut])
+def list_payment_events(
+    transaction_id: str,
+    db: Session = Depends(get_db),
+    _admin: AdminUser = Depends(require_permission("PAYMENTS_VIEW")),
+):
+    """This payment's history, oldest first (app.payments.events): where it
+    was started, the surl/furl PayU was given, and every browser return,
+    webhook and reconciliation check that arrived. Read-only."""
+    exists = db.query(PaymentTransaction.id).filter(PaymentTransaction.transaction_id == transaction_id).first()
+    if exists is None:
+        raise PaymentTransactionNotFound(f"Unknown payment transaction {transaction_id}")
+    events = (
+        db.query(PaymentEvent)
+        .filter(PaymentEvent.transaction_id == transaction_id)
+        .order_by(PaymentEvent.created_at.asc(), PaymentEvent.id.asc())
+        .all()
+    )
+    return [PaymentEventOut.model_validate(event) for event in events]

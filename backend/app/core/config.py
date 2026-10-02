@@ -92,6 +92,33 @@ class Settings(BaseSettings):
     PAYU_BASE_URL: str = "https://test.payu.in"
     PAYU_SUCCESS_URL: str = "http://localhost:8000/api/v1/payment/payu/callback/success"
     PAYU_FAILURE_URL: str = "http://localhost:8000/api/v1/payment/payu/callback/failure"
+    # PayU Verify Payment API (docs.payu.in/reference/verify_payment_api),
+    # used by the reconciliation sweep (app.payments.reconcile). Test mode
+    # only - live mode always uses https://info.payu.in/merchant/postservice.php?form=2
+    # (see app.payments.gateway_config.resolve_payu_credentials).
+    PAYU_VERIFY_URL: str = "https://test.payu.in/merchant/postservice.php?form=2"
+    PAYU_VERIFY_TIMEOUT_SECONDS: float = 10.0
+
+    # --- Payment reconciliation (app.payments.reconcile) ---
+    # A PENDING PayU payment older than this is checked against PayU's
+    # Verify Payment API - the backstop for when both the browser return
+    # (surl/furl) and the server webhook were lost.
+    PAYU_RECONCILE_AFTER_MINUTES: int = 15
+    # PayU reporting "failure" is only applied once the payment is at least
+    # this old, so a customer still on PayU's page is never failed early.
+    PAYU_RECONCILE_FAIL_AFTER_MINUTES: int = 60
+    # A payment PayU still has no record of after this long is marked
+    # FAILED ("expired") and stops being checked.
+    PAYU_RECONCILE_EXPIRE_AFTER_HOURS: int = 24
+    PAYU_RECONCILE_BATCH_SIZE: int = 50
+
+    # --- Payment result page / event log ---
+    # Lifetime of the signed token PayU's return redirect carries to the
+    # frontend's /payment/return page (app.payments.status_token).
+    PAYMENT_STATUS_TOKEN_TTL_MINUTES: int = 30
+    # payment_events rows (source IP, user agent, sanitised PayU response)
+    # older than this are deleted by the daily purge task.
+    PAYMENT_EVENT_RETENTION_DAYS: int = 180
 
     # --- Everyticket ---
     EVERYTICKET_API_URL: str = "http://localhost:9000/api"

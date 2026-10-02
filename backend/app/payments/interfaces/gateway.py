@@ -27,6 +27,11 @@ class GatewayPaymentResult:
     currency: str
     raw_response: dict[str, Any]
     failure_reason: str | None = None
+    # False when the gateway could not authenticate the response (e.g. a
+    # PayU reverse-hash mismatch). Callers must then NOT persist the result:
+    # FAILED is terminal, so recording a forged/tampered POST would block
+    # the customer's genuine callback for the same transaction.
+    hash_verified: bool = True
 
 
 class PaymentGateway(ABC):

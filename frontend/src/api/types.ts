@@ -7,6 +7,15 @@
  * added.
  */
 
+export interface PlanFeature {
+  feature_key: string;
+  feature_label: string;
+  /** Present = a "highlight" row (label + value); absent = a checklist item.
+   * See utils/planDisplay.ts splitPlanFeatures(). */
+  feature_value?: string | null;
+  display_order: number;
+}
+
 export interface Plan {
   plan_code: string;
   name: string;
@@ -17,6 +26,10 @@ export interface Plan {
   description?: string | null;
   is_trial?: boolean;
   trial_period_days?: number | null;
+  /** "Talk to us" plan - no list price, never self-served (subscribe /
+   * plan change are refused server-side with PLAN_REQUIRES_SALES_CONTACT). */
+  is_contact_sales?: boolean;
+  features?: PlanFeature[];
 }
 
 export interface Customer {
@@ -67,6 +80,50 @@ export interface PaymentCheckout {
   action_url: string;
   method: string;
   fields: PayUCheckoutFields;
+  /** Which PayU credential set signed this form ("test" | "live") - set
+   * by the backend when the payment is created. Older payments have none. */
+  mode?: string;
+}
+
+/** GET /api/v1/payment/{transaction_id}/status - what the /payment/return
+ * page shows, read from the backend (needs the token the PayU return
+ * redirect carries). */
+export interface PaymentStatusOut {
+  transaction_id: string;
+  /** INITIATED | PENDING | SUCCESS | FAILED | CANCELLED | UNKNOWN */
+  status: string;
+  payment_type: string;
+  amount: number;
+  currency: string;
+  plan_code: string;
+  plan_name: string;
+  subscription_id: string;
+  subscription_status: string;
+  invoice_id?: string | null;
+  failure_reason?: string | null;
+  updated_at: string;
+}
+
+/** One row of a payment's history (admin payment detail page). */
+export interface PaymentEventOut {
+  id: number;
+  transaction_id?: string | null;
+  /** INITIATED | BROWSER_RETURN | WEBHOOK | STATUS_CHECK | RECONCILE */
+  event_type: string;
+  result: string;
+  channel?: string | null;
+  endpoint?: string | null;
+  initiated_from?: string | null;
+  surl_sent?: string | null;
+  furl_sent?: string | null;
+  return_url?: string | null;
+  source_ip?: string | null;
+  user_agent?: string | null;
+  gateway_status?: string | null;
+  gateway_transaction_id?: string | null;
+  hash_verified?: boolean | null;
+  payload?: Record<string, string> | null;
+  created_at: string;
 }
 
 export interface PaymentTransactionOut {
@@ -307,6 +364,7 @@ export interface PlanAdminOut {
   display_order: number;
   is_trial: boolean;
   trial_period_days?: number | null;
+  is_contact_sales: boolean;
   features: PlanFeatureAdminOut[];
 }
 
@@ -321,6 +379,7 @@ export interface PlanCreateInput {
   display_order?: number;
   is_trial?: boolean;
   trial_period_days?: number | null;
+  is_contact_sales?: boolean;
 }
 
 export interface PlanUpdateInput {
@@ -334,6 +393,7 @@ export interface PlanUpdateInput {
   display_order?: number;
   is_trial?: boolean;
   trial_period_days?: number | null;
+  is_contact_sales?: boolean;
 }
 
 export interface PlanTransitionOut {
@@ -452,6 +512,9 @@ export interface ApplicationGeneralOut {
    * first-time subscription's payment succeeds. null means "use the
    * built-in default text" - see PublicMessagesOut. */
   post_subscription_message?: string | null;
+  /** Public sales/support contact - target of a contact-sales plan's
+   * "Talk to us" mailto. */
+  support_email?: string | null;
 }
 
 export interface ApplicationGeneralUpdateInput {
@@ -459,6 +522,7 @@ export interface ApplicationGeneralUpdateInput {
   currency: string;
   gateway_mode: string;
   post_subscription_message?: string | null;
+  support_email?: string | null;
 }
 
 /** GET /public/messages - small set of admin-configurable public-facing
@@ -466,6 +530,9 @@ export interface ApplicationGeneralUpdateInput {
  * backend applies its own default text when the admin hasn't set one. */
 export interface PublicMessagesOut {
   post_subscription_message: string;
+  /** null when not configured - the "Talk to us" CTA then falls back to
+   * a plain note instead of a mailto link. */
+  support_email?: string | null;
 }
 
 export interface PayUCredentialsOut {
@@ -746,6 +813,11 @@ export interface RegistrationFormFieldOut {
   placeholder?: string | null;
   help_text?: string | null;
   options?: string[] | null;
+  /** "Show only for plans": null = general field (every plan, asked once at
+   * first signup); a list of plan codes (e.g. ["CUSTOM"]) = asked only when
+   * subscribing/switching to one of those plans, every time, with
+   * `required` enforced server-side. */
+  plan_codes?: string[] | null;
   display_order: number;
 }
 
@@ -766,6 +838,7 @@ export interface RegistrationFormFieldCreateInput {
   placeholder?: string;
   help_text?: string;
   options?: string[];
+  plan_codes?: string[];
   display_order?: number;
 }
 
@@ -779,6 +852,8 @@ export interface RegistrationFormFieldUpdateInput {
   placeholder?: string;
   help_text?: string;
   options?: string[];
+  /** [] turns a plan-specific question back into a general one. */
+  plan_codes?: string[];
   display_order?: number;
   active?: boolean;
 }

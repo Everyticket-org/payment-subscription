@@ -622,6 +622,16 @@ select:focus {
   min-width: 0;
 }
 
+/* Heading above a plan's own questions (e.g. the Custom plan's expected
+   tickets / ticket price) - separates them from the general fields. */
+.subscribe-plan-questions-title {
+  margin: 8px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  font-size: 1rem;
+  color: var(--text-h);
+}
+
 @media (max-width: 860px) {
   .subscribe-layout {
     grid-template-columns: 1fr;
@@ -2822,6 +2832,103 @@ textarea {
   white-space: nowrap;
 }
 
+/* ---- Plans listing: features (2026-09 pricing refresh) ----
+   Card anatomy: price -> highlight rows (features WITH a value: ticket
+   limit, overage, onboarding) -> description as the checklist heading
+   ("Everything in Starter, plus:") -> checklist (features without a
+   value) -> CTA pinned to the bottom by the existing margin-top: auto. */
+
+/* Reserve the "/ month" line on every card so trial ("Free for 14 days")
+   and contact-sales ("Talk to us") cards line up with the paid ones. */
+.plans-page .plan-price {
+  min-height: 62px;
+}
+
+.plans-page .plan-description {
+  flex: none;
+  color: var(--text-h);
+}
+
+.plans-page .plan-description p {
+  margin: 0;
+}
+
+.plans-page .plan-description p + p {
+  margin-top: 6px;
+}
+
+.plan-highlights {
+  margin: 2px 0 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  gap: 6px;
+}
+
+.plan-highlight {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+
+.plan-highlight dt {
+  color: var(--text);
+  /* Keep short labels ("Ticket overage") on one line; the value wraps. */
+  white-space: nowrap;
+}
+
+.plan-highlight dd {
+  margin: 0;
+  font-weight: 700;
+  color: var(--text-h);
+  text-align: right;
+}
+
+.plan-feature-list {
+  list-style: none;
+  margin: 0 0 10px;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.plan-feature-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.plan-feature-check {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: -1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.plans-contact-fallback {
+  margin: auto 0 0;
+  text-align: center;
+}
+
+.plans-footnote-tax {
+  margin-top: 24px;
+}
+
+.plans-footnote-tax + .plans-footnote {
+  margin-top: 6px;
+}
+
 /* ---- Subscribe flow: step indicator ---- */
 
 .subscribe-stepper {
@@ -2984,4 +3091,156 @@ textarea {
 .reorder-buttons button:disabled {
   opacity: 0.3;
   cursor: default;
+}
+
+/* ---- Payment step (PaymentCheckout) and result page (PaymentReturnPage) ---- */
+
+.payment-checkout {
+  display: grid;
+  gap: 14px;
+  max-width: 480px;
+}
+
+.payment-summary {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-alt);
+  padding: 12px 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.payment-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.payment-summary-row dt {
+  font-weight: 600;
+  color: var(--text-h);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.payment-summary-row dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.payment-summary-amount {
+  font-weight: 700;
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.payment-summary-meta {
+  font-size: 13px;
+}
+
+.payment-summary-meta dt {
+  font-weight: 400;
+  color: var(--text);
+}
+
+.payment-notice {
+  margin: 0;
+  font-size: 13.5px;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(217, 119, 6, 0.12);
+  color: var(--text-h);
+  border-left: 3px solid #d97706;
+}
+
+.payment-result {
+  display: grid;
+  gap: 14px;
+  max-width: 560px;
+}
+
+.payment-result > p {
+  margin: 0;
+}
+
+.payment-result-center {
+  justify-items: center;
+  text-align: center;
+  padding-block: 32px;
+}
+
+.payment-result-center h1 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.payment-result-details {
+  margin: 0;
+}
+
+.payment-waiting {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.payment-waiting p {
+  margin: 0;
+}
+
+.payment-spinner {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  animation: payment-spin 0.9s linear infinite;
+  flex: none;
+}
+
+.payment-spinner-small {
+  width: 22px;
+  height: 22px;
+  border-width: 2.5px;
+}
+
+@keyframes payment-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .payment-spinner {
+    animation-duration: 3s;
+  }
+}
+
+/* ---- Admin payment detail: event history ---- */
+
+.payment-event-toggle {
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+.payment-event-details {
+  margin: 4px 0 8px;
+}
+
+.payment-event-details dd {
+  overflow-wrap: anywhere;
+}
+
+.payment-event-payload {
+  margin: 0;
+  overflow-x: auto;
+  font-size: 12.5px;
+  background: var(--code-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
 }

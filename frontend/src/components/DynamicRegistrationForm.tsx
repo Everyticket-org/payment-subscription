@@ -23,13 +23,28 @@ import { useEffect, useState } from "react";
 import { getRegistrationForm } from "../api/endpoints";
 import type { RegistrationFormFieldOut } from "../api/types";
 
-export function useRegistrationFormFields() {
+/** planCode: also load that plan's plan-specific questions (e.g. the
+ * Custom plan's expected tickets / ticket price) - see
+ * RegistrationFormFieldOut.plan_codes. Refetches when it changes. */
+export function useRegistrationFormFields(planCode?: string | null) {
   const [fields, setFields] = useState<RegistrationFormFieldOut[] | null>(null);
   const [error, setError] = useState<unknown>(null);
 
   useEffect(() => {
-    getRegistrationForm().then(setFields).catch(setError);
-  }, []);
+    let cancelled = false;
+    getRegistrationForm(planCode)
+      .then((result) => {
+        if (cancelled) return;
+        setFields(result);
+        setError(null);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [planCode]);
 
   return { fields, error };
 }
@@ -123,7 +138,10 @@ function renderInput(field: RegistrationFormFieldOut, value: string, onChange: (
     case "date":
       return <input type="date" {...common} onChange={(e) => onChange(e.target.value)} />;
     case "number":
-      return <input type="number" {...common} onChange={(e) => onChange(e.target.value)} />;
+      // step="any" so decimals (e.g. a 249.50 ticket price) aren't flagged
+      // invalid by the browser; any stricter rule is the field's
+      // validation_pattern, which the backend enforces on submit.
+      return <input type="number" step="any" {...common} onChange={(e) => onChange(e.target.value)} />;
     case "email":
       return <input type="email" {...withPattern} onChange={(e) => onChange(e.target.value)} />;
     case "phone":

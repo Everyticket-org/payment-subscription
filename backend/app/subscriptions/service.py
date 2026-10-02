@@ -19,6 +19,7 @@ from app.core.exceptions import (
     CustomerAlreadySubscribed,
     InvalidPlanTransition,
     PlanNotFound,
+    PlanRequiresSalesContact,
     TrialAlreadyUsed,
 )
 from app.core.ids import new_subscription_id
@@ -66,6 +67,20 @@ def assert_trial_not_already_used(db: Session, *, customer_id: int, application_
         raise TrialAlreadyUsed("This customer has already used their free trial for this application")
 
 
+def assert_plan_self_serve(plan: Plan) -> None:
+    """Refuses a "Talk to us" plan (Plan.is_contact_sales) on every self-
+    serve path. Called from create_pending_subscription(),
+    assert_transition_allowed() and payment_service.create_payment_transaction(),
+    which together cover new subscribe, repurchase, auto-routed and portal
+    upgrade/downgrade, admin test payments and renewal. The payment-side
+    call is the one that really matters: these plans are stored at
+    price 0, and a price-0 payment is activated without any gateway."""
+    if plan.is_contact_sales:
+        raise PlanRequiresSalesContact(
+            f"The {plan.name} plan is available through our sales team - please contact us to get started"
+        )
+
+
 def create_pending_subscription(
     db: Session, *, customer: Customer, application: Application, plan: Plan
 ) -> Subscription:
@@ -90,6 +105,7 @@ def create_pending_subscription(
     """
     if plan.application_id != application.id:
         raise PlanNotFound(f"Plan {plan.plan_code} does not belong to application {application.code}")
+    assert_plan_self_serve(plan)
 
     existing_active = get_active_subscription(db, customer_id=customer.id, application_id=application.id)
     if existing_active is not None:
@@ -209,6 +225,7 @@ def assert_transition_allowed(db: Session, *, from_plan: Plan, to_plan: Plan) ->
     """
     if from_plan.id == to_plan.id:
         raise InvalidPlanTransition(f"{to_plan.plan_code} is already the current plan")
+    assert_plan_self_serve(to_plan)
     return "UPGRADE" if to_plan.price > from_plan.price else "DOWNGRADE"
 
 

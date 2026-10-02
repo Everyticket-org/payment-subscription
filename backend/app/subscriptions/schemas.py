@@ -39,6 +39,12 @@ class SubscribeResponse(BaseModel):
 
 class UpgradeDowngradeRequest(BaseModel):
     target_plan_code: str
+    # Answers to the target plan's plan-specific questions (e.g. the Custom
+    # plan's expected monthly tickets / average ticket price), keyed by
+    # field_key - see GET /public/registration-form?plan_code=. Required
+    # ones are enforced; anything that isn't one of the target plan's
+    # plan-specific questions is ignored here.
+    registration_data: dict = Field(default_factory=dict)
 
 
 class CancelRequest(BaseModel):

@@ -33,6 +33,8 @@ import type {
   OtpVerifyResponse,
   PageOut,
   PaymentAdminOut,
+  PaymentEventOut,
+  PaymentStatusOut,
   Plan,
   PlanAdminOut,
   PlanCreateInput,
@@ -80,8 +82,11 @@ export const subscribe = (
 export const identify = (email: string, mobile: string) =>
   api.post<IdentifyResponse>("/api/v1/public/identify", { email, mobile });
 
-export const getRegistrationForm = () =>
-  api.get<RegistrationFormFieldOut[]>("/api/v1/public/registration-form");
+/** Without planCode: general fields only. With planCode: general fields
+ * plus that plan's plan-specific questions (e.g. CUSTOM's expected tickets
+ * / ticket price). */
+export const getRegistrationForm = (planCode?: string | null) =>
+  api.get<RegistrationFormFieldOut[]>(withQuery("/api/v1/public/registration-form", { plan_code: planCode }));
 
 /** 2026-09-13 follow-up: the configurable post-subscription confirmation
  * message - read by SubscribePage's mock "done" step and PaymentReturnPage
@@ -95,6 +100,12 @@ export const verifyOtp = (otpSessionId: string, code: string) =>
 export const consumeSsoToken = (token: string) =>
   api.post<OtpVerifyResponse>("/api/v1/public/sso/consume", { token });
 
+// --- Payment result page (PayU return) ---
+/** `token` comes from the PayU return redirect's ?token= - the backend
+ * refuses (403 PAYMENT_STATUS_TOKEN_INVALID) without it. */
+export const getPaymentStatus = (transactionId: string, token: string) =>
+  api.get<PaymentStatusOut>(withQuery(`/api/v1/payment/${encodeURIComponent(transactionId)}/status`, { token }));
+
 // --- Payment (mock gateway simulation) ---
 
 export const simulateMockCallback = (transactionId: string, scenario: "SUCCESS" | "FAILED" | "PENDING" | "TIMEOUT") =>
@@ -104,17 +115,29 @@ export const simulateMockCallback = (transactionId: string, scenario: "SUCCESS" 
 
 export const getCustomerPortal = (token: string) => api.get<CustomerPortalOut>("/api/v1/customer/me", token);
 
-export const upgradeSubscription = (subscriptionId: string, targetPlanCode: string, token: string) =>
+/** registrationData: answers to the target plan's plan-specific questions
+ * (see getRegistrationForm(planCode)) - required ones are enforced. */
+export const upgradeSubscription = (
+  subscriptionId: string,
+  targetPlanCode: string,
+  token: string,
+  registrationData: Record<string, string> = {},
+) =>
   api.post<SubscribeResponse>(
     `/api/v1/customer/subscriptions/${subscriptionId}/upgrade`,
-    { target_plan_code: targetPlanCode },
+    { target_plan_code: targetPlanCode, registration_data: registrationData },
     token,
   );
 
-export const downgradeSubscription = (subscriptionId: string, targetPlanCode: string, token: string) =>
+export const downgradeSubscription = (
+  subscriptionId: string,
+  targetPlanCode: string,
+  token: string,
+  registrationData: Record<string, string> = {},
+) =>
   api.post<SubscribeResponse>(
     `/api/v1/customer/subscriptions/${subscriptionId}/downgrade`,
-    { target_plan_code: targetPlanCode },
+    { target_plan_code: targetPlanCode, registration_data: registrationData },
     token,
   );
 
@@ -231,6 +254,9 @@ export const adminListPayments = (
 
 export const adminGetPayment = (transactionId: string, token: string) =>
   api.get<PaymentAdminOut>(`/api/v1/admin/payments/${transactionId}`, token);
+
+export const adminListPaymentEvents = (transactionId: string, token: string) =>
+  api.get<PaymentEventOut[]>(`/api/v1/admin/payments/${transactionId}/events`, token);
 
 // --- Admin: invoices ---
 

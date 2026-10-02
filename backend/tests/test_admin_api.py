@@ -106,33 +106,33 @@ def test_plans_full_crud_flow(client, seeded_db):
 
     create = client.post(
         "/api/v1/admin/plans",
-        json={"plan_code": "STARTER", "name": "Starter", "price": 999, "billing_interval": "month", "billing_frequency": 1},
+        json={"plan_code": "CRUDTEST", "name": "Crud Test", "price": 999, "billing_interval": "month", "billing_frequency": 1},
         headers=headers,
     )
     assert create.status_code == 201, create.text
-    assert create.json()["plan_code"] == "STARTER"
+    assert create.json()["plan_code"] == "CRUDTEST"
     assert create.json()["active"] is True
 
     duplicate = client.post(
-        "/api/v1/admin/plans", json={"plan_code": "STARTER", "name": "Dup", "price": 1}, headers=headers
+        "/api/v1/admin/plans", json={"plan_code": "CRUDTEST", "name": "Dup", "price": 1}, headers=headers
     )
     assert duplicate.status_code == 409
 
     listing = client.get("/api/v1/admin/plans", headers=headers)
     assert listing.status_code == 200
-    assert any(p["plan_code"] == "STARTER" for p in listing.json())
+    assert any(p["plan_code"] == "CRUDTEST" for p in listing.json())
 
-    detail = client.get("/api/v1/admin/plans/starter", headers=headers)
+    detail = client.get("/api/v1/admin/plans/crudtest", headers=headers)
     assert detail.status_code == 200
-    assert detail.json()["name"] == "Starter"
+    assert detail.json()["name"] == "Crud Test"
 
-    update = client.put("/api/v1/admin/plans/starter", json={"price": 1200, "active": False}, headers=headers)
+    update = client.put("/api/v1/admin/plans/crudtest", json={"price": 1200, "active": False}, headers=headers)
     assert update.status_code == 200
     assert update.json()["price"] == 1200.0
     assert update.json()["active"] is False
 
     feature = client.post(
-        "/api/v1/admin/plans/starter/features",
+        "/api/v1/admin/plans/crudtest/features",
         json={"feature_key": "support", "feature_label": "Email support", "display_order": 1},
         headers=headers,
     )
@@ -140,19 +140,19 @@ def test_plans_full_crud_flow(client, seeded_db):
     feature_id = feature.json()["id"]
 
     feature_update = client.put(
-        f"/api/v1/admin/plans/starter/features/{feature_id}",
+        f"/api/v1/admin/plans/crudtest/features/{feature_id}",
         json={"feature_label": "Priority email support"},
         headers=headers,
     )
     assert feature_update.status_code == 200
     assert feature_update.json()["feature_label"] == "Priority email support"
 
-    feature_delete = client.delete(f"/api/v1/admin/plans/starter/features/{feature_id}", headers=headers)
+    feature_delete = client.delete(f"/api/v1/admin/plans/crudtest/features/{feature_id}", headers=headers)
     assert feature_delete.status_code == 204
 
     transition_create = client.post(
         "/api/v1/admin/plans/transitions",
-        json={"from_plan_code": "STARTER", "to_plan_code": "BASIC", "transition_type": "UPGRADE"},
+        json={"from_plan_code": "CRUDTEST", "to_plan_code": "BASIC", "transition_type": "UPGRADE"},
         headers=headers,
     )
     assert transition_create.status_code == 201, transition_create.text

@@ -149,6 +149,16 @@ class InvalidPlanConfiguration(AppError):
     error_code = "INVALID_PLAN_CONFIGURATION"
 
 
+class PlanRequiresSalesContact(AppError):
+    """A "Talk to us" plan (Plan.is_contact_sales) was used as the target of
+    a subscribe, plan change or payment. These plans have no list price and
+    are only sold through the sales team, so every self-serve path refuses
+    them - see app.subscriptions.service.assert_plan_self_serve()."""
+
+    http_status = 409
+    error_code = "PLAN_REQUIRES_SALES_CONTACT"
+
+
 class WebhookAlreadyDelivered(AppError):
     """An admin tried to manually retry a webhook delivery that has
     already SUCCEEDED (spec section 32: "Do not create duplicate
@@ -160,3 +170,13 @@ class WebhookAlreadyDelivered(AppError):
 
     http_status = 409
     error_code = "WEBHOOK_ALREADY_DELIVERED"
+
+
+class PaymentStatusTokenInvalid(AppError):
+    """The payment result page's status token is missing, expired, tampered
+    with, or was issued for a different transaction
+    (app.payments.status_token). Deliberately the same answer for an
+    unknown transaction ID, so IDs can't be probed."""
+
+    http_status = 403
+    error_code = "PAYMENT_STATUS_TOKEN_INVALID"

@@ -1,8 +1,10 @@
 """
 Development seed data (spec section 70).
 
-Creates the single V1 application (EVERYTICKET) with Basic/Professional/
-Enterprise plans, a small dynamic registration form, and the allowed
+Creates the single V1 application (EVERYTICKET) with the current plan
+catalog (Free Trial + Starter/Institutional/Custom - see
+app.plans.catalog), the retired Basic/Professional/Enterprise plans
+(inactive by default), a small dynamic registration form, and the legacy
 upgrade/downgrade plan transitions. Safe to run more than once - it
 upserts by natural key (application code / plan code) rather than
 duplicating rows.
@@ -22,7 +24,8 @@ from app.core.database import SessionLocal
 from app.core import models_registry  # noqa: F401
 from app.forms.models import RegistrationFormField
 from app.notifications.models import NotificationTemplate
-from app.plans.models import Plan, PlanTransition
+from app.plans import catalog
+from app.plans.models import Plan, PlanFeature, PlanTransition
 
 DEV_ADMIN_EMAIL = "admin@example.com"
 DEV_ADMIN_PASSWORD = "ChangeMe123!"  # dev/local only - never a production credential
@@ -65,6 +68,28 @@ def _get_or_create_plan(db: Session, application: Application, **kwargs) -> Plan
     db.add(plan)
     db.flush()
     return plan
+
+
+def _ensure_features(db: Session, plan: Plan, features: list[tuple[str, str, str | None]]) -> None:
+    """Adds any catalog feature whose feature_key the plan doesn't have yet,
+    appended after the plan's existing features. Never edits or removes an
+    existing row - once seeded, features are admin-managed."""
+    existing_keys = {feature.feature_key for feature in plan.features}
+    next_order = max((feature.display_order for feature in plan.features), default=-1) + 1
+    for feature_key, feature_label, feature_value in features:
+        if feature_key in existing_keys:
+            continue
+        plan.features.append(
+            PlanFeature(
+                feature_key=feature_key,
+                feature_label=feature_label,
+                feature_value=feature_value,
+                display_order=next_order,
+            )
+        )
+        next_order += 1
+    db.add(plan)
+    db.flush()
 
 
 def _get_or_create_transition(db: Session, application: Application, from_plan: Plan, to_plan: Plan, transition_type: str) -> None:
@@ -198,31 +223,51 @@ def _get_or_create_admin(db: Session) -> AdminUser:
     return user
 
 
-def seed(db: Session) -> AdminUser:
+def seed(db: Session, *, legacy_plans_active: bool = False) -> AdminUser:
+    """`legacy_plans_active` only applies when the legacy plans are first
+    created (get-or-create never edits an existing plan). Production and
+    dev databases keep the default - retired, matching Alembic revision
+    b3c9e1f47a20. The test suite passes True because its lifecycle tests
+    run against the legacy BASIC/PROFESSIONAL/ENTERPRISE codes."""
     application = _get_or_create_application(db)
 
+    # Retired by the 2026-09 pricing refresh (app.plans.catalog). Still
+    # seeded so the legacy transitions below and old subscriptions resolve.
     basic = _get_or_create_plan(
         db, application, plan_code="BASIC", name="Basic", description="Entry-level plan",
-        price=2000, currency="INR", billing_interval="month", billing_frequency=1, display_order=1,
+        price=2000, currency="INR", billing_interval="month", billing_frequency=1, display_order=11,
+        active=legacy_plans_active,
     )
     professional = _get_or_create_plan(
         db, application, plan_code="PROFESSIONAL", name="Professional", description="For growing museums",
-        price=5000, currency="INR", billing_interval="month", billing_frequency=1, display_order=2,
+        price=5000, currency="INR", billing_interval="month", billing_frequency=1, display_order=12,
+        active=legacy_plans_active,
     )
     enterprise = _get_or_create_plan(
         db, application, plan_code="ENTERPRISE", name="Enterprise", description="Full feature set",
-        price=15000, currency="INR", billing_interval="month", billing_frequency=1, display_order=3,
+        price=15000, currency="INR", billing_interval="month", billing_frequency=1, display_order=13,
+        active=legacy_plans_active,
     )
+
+    for entry in catalog.PLANS:
+        plan = _get_or_create_plan(
+            db, application,
+            plan_code=entry["plan_code"], name=entry["name"], description=entry["description"],
+            price=entry["price"], currency="INR", billing_interval="month", billing_frequency=1,
+            display_order=entry["display_order"], is_contact_sales=entry["is_contact_sales"],
+        )
+        _ensure_features(db, plan, entry["features"])
     # Free trial (spec follow-up): its own distinct plan, price=0, with a
     # configurable trial_period_days rather than an attribute bolted onto
     # one of the paid plans above - "process will be the same" per the
     # feature request, so it goes through the exact same subscribe/
     # activate/expire flow as any other plan, just with is_trial=True.
-    _get_or_create_plan(
+    free_trial = _get_or_create_plan(
         db, application, plan_code="FREE_TRIAL", name="Free Trial", description="Try Everyticket free for 14 days",
         price=0, currency="INR", billing_interval="month", billing_frequency=1, display_order=0,
         is_trial=True, trial_period_days=14,
     )
+    _ensure_features(db, free_trial, catalog.FREE_TRIAL_FEATURES)
 
     _get_or_create_transition(db, application, basic, professional, "UPGRADE")
     _get_or_create_transition(db, application, basic, enterprise, "UPGRADE")
@@ -235,6 +280,10 @@ def seed(db: Session) -> AdminUser:
     _get_or_create_field(db, application, field_key="contact_person", label="Contact Person", field_type="text", required=True, display_order=2)
     _get_or_create_field(db, application, field_key="gstin", label="GSTIN", field_type="text", required=False, display_order=3)
     _get_or_create_field(db, application, field_key="address", label="Address", field_type="textarea", required=False, display_order=4)
+    # Custom plan's own questions (expected tickets / ticket price) - only
+    # shown when subscribing to CUSTOM, see app.plans.catalog.
+    for field in catalog.CUSTOM_PLAN_FORM_FIELDS:
+        _get_or_create_field(db, application, **field)
 
     admin_user = _get_or_create_admin(db)
 

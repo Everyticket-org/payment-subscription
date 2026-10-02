@@ -22,6 +22,9 @@ class PlanOut(BaseModel):
     display_order: int
     is_trial: bool = False
     trial_period_days: int | None = None
+    # "Talk to us" plan - rendered with a contact CTA instead of Subscribe
+    # (see Plan.is_contact_sales).
+    is_contact_sales: bool = False
     features: list[PlanFeatureOut] = []
 
     @property
@@ -65,6 +68,7 @@ class PlanAdminOut(BaseModel):
     display_order: int
     is_trial: bool = False
     trial_period_days: int | None = None
+    is_contact_sales: bool = False
     features: list[PlanFeatureAdminOut] = []
 
 
@@ -92,6 +96,9 @@ class PlanCreate(BaseModel):
     # cross-field validation.
     is_trial: bool = False
     trial_period_days: int | None = Field(default=None, gt=0)
+    # "Talk to us" plan (see Plan.is_contact_sales) - requires price == 0
+    # and is_trial False, cross-validated in app.api.v1.admin_plans.
+    is_contact_sales: bool = False
 
 
 class PlanUpdate(BaseModel):
@@ -108,6 +115,7 @@ class PlanUpdate(BaseModel):
     display_order: int | None = None
     is_trial: bool | None = None
     trial_period_days: int | None = Field(default=None, gt=0)
+    is_contact_sales: bool | None = None
 
 
 class PlanReorderRequest(BaseModel):

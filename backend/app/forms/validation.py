@@ -26,6 +26,14 @@ while the duplicate check needs to know WHICH customer is submitting, so
 it can exclude that customer's own prior rows - a repurchase/renewal
 re-submitting the same data it already has on file must never be flagged
 as a duplicate of itself.
+
+Plan-specific fields (RegistrationFormField.plan_codes, 2026-10 Custom
+plan follow-up) are the one exception to "required is never enforced
+here": they're new, admin-opted-in questions such as a Custom plan's
+expected monthly tickets / average ticket price, with no existing callers
+that could start breaking, and the whole point of them is to collect the
+answers needed to serve that plan - so a missing required plan-specific
+answer is rejected with 422. General fields keep the lenient behaviour.
 """
 import re
 
@@ -48,29 +56,98 @@ def _normalize(value: object) -> str:
     return str(value).strip().lower()
 
 
-def validate_registration_data(db: Session, *, application_id: int, registration_data: dict) -> None:
-    """Raises RegistrationDataInvalid (422) on the first pattern
-    violation found, checking active fields in display_order so the
-    error matches the order a customer would fill the form in. Only
-    ACTIVE fields with a configured validation_pattern are checked, and
-    only when a value was actually submitted - an unfilled field (required
-    or not) is left to whatever enforcement already exists for it today
-    (the public form's HTML5 `required` attribute); this function does
-    not newly enforce `required` itself - see the module docstring."""
+def is_plan_specific(field: RegistrationFormField) -> bool:
+    """True for a "Show only for plans" question (non-empty plan_codes)."""
+    return bool(field.plan_codes)
+
+
+def field_applies_to_plan(field: RegistrationFormField, plan_code: str | None) -> bool:
+    """A general field applies to every plan; a plan-specific one only to
+    the plan_codes it lists (case-insensitive). With no plan_code at all,
+    only general fields apply."""
+    if not is_plan_specific(field):
+        return True
+    if not plan_code:
+        return False
+    return plan_code.upper() in {str(code).upper() for code in field.plan_codes}
+
+
+def fields_for_plan(
+    db: Session, *, application_id: int, plan_code: str | None, plan_specific_only: bool = False
+) -> list[RegistrationFormField]:
+    """Active fields that apply to plan_code, in display_order. Filtered in
+    Python rather than with a JSON-column query so it behaves identically on
+    SQLite (tests) and MySQL (production) - same reasoning as
+    _duplicate_exists() below; a registration form is a handful of rows."""
     fields = (
         db.query(RegistrationFormField)
         .filter(
             RegistrationFormField.application_id == application_id,
             RegistrationFormField.active.is_(True),
-            RegistrationFormField.validation_pattern.isnot(None),
         )
         .order_by(RegistrationFormField.display_order)
         .all()
     )
-    for field in fields:
+    return [
+        field
+        for field in fields
+        if field_applies_to_plan(field, plan_code) and (is_plan_specific(field) or not plan_specific_only)
+    ]
+
+
+def filter_registration_data_for_plan(
+    db: Session, *, application_id: int, plan_code: str | None, registration_data: dict
+) -> dict:
+    """Drops answers to plan-specific questions that belong to a DIFFERENT
+    plan (e.g. a customer filled the Custom questions, then switched to
+    Starter before submitting), so they're never stored against or sent in
+    the webhook for the wrong plan. Every other key - general fields and
+    any key with no matching field - passes through unchanged, preserving
+    the existing lenient behaviour."""
+    if not registration_data:
+        return {}
+    foreign_keys = {
+        field.field_key
+        for field in db.query(RegistrationFormField)
+        .filter(RegistrationFormField.application_id == application_id)
+        .all()
+        if is_plan_specific(field) and not field_applies_to_plan(field, plan_code)
+    }
+    return {key: value for key, value in registration_data.items() if key not in foreign_keys}
+
+
+def plan_specific_answers(
+    db: Session, *, application_id: int, plan_code: str | None, registration_data: dict
+) -> dict:
+    """Only the answers to plan_code's plan-specific questions - what gets
+    stored for a plan change on an EXISTING subscription, where the
+    general (first-signup) registration data is already on file."""
+    keys = {
+        field.field_key
+        for field in fields_for_plan(db, application_id=application_id, plan_code=plan_code, plan_specific_only=True)
+    }
+    return {key: value for key, value in (registration_data or {}).items() if key in keys}
+
+
+def validate_registration_data(
+    db: Session, *, application_id: int, registration_data: dict, plan_code: str | None = None
+) -> None:
+    """Raises RegistrationDataInvalid (422) on the first violation found,
+    checking the active fields that apply to plan_code in display_order so
+    the error matches the order a customer would fill the form in:
+    - a required PLAN-SPECIFIC field with no value (see module docstring);
+    - a submitted value that doesn't match the field's validation_pattern.
+    An unfilled GENERAL field (required or not) is left to whatever
+    enforcement already exists for it today (the public form's HTML5
+    `required` attribute) - see the module docstring."""
+    for field in fields_for_plan(db, application_id=application_id, plan_code=plan_code):
         value = registration_data.get(field.field_key)
         if _is_blank(value):
+            if field.required and is_plan_specific(field):
+                raise RegistrationDataInvalid(f"{field.label} is required")
             continue  # nothing submitted for this field - nothing to pattern-check
+        if not field.validation_pattern:
+            continue
         try:
             matched = re.fullmatch(field.validation_pattern, str(value)) is not None
         except re.error:
@@ -119,6 +196,7 @@ def check_duplicate_registration_data(
     application_id: int,
     registration_data: dict,
     exclude_customer_id: int | None = None,
+    plan_code: str | None = None,
 ) -> None:
     """Raises RegistrationDataInvalid (422) on the first field whose
     submitted value already exists on another customer's registration
@@ -128,17 +206,13 @@ def check_duplicate_registration_data(
     known) so a repurchase/renewal re-submitting data it already has on
     file is never flagged as a duplicate of itself - see the module
     docstring for why this is a separate function from
-    validate_registration_data() above."""
-    fields = (
-        db.query(RegistrationFormField)
-        .filter(
-            RegistrationFormField.application_id == application_id,
-            RegistrationFormField.active.is_(True),
-            RegistrationFormField.check_duplicate.is_(True),
-        )
-        .order_by(RegistrationFormField.display_order)
-        .all()
-    )
+    validate_registration_data() above. Only fields that apply to plan_code
+    are checked (see fields_for_plan)."""
+    fields = [
+        field
+        for field in fields_for_plan(db, application_id=application_id, plan_code=plan_code)
+        if field.check_duplicate
+    ]
     for field in fields:
         value = registration_data.get(field.field_key)
         if _is_blank(value):

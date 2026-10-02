@@ -167,6 +167,8 @@ export function AdminPlansPage() {
                       <span title={`${plan.trial_period_days ?? "?"}-day free trial`}>
                         Free trial ({plan.trial_period_days ?? "?"}d)
                       </span>
+                    ) : plan.is_contact_sales ? (
+                      <span title="Contact-sales plan - no list price, not self-serve">Talk to us</span>
                     ) : (
                       `${plan.currency} ${plan.price.toFixed(2)}`
                     )}
@@ -261,6 +263,12 @@ function PlanFormModal({
   // trial plan etc") instead of a bare checkbox, so it reads as "which
   // kind of plan is this" rather than a toggle-able feature flag.
   const [isTrial, setIsTrial] = useState<boolean>(state?.mode === "edit" ? state.plan.is_trial : false);
+  // "Talk to us" plan (2026-09 pricing refresh): listed publicly with a
+  // mailto CTA, never self-served. Mutually exclusive with isTrial, and
+  // like it, hides the price fields (price is stored as 0).
+  const [isContactSales, setIsContactSales] = useState<boolean>(
+    state?.mode === "edit" ? state.plan.is_contact_sales : false,
+  );
   // billing_interval only has two possible values, so it's a radio too
   // (same follow-up) rather than an always-two-item <select> - made
   // controlled state for the same reason: it's hidden entirely (not just
@@ -279,6 +287,7 @@ function PlanFormModal({
   useEffect(() => {
     setError(null);
     setIsTrial(state?.mode === "edit" ? state.plan.is_trial : false);
+    setIsContactSales(state?.mode === "edit" ? state.plan.is_contact_sales : false);
     setBillingInterval(state?.mode === "edit" ? (state.plan.billing_interval as "month" | "year") : "month");
   }, [state]);
 
@@ -296,7 +305,7 @@ function PlanFormModal({
     // from FormData entirely, so the trial checkbox's price=0 / duration
     // override has to be applied explicitly rather than relying on what
     // the browser submitted.
-    const price = isTrial ? 0 : Number(form.get("price"));
+    const price = isTrial || isContactSales ? 0 : Number(form.get("price"));
     const trialPeriodDays = isTrial ? Number(form.get("trial_period_days") || 0) : undefined;
 
     try {
@@ -311,6 +320,7 @@ function PlanFormModal({
             billing_frequency: Number(form.get("billing_frequency") || 1),
             is_trial: isTrial,
             trial_period_days: trialPeriodDays,
+            is_contact_sales: isContactSales,
           },
           adminToken,
         );
@@ -327,6 +337,7 @@ function PlanFormModal({
             billing_frequency: Number(form.get("billing_frequency") || 1),
             is_trial: isTrial,
             trial_period_days: trialPeriodDays,
+            is_contact_sales: isContactSales,
           },
           adminToken,
         );
@@ -396,18 +407,42 @@ function PlanFormModal({
           </span>
           <label className="toggle-switch-row toggle-switch-row-compact">
             <span className="toggle-switch">
-              <input type="checkbox" checked={isTrial} onChange={(e) => setIsTrial(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={isTrial}
+                onChange={(e) => {
+                  setIsTrial(e.target.checked);
+                  if (e.target.checked) setIsContactSales(false);
+                }}
+              />
               <span className="toggle-switch-track" aria-hidden="true" />
             </span>
             <span>Free trial plan</span>
           </label>
+          <label className="toggle-switch-row toggle-switch-row-compact" style={{ marginTop: 8 }}>
+            <span className="toggle-switch">
+              <input
+                type="checkbox"
+                checked={isContactSales}
+                onChange={(e) => {
+                  setIsContactSales(e.target.checked);
+                  if (e.target.checked) setIsTrial(false);
+                }}
+              />
+              <span className="toggle-switch-track" aria-hidden="true" />
+            </span>
+            <span>Contact sales plan ("Talk to us")</span>
+          </label>
           <p className="hint" style={{ margin: "6px 0 0" }}>
             {isTrial
               ? "Price is 0 automatically; billed on a fixed number of days instead of month/year."
-              : "Priced normally, billed on the interval set below."}
+              : isContactSales
+                ? "No list price - the plans page shows \"Talk to us\" and a mailto to the support email " +
+                  "(Configuration -> General). Customers can't subscribe or switch to it online."
+                : "Priced normally, billed on the interval set below."}
           </p>
 
-          {isTrial ? (
+          {isContactSales ? null : isTrial ? (
             <label style={{ marginTop: 14 }}>
               Trial duration (days)
               <input name="trial_period_days" type="number" min="1" required defaultValue={plan?.trial_period_days ?? 14} />
@@ -479,6 +514,11 @@ function PlanFeaturesModal({
   return (
     <Modal open title={`${plan.name} - features`} onClose={onClose} wide>
       <ErrorBanner error={error} />
+      <p className="hint" style={{ marginTop: 0 }}>
+        On the public plans page, a feature <b>with a value</b> is shown as a highlight row (e.g. Monthly ticket limit -
+        4,000 tickets); one <b>without a value</b> is shown as a checklist item. The plan description is the checklist
+        heading (e.g. "Everything in Starter, plus:").
+      </p>
       <div className="table-wrap">
         <table className="data-table">
           <thead>
@@ -559,6 +599,9 @@ function PlanFeaturesModal({
                 feature_key: String(form.get("feature_key")),
                 feature_label: String(form.get("feature_label")),
                 feature_value: String(form.get("feature_value") || "") || undefined,
+                // Append after the existing rows - the public card renders
+                // features in display_order.
+                display_order: plan.features.reduce((max, f) => Math.max(max, f.display_order), -1) + 1,
               },
               adminToken,
             );
@@ -573,15 +616,15 @@ function PlanFeaturesModal({
       >
         <label>
           Key
-          <input name="feature_key" required placeholder="storage_gb" />
+          <input name="feature_key" required placeholder="monthly_ticket_limit" />
         </label>
         <label>
           Label
-          <input name="feature_label" required placeholder="Storage" />
+          <input name="feature_label" required placeholder="Monthly ticket limit" />
         </label>
         <label>
           Value
-          <input name="feature_value" placeholder="50 GB" />
+          <input name="feature_value" placeholder="4,000 tickets (blank = checklist item)" />
         </label>
         <button className="button button-secondary" type="submit">
           Add feature

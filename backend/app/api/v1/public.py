@@ -33,7 +33,7 @@ itself refuses (OTP_VERIFICATION_REQUIRED) rather than silently
 identifying them - the OTP gate is enforced server-side, not just by
 frontend convention.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_application, get_db
@@ -54,9 +54,14 @@ from app.core.exceptions import (
 )
 from app.customers import service as customer_service
 from app.customers.models import Customer, CustomerRegistrationData
-from app.forms.models import RegistrationFormField
 from app.forms.schemas import RegistrationFormFieldOut
-from app.forms.validation import check_duplicate_registration_data, validate_registration_data
+from app.forms.validation import (
+    check_duplicate_registration_data,
+    fields_for_plan,
+    filter_registration_data_for_plan,
+    plan_specific_answers,
+    validate_registration_data,
+)
 from app.notifications.email import service as email_service
 from app.customers.schemas import (
     CustomerOut,
@@ -66,7 +71,9 @@ from app.customers.schemas import (
     OtpVerifyResponse,
     SubscribeRequest,
 )
+from app.payments import events as payment_events
 from app.payments import service as payment_service
+from app.payments.gateway_config import resolve_return_base_url
 from app.plans.models import Plan
 from app.plans.schemas import PlanOut
 from app.subscriptions import service as subscription_service
@@ -104,18 +111,21 @@ def get_plan(plan_code: str, db: Session = Depends(get_db), application: Applica
 
 
 @router.get("/registration-form", response_model=list[RegistrationFormFieldOut])
-def get_registration_form(db: Session = Depends(get_db), application: Application = Depends(get_application)):
+def get_registration_form(
+    plan_code: str | None = Query(default=None, max_length=50),
+    db: Session = Depends(get_db),
+    application: Application = Depends(get_application),
+):
     """Spec section 8: the dynamic form renderer's data source - active
     fields only, in display order. Frontend renders one input per row and
     submits the collected values as SubscribeRequest.registration_data,
-    keyed by field_key."""
-    fields = (
-        db.query(RegistrationFormField)
-        .filter(RegistrationFormField.application_id == application.id, RegistrationFormField.active.is_(True))
-        .order_by(RegistrationFormField.display_order)
-        .all()
-    )
-    return fields
+    keyed by field_key.
+
+    ?plan_code=CUSTOM also returns that plan's plan-specific questions
+    (RegistrationFormField.plan_codes) - without it, only the general
+    fields are returned, so a caller that doesn't know about plan-specific
+    questions never sees another plan's questions."""
+    return fields_for_plan(db, application_id=application.id, plan_code=plan_code)
 
 
 @router.get("/messages", response_model=PublicMessagesOut)
@@ -128,7 +138,8 @@ def get_public_messages(application: Application = Depends(get_application)):
     PaymentTransactionOut.payment_type == "NEW" so it's never shown to an
     existing customer changing plans (they already have credentials)."""
     return PublicMessagesOut(
-        post_subscription_message=application.post_subscription_message or DEFAULT_POST_SUBSCRIPTION_MESSAGE
+        post_subscription_message=application.post_subscription_message or DEFAULT_POST_SUBSCRIPTION_MESSAGE,
+        support_email=application.support_email or None,
     )
 
 
@@ -230,6 +241,7 @@ def consume_sso_token(
 def subscribe(
     plan_code: str,
     body: SubscribeRequest,
+    request: Request,
     db: Session = Depends(get_db),
     application: Application = Depends(get_application),
     customer_id_from_token: str | None = Depends(get_current_customer_id_optional),
@@ -248,13 +260,27 @@ def subscribe(
     )
     if plan is None:
         raise PlanNotFound(f"No active plan '{plan_code}'")
+    # Refused up front (before a brand-new Customer row is created below)
+    # rather than only by the service-layer guards further down.
+    subscription_service.assert_plan_self_serve(plan)
+
+    # Answers to ANOTHER plan's plan-specific questions are dropped (e.g.
+    # filled in for Custom, then switched to Starter before submitting).
+    registration_data = filter_registration_data_for_plan(
+        db, application_id=application.id, plan_code=plan.plan_code, registration_data=body.registration_data
+    )
 
     # Validated before any customer/subscription row is touched (spec
     # section 18 follow-up: regex + required enforcement) - the public
     # subscribe form always collects registration_data via the same
     # DynamicRegistrationForm regardless of new-vs-returning customer, so
     # this check applies uniformly rather than only on brand-new signups.
-    validate_registration_data(db, application_id=application.id, registration_data=body.registration_data)
+    # Also enforces this plan's REQUIRED plan-specific questions (e.g. the
+    # Custom plan's expected monthly tickets) for new and returning
+    # customers alike - see app.forms.validation's module docstring.
+    validate_registration_data(
+        db, application_id=application.id, registration_data=registration_data, plan_code=plan.plan_code
+    )
 
     if customer_id_from_token:
         customer = db.query(Customer).filter(Customer.customer_id == customer_id_from_token).first()
@@ -288,7 +314,11 @@ def subscribe(
     # plan change that resubmits identical data is never flagged as a
     # duplicate of itself.
     check_duplicate_registration_data(
-        db, application_id=application.id, registration_data=body.registration_data, exclude_customer_id=customer.id
+        db,
+        application_id=application.id,
+        registration_data=registration_data,
+        exclude_customer_id=customer.id,
+        plan_code=plan.plan_code,
     )
 
     # Plan auto-routing for an already-identified existing customer (spec
@@ -320,6 +350,21 @@ def subscribe(
             db, from_plan=existing_active.plan, to_plan=plan
         )
         payment_type = PaymentType.UPGRADE.value if transition_type == "UPGRADE" else PaymentType.DOWNGRADE.value
+        # Plan change on an existing subscription: general registration
+        # data is already on file, so only the target plan's plan-specific
+        # answers are recorded (same as the portal's upgrade/downgrade).
+        plan_answers = plan_specific_answers(
+            db, application_id=application.id, plan_code=plan.plan_code, registration_data=registration_data
+        )
+        if plan_answers:
+            db.add(
+                CustomerRegistrationData(
+                    customer_id=customer.id,
+                    application_id=application.id,
+                    subscription_id=existing_active.id,
+                    data=plan_answers,
+                )
+            )
         payment = payment_service.create_payment_transaction(
             db,
             customer=customer,
@@ -331,6 +376,10 @@ def subscribe(
             application=application,
         )
         db.commit()
+        payment_events.record_initiated(
+            db, transaction=payment, channel="subscribe", request=request,
+            return_url=f"{resolve_return_base_url(application)}/payment/return",
+        )
         db.refresh(customer)
         db.refresh(existing_active)
         db.refresh(payment)
@@ -342,13 +391,13 @@ def subscribe(
         db, customer=customer, application=application, plan=plan
     )
 
-    if body.registration_data:
+    if registration_data:
         db.add(
             CustomerRegistrationData(
                 customer_id=customer.id,
                 application_id=application.id,
                 subscription_id=subscription.id,
-                data=body.registration_data,
+                data=registration_data,
             )
         )
 
@@ -363,6 +412,10 @@ def subscribe(
         application=application,
     )
     db.commit()
+    payment_events.record_initiated(
+        db, transaction=payment, channel="subscribe", request=request,
+        return_url=f"{resolve_return_base_url(application)}/payment/return",
+    )
     db.refresh(customer)
     db.refresh(subscription)
     db.refresh(payment)

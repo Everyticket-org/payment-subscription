@@ -63,7 +63,7 @@ Application's own model docstring). PUT still accepts the real value to
 set/rotate it; None on PUT leaves the stored value unchanged, "" clears
 it (see admin_config.py).
 """
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
 
 # Shown on the public thank-you screen when an application hasn't
 # configured its own post_subscription_message (column defaults to NULL -
@@ -81,6 +81,7 @@ class ApplicationGeneralOut(BaseModel):
     currency: str
     gateway_mode: str  # test | live - "Live/Test Mode"
     post_subscription_message: str | None = None
+    support_email: str | None = None
 
 
 class ApplicationGeneralUpdate(BaseModel):
@@ -91,6 +92,16 @@ class ApplicationGeneralUpdate(BaseModel):
     # whoever serves it publicly (app.api.v1.public.get_public_messages),
     # never baked into this column as a hardcoded default.
     post_subscription_message: str | None = None
+    # Public sales/support contact - the "Talk to us" button on a
+    # contact-sales plan (Plan.is_contact_sales) opens a mailto to it.
+    # Validated as an email since it is rendered into a public mailto link.
+    support_email: EmailStr | None = None
+
+    @field_validator("support_email", mode="before")
+    @classmethod
+    def _blank_support_email_is_none(cls, value):
+        # The admin form sends "" for a cleared field; store NULL, not "".
+        return value or None
 
 
 class PublicMessagesOut(BaseModel):
@@ -103,6 +114,10 @@ class PublicMessagesOut(BaseModel):
     applies DEFAULT_POST_SUBSCRIPTION_MESSAGE when the admin hasn't set
     one."""
     post_subscription_message: str
+    # Where a contact-sales plan's "Talk to us" CTA points (mailto). None
+    # when the admin hasn't configured one - the frontend then hides the
+    # mailto and shows a plain "contact our sales team" note instead.
+    support_email: str | None = None
 
 
 class PayUCredentialsOut(BaseModel):
