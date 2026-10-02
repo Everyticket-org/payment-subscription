@@ -26,7 +26,7 @@ from app.core.enums import PaymentEventResult, PaymentEventType
 from app.core.exceptions import PaymentStatusTokenInvalid
 from app.invoices.models import Invoice
 from app.payments import service as payment_service
-from app.payments.events import classify_outcome, record_payment_event
+from app.payments.events import classify_outcome, log_gateway_response_received, record_payment_event
 from app.payments.gateway_config import resolve_return_base_url
 from app.payments.gateways.registry import get_gateway
 from app.payments.models import PaymentTransaction
@@ -76,6 +76,7 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
     form = await request.form()
     payload = dict(form)
     txnid = payload.get("txnid")
+    log_gateway_response_received("browser return", endpoint=request.url.path, payload=payload)
 
     # Looked up once, up front, and reused below both for return_url (this
     # redirect) and gateway_mode (the reverse-hash verification further
@@ -206,6 +207,7 @@ async def payu_webhook(request: Request, db: Session = Depends(get_db)) -> JSONR
     if not txnid.startswith(_SUBSCRIPTION_TXNID_PREFIX):
         logger.info("PayU webhook ignored: txnid=%s is not a subscription transaction", txnid or None)
         return JSONResponse({"status": "ignored"})
+    log_gateway_response_received("webhook", endpoint=request.url.path, payload=payload)
 
     def _log(result: str, **fields) -> None:
         record_payment_event(

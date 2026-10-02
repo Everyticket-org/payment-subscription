@@ -26,6 +26,7 @@ reachable directly), and make sure nginx sends X-Forwarded-For.
 Source IP and user agent are personal data: rows are purged after
 settings.PAYMENT_EVENT_RETENTION_DAYS (purge_old_events).
 """
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -78,6 +79,37 @@ def sanitize_payload(payload: dict[str, Any] | None) -> dict[str, str] | None:
     return {k: v for k, v in cleaned.items() if v is not None} or None
 
 
+def summarize_payload(payload: dict[str, Any] | None) -> str:
+    """Log-safe one-line view of a gateway response: the same allow-listed
+    fields as the stored payload (never the hash, card data, email or
+    phone), as sorted JSON so log lines are easy to grep and diff."""
+    return json.dumps(sanitize_payload(payload) or {}, sort_keys=True, ensure_ascii=False)
+
+
+def log_gateway_response_received(source: str, *, endpoint: str | None, payload: dict[str, Any] | None) -> None:
+    """Logged the moment a PayU response arrives, before any processing, so
+    the response is in the logs even if processing later crashes."""
+    txnid = payload.get("txnid") if isinstance(payload, dict) else None
+    logger.info(
+        "PayU %s received: endpoint=%s transaction_id=%s response=%s",
+        source, endpoint, txnid, summarize_payload(payload),
+    )
+
+
+# Event results that need a person to look at them (ERROR) or that may be
+# probing/misconfiguration (WARNING); everything else is routine (INFO).
+_ERROR_RESULTS = frozenset({"LATE_SUCCESS_IGNORED", "AMOUNT_MISMATCH", "ERROR"})
+_WARNING_RESULTS = frozenset({"HASH_FAILED", "UNKNOWN_TXN", "MISSING_TXNID", "TOKEN_REJECTED"})
+
+
+def _log_level(result: str) -> int:
+    if result in _ERROR_RESULTS:
+        return logging.ERROR
+    if result in _WARNING_RESULTS:
+        return logging.WARNING
+    return logging.INFO
+
+
 def request_details(request: Request | None) -> dict[str, str | None]:
     """Who/where a request came from. initiated_from prefers Origin (sent
     on cross-origin POSTs such as the frontend calling this API) and falls
@@ -110,9 +142,20 @@ def record_payment_event(
     return_url: str | None = None,
 ) -> None:
     """Best-effort: commits one PaymentEvent, never raises. See module
-    docstring rule 1 for when it is safe to call."""
+    docstring rule 1 for when it is safe to call.
+
+    Also writes the same event as one log line (level by result, see
+    _log_level) - before the DB insert, so it is logged even if the insert
+    fails."""
     try:
         details = request_details(request)
+        logger.log(
+            _log_level(result),
+            "Payment event %s/%s: transaction_id=%s endpoint=%s gateway_status=%s mihpayid=%s "
+            "hash_verified=%s surl=%s furl=%s response=%s",
+            event_type, result, transaction_id, details["endpoint"], gateway_status, gateway_transaction_id,
+            hash_verified, surl_sent, furl_sent, summarize_payload(payload),
+        )
         db.add(
             PaymentEvent(
                 transaction_id=_clip(transaction_id, 30),

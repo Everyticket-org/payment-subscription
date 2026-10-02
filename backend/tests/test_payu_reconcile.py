@@ -15,6 +15,8 @@ from tests.test_payu_webhook import KEY, SALT, _restore_mock, _subscribe, _trans
 
 
 class _FakeResponse:
+    status_code = 200
+
     def __init__(self, body: dict):
         self._body = body
 

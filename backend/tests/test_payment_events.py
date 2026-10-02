@@ -214,3 +214,31 @@ def test_purge_removes_only_events_past_retention(seeded_db):
     assert purge_old_events(seeded_db, now=now) == 1
     remaining = [e.transaction_id for e in seeded_db.query(PaymentEvent).all()]
     assert remaining == ["TXN-NEW"]
+
+
+def test_payu_responses_are_logged_without_secrets_or_personal_data(client, seeded_db, monkeypatch, caplog):
+    import logging
+
+    headers = _with_payu(client, monkeypatch)
+    try:
+        email = "events-logs@example.com"
+        txnid, amount = _subscribe(client, email, "9822200208")
+        payload = {**_signed_payload(txnid, amount, email), "phone": "9822200208", "cardnum": "512345XXXXXX2346"}
+
+        with caplog.at_level(logging.INFO, logger="subscription"):
+            client.post("/api/v1/payment/payu/callback/success", data=payload, follow_redirects=False)
+            client.post("/api/v1/payment/payu/webhook", data=payload)
+
+        lines = [r.getMessage() for r in caplog.records if r.name == "subscription"]
+        received = [l for l in lines if l.startswith("PayU browser return received") or l.startswith("PayU webhook received")]
+        outcomes = [l for l in lines if l.startswith("Payment event ")]
+        assert len(received) == 2
+        assert any("BROWSER_RETURN/PROCESSED" in l and "PAYUWH0001" in l for l in outcomes)
+        assert any("WEBHOOK/DUPLICATE_IGNORED" in l for l in outcomes)
+        for line in received + outcomes:
+            assert payload["hash"] not in line
+            assert email not in line
+            assert "9822200208" not in line
+            assert "512345" not in line
+    finally:
+        _restore_mock(client, headers)

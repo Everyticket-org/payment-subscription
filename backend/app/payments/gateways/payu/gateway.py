@@ -21,12 +21,16 @@ this landed in.
 """
 import hashlib
 import hmac
+import logging
 from typing import Any
 
 import httpx
 
 from app.core.config import get_settings
+from app.payments.events import summarize_payload
 from app.payments.interfaces.gateway import GatewayPaymentResult, PaymentGateway
+
+logger = logging.getLogger("subscription")
 
 
 def _sha512_hex(raw: str) -> str:
@@ -169,6 +173,8 @@ class PayUGateway(PaymentGateway):
             data={"key": key, "command": command, "var1": txnid, "hash": request_hash},
             timeout=settings.PAYU_VERIFY_TIMEOUT_SECONDS,
         )
+        if response.status_code >= 400:
+            logger.warning("PayU Verify Payment API returned HTTP %s for transaction_id=%s", response.status_code, txnid)
         response.raise_for_status()
         body = response.json()
 
@@ -187,6 +193,10 @@ class PayUGateway(PaymentGateway):
             amount = float(details.get("amt") or details.get("amount") or 0)
         except (TypeError, ValueError):
             amount = 0.0
+        logger.info(
+            "PayU Verify Payment API response: transaction_id=%s msg=%s response=%s",
+            txnid, body.get("msg") if isinstance(body, dict) else None, summarize_payload(details),
+        )
         mihpayid = details.get("mihpayid")
         if not mihpayid or str(mihpayid).lower() == "not found":
             mihpayid = None
