@@ -155,3 +155,26 @@ def test_process_webhook_maps_payu_failure_status(payu_settings):
     )
     assert result.status == "FAILED"
     assert result.failure_reason == "Insufficient funds"
+
+
+def test_udf_fields_stay_empty_for_shared_account(payu_settings):
+    """Cross-system contract (see the comment above udf1 in create_payment):
+    the shared PayU account's webhook goes to the EveryTicket (MAP) site,
+    which fulfils whatever MAP order udf1 names. Our payments must reach PayU
+    with every udf empty - absent from the form AND empty in the hash - so
+    MAP finds no order and ignores them."""
+    result = PayUGateway().create_payment(
+        transaction_id="TXN-UDF0001",
+        amount=999.0,
+        currency="INR",
+        # Even metadata that looks like an order id must never leak into a udf.
+        metadata={"productinfo": "Basic", "firstname": "A", "email": "a@example.com",
+                  "udf1": "1234567", "order_id": "1234567"},
+    )
+    fields = result.raw_response["fields"]
+
+    assert not any(fields.get(f"udf{i}") for i in range(1, 6))
+    expected = hashlib.sha512(
+        "testkey123|TXN-UDF0001|999.00|Basic|A|a@example.com|||||||||||testsalt456".encode("utf-8")
+    ).hexdigest()
+    assert fields["hash"] == expected
