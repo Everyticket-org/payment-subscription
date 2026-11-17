@@ -101,9 +101,13 @@ class Settings(BaseSettings):
 
     # --- Payment reconciliation (app.payments.reconcile) ---
     # A PENDING PayU payment older than this is checked against PayU's
-    # Verify Payment API - the backstop for when both the browser return
-    # (surl/furl) and the server webhook were lost.
-    PAYU_RECONCILE_AFTER_MINUTES: int = 15
+    # Verify Payment API - the only backstop when the browser return
+    # (surl/furl) was lost, since the shared PayU account's webhook goes to
+    # the EveryTicket (MAP) site, not here. Kept short because a customer
+    # who paid and closed the tab waits this long (plus up to one 5-minute
+    # sweep) for activation. Checking early is safe: "pending"/"not found"
+    # are left alone and "failure" waits for FAIL_AFTER_MINUTES below.
+    PAYU_RECONCILE_AFTER_MINUTES: int = 5
     # PayU reporting "failure" is only applied once the payment is at least
     # this old, so a customer still on PayU's page is never failed early.
     PAYU_RECONCILE_FAIL_AFTER_MINUTES: int = 60

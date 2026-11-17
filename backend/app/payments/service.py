@@ -43,6 +43,35 @@ logger = logging.getLogger("subscription")
 _TERMINAL_STATUSES = {PaymentStatus.SUCCESS.value, PaymentStatus.FAILED.value, PaymentStatus.CANCELLED.value}
 
 
+def lock_transaction(db: Session, transaction_id: str) -> PaymentTransaction | None:
+    """Loads one payment with a row lock (SELECT ... FOR UPDATE) and fresh
+    column values, for any caller about to pass it to process_gateway_result.
+
+    The PayU account's single webhook URL belongs to the EveryTicket (MAP)
+    site, not this service, so a payment here is settled only by the
+    browser return (surl/furl) or the reconciliation sweep - and the two can
+    run for the same payment at the same moment. process_gateway_result's
+    terminal-status guard is read-then-write: without the lock both callers
+    read PENDING and both activate the subscription and generate an invoice.
+
+    With the lock, the second caller waits until the first commits
+    (process_gateway_result commits at its end), then sees the terminal
+    status and is ignored as a duplicate. populate_existing() matters: the
+    session may already hold this row from an earlier, unlocked query, and
+    without it SQLAlchemy would keep the stale in-memory status.
+
+    The lock is held until the caller's next commit or rollback, so never
+    make network calls between this and process_gateway_result. SQLite
+    (the test suite) ignores FOR UPDATE, which is harmless there."""
+    return (
+        db.query(PaymentTransaction)
+        .filter(PaymentTransaction.transaction_id == transaction_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+
+
 def create_payment_transaction(
     db: Session,
     *,

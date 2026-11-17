@@ -1,8 +1,13 @@
 """
-PayU reconciliation sweep - the backstop for payments whose browser return
-(surl/furl) AND server webhook were both lost. Run every few minutes by
-Celery beat (app.payments.tasks); safe to run more than once, because every
-outcome goes through the idempotent process_gateway_result().
+PayU reconciliation sweep - the ONLY backstop for payments whose browser
+return (surl/furl) was lost. The shared PayU merchant account's single
+webhook URL belongs to the EveryTicket (MAP) site, so no server webhook
+ever reaches this service (see app.api.v1.payment.payu_webhook): a
+customer who pays and closes the tab is activated only by this sweep. Run
+every 5 minutes by Celery beat (app.payments.tasks) - the scheduler
+container must be running; safe to run more than once, because every
+outcome goes through the idempotent process_gateway_result() under the
+payment's row lock (payment_service.lock_transaction).
 
 For each PayU payment still INITIATED/PENDING after
 PAYU_RECONCILE_AFTER_MINUTES, asks PayU's Verify Payment API
@@ -91,6 +96,22 @@ def _reconcile_one(
         )
         return outcome
 
+    def _apply(outcome: GatewayPaymentResult) -> tuple[str, str]:
+        """Applies `outcome` under the payment's row lock, taken only now -
+        AFTER the Verify Payment HTTP call above, so no lock is ever held
+        across the network. `transaction` was loaded unlocked at the start
+        of the sweep, and the customer's browser return (surl/furl) may have
+        settled it since; re-reading it locked means a payment already
+        settled that way is ignored as a duplicate instead of being applied
+        twice (double activation + duplicate invoice). Returns
+        (previous_status, classified outcome)."""
+        locked = payment_service.lock_transaction(db, txnid)
+        previous_status = locked.status
+        payment_service.process_gateway_result(db, transaction=locked, result=outcome)
+        return previous_status, classify_outcome(
+            previous_status=previous_status, result_status=outcome.status, transaction_id=txnid
+        )
+
     if result.status == PaymentStatus.SUCCESS.value:
         if abs(result.amount - float(transaction.amount)) > 0.009:
             logger.error(
@@ -98,18 +119,16 @@ def _reconcile_one(
                 txnid, result.amount, float(transaction.amount),
             )
             return _log(PaymentEventResult.AMOUNT_MISMATCH.value)
-        previous_status = transaction.status
-        payment_service.process_gateway_result(db, transaction=transaction, result=result)
-        logger.info("Reconcile: applied SUCCESS for %s from PayU Verify Payment API", txnid)
-        return _log(classify_outcome(previous_status=previous_status, result_status=result.status, transaction_id=txnid))
+        previous_status, outcome = _apply(result)
+        logger.info("Reconcile: SUCCESS for %s from PayU Verify Payment API (was %s) -> %s", txnid, previous_status, outcome)
+        return _log(outcome)
 
     if result.status == PaymentStatus.FAILED.value:
         if age < timedelta(minutes=settings.PAYU_RECONCILE_FAIL_AFTER_MINUTES):
             return _log(PaymentEventResult.STILL_PENDING.value)
-        previous_status = transaction.status
-        payment_service.process_gateway_result(db, transaction=transaction, result=result)
-        logger.info("Reconcile: applied FAILED for %s from PayU Verify Payment API", txnid)
-        return _log(classify_outcome(previous_status=previous_status, result_status=result.status, transaction_id=txnid))
+        previous_status, outcome = _apply(result)
+        logger.info("Reconcile: FAILED for %s from PayU Verify Payment API (was %s) -> %s", txnid, previous_status, outcome)
+        return _log(outcome)
 
     if result.status == "UNKNOWN" and age >= timedelta(hours=settings.PAYU_RECONCILE_EXPIRE_AFTER_HOURS):
         hours = settings.PAYU_RECONCILE_EXPIRE_AFTER_HOURS
@@ -122,7 +141,11 @@ def _reconcile_one(
             raw_response={"reconcile": "expired", "verify_payment": payu_details},
             failure_reason=f"Expired - no payment was made at PayU within {hours} hours",
         )
-        payment_service.process_gateway_result(db, transaction=transaction, result=expired)
+        previous_status, outcome = _apply(expired)
+        if outcome != "PROCESSED":
+            # Settled by the browser return while PayU was being asked.
+            logger.info("Reconcile: %s was already %s - not expired", txnid, previous_status)
+            return _log(outcome)
         logger.info("Reconcile: expired %s - PayU has no record after %d hours", txnid, hours)
         return _log(PaymentEventResult.EXPIRED.value)
 

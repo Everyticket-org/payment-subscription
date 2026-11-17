@@ -112,6 +112,13 @@ class PayUGateway(PaymentGateway):
         # udf1-udf5 are unused in this integration but MUST still be
         # represented as empty-string pipe positions in the hash - PayU's
         # formula is positional, not a plain concatenation of used fields.
+        #
+        # KEEP udf1 EMPTY - cross-system contract: the shared PayU account's
+        # webhook goes to the EveryTicket (MAP) site, which treats udf1 as
+        # ITS order_id and fulfils whatever order it names. Empty udf1 makes
+        # MAP find no order and ignore our payments; any value here could
+        # fulfil an unrelated MAP order. Pinned by
+        # tests/test_payu_gateway.py::test_udf_fields_stay_empty_for_shared_account.
         udf1 = udf2 = udf3 = udf4 = udf5 = ""
         hash_string = (
             f"{key}|{txnid}|{amount_str}|{productinfo}|{firstname}|{email}|"

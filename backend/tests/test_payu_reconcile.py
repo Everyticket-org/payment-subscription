@@ -150,7 +150,7 @@ def test_recent_payments_are_left_alone_and_checks_back_off(client, seeded_db, m
     txnid, amount = _subscribe(client, "recon-backoff@example.com", "9822200405")
     fake = _FakePayU(monkeypatch, status="pending", amount=amount)
 
-    _age_payment(seeded_db, txnid, minutes=5)
+    _age_payment(seeded_db, txnid, minutes=2)
     _reconcile(seeded_db)
     assert fake.calls == []  # younger than PAYU_RECONCILE_AFTER_MINUTES
 
@@ -172,3 +172,57 @@ def test_payu_outage_is_logged_and_retried_later(client, seeded_db, monkeypatch,
     assert counts == {"ERROR": 1}
     assert _transaction_status(seeded_db, txnid) == "PENDING"
     assert _last_reconcile_result(seeded_db, txnid) == "ERROR"
+
+
+def test_browser_return_during_the_payu_check_is_not_applied_twice(client, seeded_db, monkeypatch, payu):
+    """Without the account webhook, the browser return and this sweep are the
+    two paths that settle a payment, and they can overlap: the sweep loads the
+    payment as PENDING, and while it waits on PayU's Verify Payment API the
+    customer's browser return settles it. The sweep must re-read the payment
+    (locked) before applying, or it activates the subscription and generates
+    an invoice a second time.
+
+    The browser return is played through its OWN session, as in production
+    (separate request / separate Celery worker). Going through `client` would
+    not reproduce the race: in this suite `client` and `seeded_db` share one
+    session, so the callback's commit would refresh the sweep's copy of the
+    payment and hide the bug."""
+    from sqlalchemy.orm import Session
+
+    from app.invoices.models import Invoice
+    from app.payments import service as payment_service
+    from app.payments.gateways.payu.gateway import PayUGateway
+    from app.payments.models import PaymentTransaction
+    from tests.test_payu_webhook import _signed_payload
+
+    email = "recon-race@example.com"
+    txnid, amount = _subscribe(client, email, "9822200407")
+    _age_payment(seeded_db, txnid, minutes=20)
+    fake = _FakePayU(monkeypatch, status="success", amount=amount)
+    verify_reply = fake._post
+
+    def _browser_returns_mid_check(url, data, timeout):
+        browser_session = Session(bind=seeded_db.get_bind())
+        try:
+            transaction = (
+                browser_session.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == txnid).one()
+            )
+            result = PayUGateway(merchant_key=KEY, merchant_salt=SALT).process_webhook(
+                payload=_signed_payload(txnid, amount, email)
+            )
+            assert result.hash_verified and result.status == "SUCCESS"
+            payment_service.process_gateway_result(browser_session, transaction=transaction, result=result)
+        finally:
+            browser_session.close()
+        return verify_reply(url, data, timeout)
+
+    import app.payments.gateways.payu.gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module.httpx, "post", _browser_returns_mid_check)
+
+    counts = _reconcile(seeded_db)
+
+    assert counts == {"DUPLICATE_IGNORED": 1}
+    assert _transaction_status(seeded_db, txnid) == "SUCCESS"
+    transaction = seeded_db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == txnid).one()
+    assert seeded_db.query(Invoice).filter(Invoice.payment_transaction_id == transaction.id).count() == 1

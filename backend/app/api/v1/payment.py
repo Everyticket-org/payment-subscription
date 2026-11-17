@@ -107,7 +107,9 @@ async def _handle_payu_return(request: Request, db: Session) -> RedirectResponse
         _log(PaymentEventResult.MISSING_TXNID.value)
         return _redirect_to_result_page(return_base, "error", reason="missing_transaction_id")
 
-    transaction = db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == txnid).first()
+    # Locked: the reconciliation sweep may be settling this same payment
+    # right now (see payment_service.lock_transaction).
+    transaction = payment_service.lock_transaction(db, txnid)
     if transaction is None:
         logger.warning("PayU callback for unknown transaction_id=%s", txnid)
         _log(PaymentEventResult.UNKNOWN_TXN.value, gateway_status=payload.get("status"))
@@ -169,18 +171,27 @@ async def payu_callback_failure(request: Request, db: Session = Depends(get_db))
 
 
 # Prefix of every subscription txnid (app.core.ids.new_transaction_id). One
-# PayU merchant account is shared with the EveryTicket existing site and the
-# SaaS backend, each with its own webhook URL; anything without this prefix
-# belongs to one of them and is ignored here.
+# PayU merchant account is shared with the EveryTicket (MAP) site; anything
+# without this prefix is MAP's payment and is ignored here.
 _SUBSCRIPTION_TXNID_PREFIX = "TXN-"
 
 
 @router.post("/payu/webhook")
 async def payu_webhook(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
-    """PayU server-to-server webhook (configured on the PayU dashboard) -
-    the safety net for when the customer pays but never comes back through
-    surl/furl (closed the tab, lost network), which would otherwise leave
-    the subscription PENDING although PayU captured the money.
+    """PayU server-to-server webhook - NOT CURRENTLY RECEIVING TRAFFIC.
+
+    PayU allows ONE webhook URL per merchant account, and the shared
+    account's URL stays pointed at the EveryTicket (MAP) site, so PayU
+    never calls this route. This service settles payments without it:
+      1. the browser return (surl/furl, sent per payment in
+         PayUGateway.create_payment) - the primary path;
+      2. the reconciliation sweep (app.payments.reconcile), which asks
+         PayU's Verify Payment API about any payment still PENDING - the
+         backstop for a customer who paid but never came back (closed the
+         tab, lost network).
+    Do not point the PayU dashboard webhook here: MAP would stop receiving
+    its own payment webhooks. The route is kept, fully working, in case a
+    webhook is ever routed here.
 
     Same verification and processing as the surl/furl return: the
     reverse hash is checked by PayUGateway.process_webhook, and
@@ -221,7 +232,7 @@ async def payu_webhook(request: Request, db: Session = Depends(get_db)) -> JSONR
             **fields,
         )
 
-    transaction = db.query(PaymentTransaction).filter(PaymentTransaction.transaction_id == txnid).first()
+    transaction = payment_service.lock_transaction(db, txnid)
     if transaction is None:
         logger.warning("PayU webhook for unknown transaction_id=%s - ignored", txnid)
         _log(PaymentEventResult.UNKNOWN_TXN.value)
